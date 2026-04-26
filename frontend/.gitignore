@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+.env.local
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Emitted from vite.config.ts
+vite.config.d.ts
