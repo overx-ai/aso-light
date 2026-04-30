@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -16,6 +17,7 @@ class PresetCreate(BaseModel):
     index_type: str
     apply_vat: bool = False
     charming_mode: str = "none"
+    config: dict[str, Any] | None = None
 
 
 class PresetUpdate(BaseModel):
@@ -27,6 +29,7 @@ class PresetUpdate(BaseModel):
     index_type: str | None = None
     apply_vat: bool | None = None
     charming_mode: str | None = None
+    config: dict[str, Any] | None = None
 
 
 class PresetResponse(BaseModel):
@@ -39,6 +42,7 @@ class PresetResponse(BaseModel):
     index_type: str
     apply_vat: bool
     charming_mode: str
+    config: dict[str, Any] | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

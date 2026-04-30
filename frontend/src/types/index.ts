@@ -99,12 +99,29 @@ export interface SubscriptionPrices {
   prices: PricePoint[];
 }
 
+export type GDPTier = "top" | "mid" | "low" | "special";
+
+export interface GDPBracketConfig {
+  tier_prices_usd: Record<GDPTier, number>;
+  tier_thresholds_usd: { top_min: number; mid_min: number };
+  manual_overrides: Record<string, GDPTier>;
+  special_territories: string[];
+}
+
+export interface GDPDataRow {
+  territory_code: string;
+  territory_name: string;
+  currency_code: string;
+  gdp_per_capita_ppp: number | null;
+}
+
 export interface PricePreviewRequest {
   index_type: string;
   base_price: number;
   base_territory_code: string;
   apply_vat: boolean;
   charming_mode: string;
+  gdp_config?: GDPBracketConfig | null;
 }
 
 export interface PricePreviewItem {
@@ -127,8 +144,14 @@ export interface PricePreviewResponse {
   items: PricePreviewItem[];
 }
 
+export interface PriceApplyItem {
+  territory_code: string;
+  price_point_id: string;
+  force?: boolean;
+}
+
 export interface PriceApplyRequest {
-  items: { territory_code: string; price_point_id: string }[];
+  items: PriceApplyItem[];
 }
 
 export interface PriceApplySkippedItem {
@@ -233,6 +256,25 @@ export interface IndexStatus {
   };
 }
 
+// ---- App Availability Types ----
+
+export interface TerritoryAvailability {
+  territory_code: string;
+  territory_name: string;
+  available: boolean;
+  preorder_enabled: boolean;
+}
+
+export interface AppAvailabilityResponse {
+  available_in_new_territories: boolean;
+  territories: TerritoryAvailability[];
+}
+
+export interface AppAvailabilityUpdateRequest {
+  available_in_new_territories: boolean;
+  disabled_territories: string[];
+}
+
 // ---- Price Preset Types ----
 
 export interface PricePreset {
@@ -243,6 +285,7 @@ export interface PricePreset {
   index_type: string;
   apply_vat: boolean;
   charming_mode: string;
+  config: Record<string, unknown> | null;
   created_at: string;
 }
 
@@ -253,6 +296,7 @@ export interface PresetCreate {
   index_type: string;
   apply_vat: boolean;
   charming_mode: string;
+  config?: Record<string, unknown> | null;
 }
 
 export interface PresetUpdate {
@@ -262,6 +306,7 @@ export interface PresetUpdate {
   index_type?: string;
   apply_vat?: boolean;
   charming_mode?: string;
+  config?: Record<string, unknown> | null;
 }
 
 // ---- Keyword Types ----

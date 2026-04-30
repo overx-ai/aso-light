@@ -54,9 +54,17 @@ from app.services.asc.client import ASCClient
 from app.services.asc.errors import ASCAPIError
 from app.services.asc.price_point_cache import PricePointCache
 from app.services.asc.pricing import ASCPricingService
+from app.services.pricing.currency import effective_currency
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Safety band: skip territories where the new price differs from the
+# current price by more than this fraction in either direction.
+SAFETY_BAND_PCT = 0.50
+SAFETY_MAX_UP = 1.0 + SAFETY_BAND_PCT
+SAFETY_MAX_DOWN = 1.0 - SAFETY_BAND_PCT
+SAFETY_LABEL = f"±{int(SAFETY_BAND_PCT * 100)}%"
 
 
 # ------------------------------------------------------------------
@@ -316,16 +324,19 @@ async def get_subscription_prices(
     )
     cached_prices = cached_result.scalars().all()
 
+    pp_cache = PricePointCache(app.asc_app_id)
     price_responses: list[PricePointResponse] = []
     for p in cached_prices:
         territory = territory_by_id.get(p.territory_id)
         if territory is None:
             continue
+        cached_tiers = await pp_cache.get(territory.code)
+        currency = effective_currency(territory, cached_tiers)
         price_responses.append(
             PricePointResponse(
                 territory_code=territory.code,
                 territory_name=territory.name,
-                currency_code=territory.currency_code,
+                currency_code=currency,
                 customer_price=p.customer_price,
                 proceeds=p.proceeds,
                 price_point_id=p.price_point_id,
@@ -435,11 +446,12 @@ async def sync_price_points(
     current_user: dict[str, Any] = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> PricePointSyncResponse:
-    """Sync Apple price points to filesystem cache.
+    """Sync Apple price tiers to the app-wide filesystem cache.
 
-    Fetches available price tiers per territory (only territories that
-    have current prices synced) and caches them on disk for fast lookups
-    during preview and apply.
+    Always syncs every seeded territory — Apple's tier ladder is global
+    per (app, product_type), independent of which territories the
+    subscription currently has prices in. The wider sync makes the
+    Preview pane workable for territories you haven't priced yet.
     """
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
@@ -447,31 +459,26 @@ async def sync_price_points(
     territory_map = await _get_territory_map(session)
     territory_by_id = {t.id: t for t in territory_map.values()}
 
-    # Only sync territories that have current prices
-    prices_result = await session.execute(
-        select(SubscriptionPrice.territory_id).where(
-            SubscriptionPrice.subscription_id == subscription.id
-        )
-    )
-    territory_ids = [row[0] for row in prices_result.all()]
-    territory_codes = [
-        territory_by_id[tid].code
-        for tid in territory_ids
-        if tid in territory_by_id
-    ]
+    territory_codes = sorted({t.code for t in territory_by_id.values()})
 
-    cache = PricePointCache(subscription.asc_subscription_id)
-    await cache.clear()
+    # App-wide tier cache: every subscription on this app shares the
+    # same ladder, so syncing once via any sub populates the cache for
+    # all of them. We pass this sub's asc_id to the API caller below.
+    # Don't clear() — fetch_and_cache_all skips already-cached entries
+    # so a retry only re-fetches the ones that previously failed.
+    cache = PricePointCache(app.asc_app_id)
 
     async with await _get_asc_client_for_app(app, session) as client:
         pricing_service = ASCPricingService(client)
         total_points = await cache.fetch_and_cache_all(
-            territory_codes, pricing_service
+            territory_codes,
+            subscription.asc_subscription_id,
+            pricing_service,
         )
 
     logger.info(
-        "Price points sync: %d territories, %d points for subscription %s",
-        len(territory_codes), total_points, subscription_id,
+        "Price tiers sync: %d territories, %d tiers for app %s (via sub %s)",
+        len(territory_codes), total_points, app.asc_app_id, subscription_id,
     )
     return PricePointSyncResponse(
         territories_synced=len(territory_codes),
@@ -492,9 +499,9 @@ async def get_price_point_cache_status(
     """Return the status of the price point filesystem cache."""
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
-    subscription = await _get_verified_subscription(subscription_id, app.id, session)
+    await _get_verified_subscription(subscription_id, app.id, session)
 
-    cache = PricePointCache(subscription.asc_subscription_id)
+    cache = PricePointCache(app.asc_app_id)
     info = await cache.status()
     return PricePointCacheStatus(**info)
 
@@ -539,12 +546,15 @@ async def preview_subscription_prices(
         p.territory_id: p for p in current_prices
     }
 
-    # Load cached price points from filesystem (no ASC calls, no DB)
-    cache = PricePointCache(subscription.asc_subscription_id)
+    # Load cached tier ladder (app-wide) and enrich with this sub's
+    # computed price_point_ids so downstream nearest-match works.
+    cache = PricePointCache(app.asc_app_id)
     price_points_by_territory: dict[str, list[dict]] = {}
     all_territories = _unique_territories(territory_map)
     for territory in all_territories:
-        cached = await cache.get(territory.code)
+        cached = await cache.get_with_price_point_ids(
+            territory.code, subscription.asc_subscription_id,
+        )
         if cached is not None:
             price_points_by_territory[territory.code] = cached
 
@@ -566,7 +576,9 @@ async def preview_subscription_prices(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Base territory '{body.base_territory_code}' not found",
             )
-        base_currency = base_territory.currency_code
+        base_currency = effective_currency(
+            base_territory, price_points_by_territory.get(base_territory.code),
+        )
 
         try:
             rate_client = RateCacheClient(settings.RATE_CACHE_API_URL)
@@ -578,7 +590,9 @@ async def preview_subscription_prices(
             )
 
         for territory in all_territories:
-            currency = territory.currency_code
+            currency = effective_currency(
+                territory, price_points_by_territory.get(territory.code),
+            )
             # Rate for the base currency itself is 1.0
             if currency == base_currency:
                 rate = 1.0
@@ -596,6 +610,79 @@ async def preview_subscription_prices(
                 )
 
             # Apply smart currency rounding or charming
+            if body.charming_mode == "smart":
+                suggested_decimal = apply_currency_rounding(
+                    suggested_decimal, currency
+                )
+                suggested = float(suggested_decimal)
+            else:
+                suggested = _apply_charming(
+                    float(suggested_decimal), body.charming_mode, currency
+                )
+
+            preview_items.append(_build_preview_item(
+                territory=territory,
+                currency_code=currency,
+                suggested=suggested,
+                current_price_by_territory=current_price_by_territory,
+                price_points_by_territory=price_points_by_territory,
+            ))
+    elif body.index_type == "gdp_brackets":
+        # --- GDP-bracket branch: tier per territory, absolute USD per tier ---
+        from decimal import Decimal
+
+        from app.core.config import settings
+        from app.services.pricing.currency_rounding import apply_currency_rounding
+        from app.services.pricing.gdp_brackets import assign_tier
+        from app.services.pricing.vat import apply_vat
+        from app.services.rates import RateCacheClient, RateCacheError
+
+        assert body.gdp_config is not None  # validator enforced
+
+        gdp_indices_result = await session.execute(
+            select(EconomicIndex).where(
+                EconomicIndex.index_type == "gdp_per_capita_ppp"
+            )
+        )
+        gdp_by_territory_id: dict[int, float] = {
+            idx.territory_id: idx.value for idx in gdp_indices_result.scalars().all()
+        }
+
+        try:
+            rate_client = RateCacheClient(settings.RATE_CACHE_API_URL)
+            rates = await rate_client.get_rates(base="USD")
+        except RateCacheError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to fetch exchange rates: {exc}",
+            )
+
+        for territory in all_territories:
+            tier = assign_tier(
+                territory.code,
+                gdp_by_territory_id.get(territory.id),
+                body.gdp_config,
+            )
+            tier_price_usd = body.gdp_config.tier_prices_usd[tier]
+
+            currency = effective_currency(
+                territory, price_points_by_territory.get(territory.code),
+            )
+            if currency == "USD":
+                rate = Decimal("1")
+            else:
+                rate_value = rates.get(currency)
+                if rate_value is None:
+                    continue
+                rate = Decimal(str(rate_value))
+
+            suggested_decimal = tier_price_usd * rate
+
+            if body.apply_vat and territory.vat_rate and territory.vat_rate > 0:
+                suggested_decimal = apply_vat(
+                    suggested_decimal, territory.vat_rate
+                )
+
             if body.charming_mode == "smart":
                 suggested_decimal = apply_currency_rounding(
                     suggested_decimal, currency
@@ -650,16 +737,19 @@ async def preview_subscription_prices(
             if territory_index is None:
                 continue
 
+            currency = effective_currency(
+                territory, price_points_by_territory.get(territory.code),
+            )
             suggested = body.base_price * (territory_index / base_index_value)
 
             # Apply charming price
             suggested = _apply_charming(
-                suggested, body.charming_mode, territory.currency_code
+                suggested, body.charming_mode, currency,
             )
 
             preview_items.append(_build_preview_item(
                 territory=territory,
-                currency_code=territory.currency_code,
+                currency_code=currency,
                 suggested=suggested,
                 current_price_by_territory=current_price_by_territory,
                 price_points_by_territory=price_points_by_territory,
@@ -715,8 +805,8 @@ def _build_preview_item(
         current_price is not None
         and current_price > 0
         and (
-            compare_price > current_price * 1.2
-            or compare_price < current_price * 0.75
+            compare_price > current_price * SAFETY_MAX_UP
+            or compare_price < current_price * SAFETY_MAX_DOWN
         )
     )
 
@@ -781,8 +871,10 @@ async def resolve_manual_price(
     app = await _get_verified_app(app_id, user_id, session)
     subscription = await _get_verified_subscription(subscription_id, app.id, session)
 
-    cache = PricePointCache(subscription.asc_subscription_id)
-    pps = await cache.get(body.territory_code)
+    cache = PricePointCache(app.asc_app_id)
+    pps = await cache.get_with_price_point_ids(
+        body.territory_code, subscription.asc_subscription_id,
+    )
     if not pps:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -820,15 +912,18 @@ async def apply_subscription_prices(
 ) -> PriceApplyResponse:
     """Apply selected price points to a subscription via ASC API.
 
-    Includes a 20% upward safety check: if the new price exceeds the
-    current Apple price by more than 20%, the territory is skipped
-    (likely indicates incorrect exchange rates / indices).
+    Includes a ±50% safety check per territory: if the new price
+    differs from the current Apple price by more than 50% in either
+    direction, the territory is skipped. Set ``force=True`` on a
+    specific item to bypass the check for that territory only —
+    useful when an unusually low initial price legitimately needs a
+    large adjustment.
     """
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
     subscription = await _get_verified_subscription(subscription_id, app.id, session)
 
-    # Load current prices from DB for the 20% safety check
+    # Load current prices from DB for the ±50% safety check
     current_prices_result = await session.execute(
         select(SubscriptionPrice).where(
             SubscriptionPrice.subscription_id == subscription.id
@@ -844,7 +939,7 @@ async def apply_subscription_prices(
         if territory:
             current_price_by_code[territory.code] = p.customer_price
 
-    cache = PricePointCache(subscription.asc_subscription_id)
+    cache = PricePointCache(app.asc_app_id)
 
     applied = 0
     failed = 0
@@ -859,21 +954,27 @@ async def apply_subscription_prices(
             tc = item.territory_code
             current_price = current_price_by_code.get(tc)
 
-            # Ensure price points are cached (on-demand fetch if missing)
-            territory_pps = await cache.get(tc)
+            # Ensure tier ladder is cached (on-demand fetch if missing).
+            territory_pps = await cache.get_with_price_point_ids(
+                tc, subscription.asc_subscription_id,
+            )
             if territory_pps is None:
                 try:
-                    territory_pps = await cache.fetch_and_cache(
-                        tc, pricing_service
+                    await cache.fetch_and_cache(
+                        tc, subscription.asc_subscription_id,
+                        pricing_service,
                     )
+                    territory_pps = await cache.get_with_price_point_ids(
+                        tc, subscription.asc_subscription_id,
+                    ) or []
                 except Exception:
                     logger.warning(
-                        "Failed to fetch price points for %s", tc,
+                        "Failed to fetch price tiers for %s", tc,
                         exc_info=True,
                     )
                     failed += 1
                     errors.append(
-                        f"Territory {tc}: failed to fetch price points"
+                        f"Territory {tc}: failed to fetch price tiers"
                     )
                     continue
 
@@ -893,14 +994,15 @@ async def apply_subscription_prices(
                 )
                 continue
 
-            # Safety check: skip if >20% up or >25% down
+            # Safety check: skip if change exceeds ±50% (unless item.force)
             if (
-                new_price is not None
+                not item.force
+                and new_price is not None
                 and current_price is not None
                 and current_price > 0
                 and (
-                    new_price > current_price * 1.2
-                    or new_price < current_price * 0.75
+                    new_price > current_price * SAFETY_MAX_UP
+                    or new_price < current_price * SAFETY_MAX_DOWN
                 )
             ):
                 diff_pct = round(
@@ -912,7 +1014,7 @@ async def apply_subscription_prices(
                         territory_code=tc,
                         reason=(
                             f"Price change {diff_pct:+}% exceeds "
-                            f"safety limit (+20% / -25%)"
+                            f"safety limit ({SAFETY_LABEL})"
                         ),
                         current_price=current_price,
                         new_price=new_price,
@@ -1188,11 +1290,10 @@ async def sync_iap_price_points(
     current_user: dict[str, Any] = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> PricePointSyncResponse:
-    """Sync Apple IAP price points to filesystem cache.
+    """Sync Apple IAP price tiers to the app-wide filesystem cache.
 
-    Fetches available price tiers per territory (only territories that
-    have current prices synced) and caches them on disk for fast lookups
-    during preview and apply.
+    Same as the subscription variant — always syncs every seeded
+    territory regardless of which ones the IAP currently has prices in.
     """
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
@@ -1200,31 +1301,26 @@ async def sync_iap_price_points(
     territory_map = await _get_territory_map(session)
     territory_by_id = {t.id: t for t in territory_map.values()}
 
-    # Only sync territories that have current prices
-    prices_result = await session.execute(
-        select(IAPPrice.territory_id).where(
-            IAPPrice.iap_id == iap.id
-        )
-    )
-    territory_ids = [row[0] for row in prices_result.all()]
-    territory_codes = [
-        territory_by_id[tid].code
-        for tid in territory_ids
-        if tid in territory_by_id
-    ]
+    territory_codes = sorted({t.code for t in territory_by_id.values()})
 
-    cache = PricePointCache(iap.asc_iap_id, product_type="iap")
-    await cache.clear()
+    # App-wide IAP tier cache: shared across every IAP on this app.
+    # Don't clear() — Apple rate-limits this endpoint heavily; let
+    # fetch_and_cache_all skip already-cached entries so a retry only
+    # picks up the ones that previously failed.
+    cache = PricePointCache(app.asc_app_id, product_type="iap")
 
     async with await _get_asc_client_for_app(app, session) as client:
         pricing_service = ASCPricingService(client)
+        # Apple rate-limits the IAP price-points endpoint more
+        # aggressively than the subscription one — keep this serial.
         total_points = await cache.fetch_and_cache_all(
-            territory_codes, pricing_service
+            territory_codes, iap.asc_iap_id, pricing_service,
+            concurrency=1,
         )
 
     logger.info(
-        "IAP price points sync: %d territories, %d points for iap %s",
-        len(territory_codes), total_points, iap_id,
+        "IAP tier sync: %d territories, %d tiers for app %s (via iap %s)",
+        len(territory_codes), total_points, app.asc_app_id, iap_id,
     )
     return PricePointSyncResponse(
         territories_synced=len(territory_codes),
@@ -1245,9 +1341,9 @@ async def get_iap_price_point_cache_status(
     """Return the status of the IAP price point filesystem cache."""
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
-    iap = await _get_verified_iap(iap_id, app.id, session)
+    await _get_verified_iap(iap_id, app.id, session)
 
-    cache = PricePointCache(iap.asc_iap_id, product_type="iap")
+    cache = PricePointCache(app.asc_app_id, product_type="iap")
     info = await cache.status()
     return PricePointCacheStatus(**info)
 
@@ -1289,12 +1385,14 @@ async def preview_iap_prices(
         p.territory_id: p for p in current_prices
     }
 
-    # Load cached price points from filesystem
-    cache = PricePointCache(iap.asc_iap_id, product_type="iap")
+    # Load app-wide IAP tier ladder, enriched with this IAP's IDs.
+    cache = PricePointCache(app.asc_app_id, product_type="iap")
     price_points_by_territory: dict[str, list[dict]] = {}
     all_territories = _unique_territories(territory_map)
     for territory in all_territories:
-        cached = await cache.get(territory.code)
+        cached = await cache.get_with_price_point_ids(
+            territory.code, iap.asc_iap_id,
+        )
         if cached is not None:
             price_points_by_territory[territory.code] = cached
 
@@ -1314,7 +1412,9 @@ async def preview_iap_prices(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Base territory '{body.base_territory_code}' not found",
             )
-        base_currency = base_territory.currency_code
+        base_currency = effective_currency(
+            base_territory, price_points_by_territory.get(base_territory.code),
+        )
 
         try:
             rate_client = RateCacheClient(settings.RATE_CACHE_API_URL)
@@ -1326,7 +1426,9 @@ async def preview_iap_prices(
             )
 
         for territory in all_territories:
-            currency = territory.currency_code
+            currency = effective_currency(
+                territory, price_points_by_territory.get(territory.code),
+            )
             if currency == base_currency:
                 rate = 1.0
             else:
@@ -1349,6 +1451,80 @@ async def preview_iap_prices(
             else:
                 suggested = _apply_charming(
                     float(suggested_decimal), body.charming_mode, currency
+                )
+
+            preview_items.append(_build_preview_item(
+                territory=territory,
+                currency_code=currency,
+                suggested=suggested,
+                current_price_by_territory=current_price_by_territory,
+                price_points_by_territory=price_points_by_territory,
+            ))
+    elif body.index_type == "gdp_brackets":
+        # --- GDP-bracket branch (mirrors subscription preview) ---
+        from decimal import Decimal
+
+        from app.core.config import settings
+        from app.services.pricing.currency_rounding import apply_currency_rounding
+        from app.services.pricing.gdp_brackets import assign_tier
+        from app.services.pricing.vat import apply_vat
+        from app.services.rates import RateCacheClient, RateCacheError
+
+        assert body.gdp_config is not None  # validator enforced
+
+        gdp_indices_result = await session.execute(
+            select(EconomicIndex).where(
+                EconomicIndex.index_type == "gdp_per_capita_ppp"
+            )
+        )
+        gdp_by_territory_id: dict[int, float] = {
+            idx.territory_id: idx.value
+            for idx in gdp_indices_result.scalars().all()
+        }
+
+        try:
+            rate_client = RateCacheClient(settings.RATE_CACHE_API_URL)
+            rates = await rate_client.get_rates(base="USD")
+        except RateCacheError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to fetch exchange rates: {exc}",
+            )
+
+        for territory in all_territories:
+            tier = assign_tier(
+                territory.code,
+                gdp_by_territory_id.get(territory.id),
+                body.gdp_config,
+            )
+            tier_price_usd = body.gdp_config.tier_prices_usd[tier]
+
+            currency = effective_currency(
+                territory, price_points_by_territory.get(territory.code),
+            )
+            if currency == "USD":
+                rate = Decimal("1")
+            else:
+                rate_value = rates.get(currency)
+                if rate_value is None:
+                    continue
+                rate = Decimal(str(rate_value))
+
+            suggested_decimal = tier_price_usd * rate
+
+            if body.apply_vat and territory.vat_rate and territory.vat_rate > 0:
+                suggested_decimal = apply_vat(
+                    suggested_decimal, territory.vat_rate,
+                )
+
+            if body.charming_mode == "smart":
+                suggested_decimal = apply_currency_rounding(
+                    suggested_decimal, currency,
+                )
+                suggested = float(suggested_decimal)
+            else:
+                suggested = _apply_charming(
+                    float(suggested_decimal), body.charming_mode, currency,
                 )
 
             preview_items.append(_build_preview_item(
@@ -1391,15 +1567,18 @@ async def preview_iap_prices(
             if territory_index is None:
                 continue
 
+            currency = effective_currency(
+                territory, price_points_by_territory.get(territory.code),
+            )
             suggested = body.base_price * (territory_index / base_index_value)
 
             suggested = _apply_charming(
-                suggested, body.charming_mode, territory.currency_code
+                suggested, body.charming_mode, currency,
             )
 
             preview_items.append(_build_preview_item(
                 territory=territory,
-                currency_code=territory.currency_code,
+                currency_code=currency,
                 suggested=suggested,
                 current_price_by_territory=current_price_by_territory,
                 price_points_by_territory=price_points_by_territory,
@@ -1438,8 +1617,10 @@ async def resolve_iap_manual_price(
     app = await _get_verified_app(app_id, user_id, session)
     iap = await _get_verified_iap(iap_id, app.id, session)
 
-    cache = PricePointCache(iap.asc_iap_id, product_type="iap")
-    pps = await cache.get(body.territory_code)
+    cache = PricePointCache(app.asc_app_id, product_type="iap")
+    pps = await cache.get_with_price_point_ids(
+        body.territory_code, iap.asc_iap_id,
+    )
     if not pps:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1479,8 +1660,9 @@ async def apply_iap_prices(
 
     IAP pricing uses ``inAppPurchasePriceSchedules`` which requires
     all territory prices to be submitted at once.  Includes the same
-    20% up / 25% down safety check as subscriptions; territories
-    that fail the check are excluded from the batch.
+    per-territory ±50% safety check as subscriptions; territories
+    that fail the check are excluded from the batch unless their
+    item has ``force=True``.
     """
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
@@ -1500,7 +1682,7 @@ async def apply_iap_prices(
         if territory:
             current_price_by_code[territory.code] = p.customer_price
 
-    cache = PricePointCache(iap.asc_iap_id, product_type="iap")
+    cache = PricePointCache(app.asc_app_id, product_type="iap")
 
     applied = 0
     failed = 0
@@ -1513,23 +1695,28 @@ async def apply_iap_prices(
         tc = item.territory_code
         current_price = current_price_by_code.get(tc)
 
-        # Ensure price points are cached (on-demand fetch if missing)
-        territory_pps = await cache.get(tc)
+        # Ensure tier ladder is cached (on-demand fetch if missing).
+        territory_pps = await cache.get_with_price_point_ids(
+            tc, iap.asc_iap_id,
+        )
         if territory_pps is None:
             async with await _get_asc_client_for_app(app, session) as client:
                 pricing_service = ASCPricingService(client)
                 try:
-                    territory_pps = await cache.fetch_and_cache(
-                        tc, pricing_service
+                    await cache.fetch_and_cache(
+                        tc, iap.asc_iap_id, pricing_service,
                     )
+                    territory_pps = await cache.get_with_price_point_ids(
+                        tc, iap.asc_iap_id,
+                    ) or []
                 except Exception:
                     logger.warning(
-                        "Failed to fetch IAP price points for %s", tc,
+                        "Failed to fetch IAP price tiers for %s", tc,
                         exc_info=True,
                     )
                     failed += 1
                     errors.append(
-                        f"Territory {tc}: failed to fetch price points"
+                        f"Territory {tc}: failed to fetch price tiers"
                     )
                     continue
 
@@ -1549,13 +1736,14 @@ async def apply_iap_prices(
             )
             continue
 
-        # Safety check: skip if >20% up or >25% down
+        # Safety check: skip if change exceeds ±50% (unless item.force)
         if (
-            current_price is not None
+            not item.force
+            and current_price is not None
             and current_price > 0
             and (
-                new_price > current_price * 1.2
-                or new_price < current_price * 0.75
+                new_price > current_price * SAFETY_MAX_UP
+                or new_price < current_price * SAFETY_MAX_DOWN
             )
         ):
             diff_pct = round(
@@ -1567,7 +1755,7 @@ async def apply_iap_prices(
                     territory_code=tc,
                     reason=(
                         f"Price change {diff_pct:+}% exceeds "
-                        f"safety limit (+20% / -25%)"
+                        f"safety limit ({SAFETY_LABEL})"
                     ),
                     current_price=current_price,
                     new_price=new_price,
@@ -1583,6 +1771,23 @@ async def apply_iap_prices(
         price_entries.append({
             "territory_code": tc,
             "price_point_id": item.price_point_id,
+        })
+
+    # Apple replaces the entire iapPriceSchedule on POST: any territory
+    # not in the new manualPrices list reverts to auto-equalization.
+    # Preserve previously-manual territories that the user didn't touch
+    # (and ensure the base territory is always present — Apple rejects
+    # the schedule otherwise).
+    submitted_codes = {entry["territory_code"] for entry in price_entries}
+    for p in current_prices:
+        territory = territory_by_id.get(p.territory_id)
+        if territory is None or territory.code in submitted_codes:
+            continue
+        if not p.price_point_id:
+            continue
+        price_entries.append({
+            "territory_code": territory.code,
+            "price_point_id": p.price_point_id,
         })
 
     # Submit all accepted prices in a single batch via price schedule

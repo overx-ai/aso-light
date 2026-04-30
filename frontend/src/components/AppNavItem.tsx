@@ -1,12 +1,23 @@
 import { useNavigate, useLocation } from "react-router-dom";
 import { NavLink, Image } from "@mantine/core";
-import { IconDeviceMobile } from "@tabler/icons-react";
+import {
+  IconDeviceMobile,
+  IconCoin,
+  IconKeyboard,
+  IconWorld,
+} from "@tabler/icons-react";
 import type { App } from "@/types";
 
 interface AppNavItemProps {
   app: App;
   onNavigate?: () => void;
 }
+
+const SUB_ROUTES = [
+  { path: "pricing", label: "Pricing", icon: IconCoin },
+  { path: "keywords", label: "Keywords", icon: IconKeyboard },
+  { path: "availability", label: "Availability", icon: IconWorld },
+];
 
 export default function AppNavItem({ app, onNavigate }: AppNavItemProps) {
   const navigate = useNavigate();
@@ -26,10 +37,24 @@ export default function AppNavItem({ app, onNavigate }: AppNavItemProps) {
       label={app.name}
       leftSection={icon}
       active={isActive}
-      onClick={() => {
-        navigate(`${appBasePath}/pricing`);
-        onNavigate?.();
-      }}
-    />
+      defaultOpened={isActive}
+      childrenOffset={32}
+    >
+      {SUB_ROUTES.map((sub) => {
+        const path = `${appBasePath}/${sub.path}`;
+        return (
+          <NavLink
+            key={sub.path}
+            label={sub.label}
+            leftSection={<sub.icon size={16} />}
+            active={location.pathname === path}
+            onClick={() => {
+              navigate(path);
+              onNavigate?.();
+            }}
+          />
+        );
+      })}
+    </NavLink>
   );
 }

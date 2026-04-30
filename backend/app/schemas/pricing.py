@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+GDPTier = Literal["top", "mid", "low", "special"]
 
 
 class SubscriptionGroupResponse(BaseModel):
@@ -63,16 +66,84 @@ class SubscriptionPricesResponse(BaseModel):
     prices: list[PricePointResponse]
 
 
+class GDPBracketConfig(BaseModel):
+    """Configuration for the GDP-bracket pricing strategy."""
+
+    tier_prices_usd: dict[GDPTier, Decimal] = Field(
+        ...,
+        description="Absolute USD price per tier; all four tiers required.",
+    )
+    tier_thresholds_usd: dict[Literal["top_min", "mid_min"], Decimal] = Field(
+        ...,
+        description="GDP/capita PPP cutoffs (USD) for top and mid tiers.",
+    )
+    manual_overrides: dict[str, GDPTier] = Field(default_factory=dict)
+    special_territories: list[str] = Field(default_factory=list)
+
+    @field_validator("tier_prices_usd")
+    @classmethod
+    def _all_tiers_present(cls, v: dict[GDPTier, Decimal]) -> dict[GDPTier, Decimal]:
+        missing = {"top", "mid", "low", "special"} - v.keys()
+        if missing:
+            raise ValueError(f"Missing tier prices: {sorted(missing)}")
+        for tier, price in v.items():
+            if price <= 0:
+                raise ValueError(f"Tier {tier} price must be > 0, got {price}")
+        return v
+
+    @field_validator("manual_overrides", "special_territories")
+    @classmethod
+    def _alpha2_codes(cls, v):
+        """Validate and normalize alpha-2 territory codes to uppercase.
+
+        Territory codes in the DB are stored uppercase (e.g. "US", "GB"). Any
+        casing is accepted from clients but we normalize to upper here so that
+        downstream lookups in ``assign_tier`` always match.
+        """
+        def _check(code: str) -> str:
+            if not isinstance(code, str) or len(code) != 2 or not code.isalpha():
+                raise ValueError(
+                    f"Territory code must be 2-letter alpha-2: {code!r}"
+                )
+            return code.upper()
+
+        if isinstance(v, dict):
+            return {_check(k): val for k, val in v.items()}
+        return [_check(code) for code in v]
+
+    @model_validator(mode="after")
+    def _thresholds_ordered(self) -> "GDPBracketConfig":
+        top_min = self.tier_thresholds_usd.get("top_min")
+        mid_min = self.tier_thresholds_usd.get("mid_min")
+        if top_min is None or mid_min is None:
+            raise ValueError("Both top_min and mid_min thresholds required")
+        if top_min <= mid_min:
+            raise ValueError(
+                f"top_min ({top_min}) must be greater than mid_min ({mid_min})"
+            )
+        return self
+
+
 class PricePreviewRequest(BaseModel):
     """Request body for price preview calculation."""
 
     index_type: Literal[
-        "exchange_rate", "ppp", "bigmac", "netflix", "spotify", "fixed_payout"
+        "exchange_rate", "ppp", "bigmac", "netflix", "spotify", "fixed_payout",
+        "gdp_brackets",
     ]
-    base_price: float
+    base_price: float = 0.0
     base_territory_code: str = "US"
     apply_vat: bool = False
     charming_mode: Literal["none", ".99", "99", ".95", "95", "smart"] = "none"
+    gdp_config: GDPBracketConfig | None = None
+
+    @model_validator(mode="after")
+    def _gdp_config_required_for_brackets(self) -> "PricePreviewRequest":
+        if self.index_type == "gdp_brackets" and self.gdp_config is None:
+            raise ValueError(
+                "gdp_config is required when index_type='gdp_brackets'"
+            )
+        return self
 
 
 class PricePreviewItem(BaseModel):
@@ -104,6 +175,7 @@ class PriceApplyItem(BaseModel):
 
     territory_code: str
     price_point_id: str
+    force: bool = False  # Bypass the ±50% safety band for this territory only.
 
 
 class PriceApplyRequest(BaseModel):

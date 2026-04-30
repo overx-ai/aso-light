@@ -28,6 +28,9 @@ import type {
   PriceResolveResponse,
   Territory,
   IndexStatus,
+  AppAvailabilityResponse,
+  AppAvailabilityUpdateRequest,
+  GDPDataRow,
   PricePreset,
   PresetCreate,
   PresetUpdate,
@@ -58,6 +61,8 @@ export const queryKeys = {
     ["iapPricePointCacheStatus", appId, iapId] as const,
   territories: ["territories"] as const,
   indexStatus: ["indexStatus"] as const,
+  gdpData: ["gdpData"] as const,
+  appAvailability: (appId: string) => ["appAvailability", appId] as const,
   presets: ["presets"] as const,
   keywords: (appId: string) => ["keywords", appId] as const,
   keywordRankings: (appId: string, trackingId: string) =>
@@ -422,6 +427,14 @@ export function useSyncPricePoints() {
           variables.subId,
         ),
       });
+      // Currency displayed in the price grid is derived from the
+      // price-points cache, so invalidate the prices query too.
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.subscriptionPrices(
+          variables.appId,
+          variables.subId,
+        ),
+      });
       notifications.show({
         title: "Price points synced",
         message: `Cached ${data.price_points_total} price points across ${data.territories_synced} territories.`,
@@ -631,6 +644,9 @@ export function useSyncIAPPricePoints() {
           variables.appId,
           variables.iapId,
         ),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.iapPrices(variables.appId, variables.iapId),
       });
       notifications.show({
         title: "Price points synced",
@@ -942,6 +958,48 @@ export function useRefreshIndices() {
       notifications.show({
         title: "Refresh failed",
         message: "Could not refresh economic indices. Please try again.",
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useGDPData() {
+  return useQuery({
+    queryKey: queryKeys.gdpData,
+    queryFn: async () => {
+      const response = await api.get<GDPDataRow[]>("/indices/gdp");
+      return response.data;
+    },
+    staleTime: 1000 * 60 * 60,
+  });
+}
+
+export function useRefreshGDP() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const response = await api.post<{ refreshed: Record<string, number> }>(
+        "/indices/refresh",
+        null,
+        { params: { index_type: "gdp_per_capita_ppp" } },
+      );
+      return response.data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.gdpData });
+      queryClient.invalidateQueries({ queryKey: queryKeys.indexStatus });
+      const count = data.refreshed.gdp_per_capita_ppp ?? 0;
+      notifications.show({
+        title: "GDP data refreshed",
+        message: `Updated ${count} territories.`,
+        color: "green",
+      });
+    },
+    onError: () => {
+      notifications.show({
+        title: "GDP refresh failed",
+        message: "Could not refresh GDP data. Please try again.",
         color: "red",
       });
     },
@@ -1409,6 +1467,62 @@ export function useImportPrices() {
       notifications.show({
         title: "Import failed",
         message: "Could not import prices. Check the file format and try again.",
+        color: "red",
+      });
+    },
+  });
+}
+
+// ---- App Availability Hooks ----
+
+export function useAppAvailability(appId: string) {
+  return useQuery({
+    queryKey: queryKeys.appAvailability(appId),
+    queryFn: async () => {
+      const response = await api.get<AppAvailabilityResponse>(
+        `/apps/${appId}/availability`,
+      );
+      return response.data;
+    },
+    enabled: !!appId,
+  });
+}
+
+export function useUpdateAppAvailability() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      appId,
+      data,
+    }: {
+      appId: string;
+      data: AppAvailabilityUpdateRequest;
+    }) => {
+      const response = await api.put<AppAvailabilityResponse>(
+        `/apps/${appId}/availability`,
+        data,
+      );
+      return response.data;
+    },
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData(
+        queryKeys.appAvailability(variables.appId),
+        data,
+      );
+      const disabled = data.territories.filter((t) => !t.available).length;
+      notifications.show({
+        title: "Availability updated",
+        message: `Snapshot saved · ${disabled} territories disabled.`,
+        color: "green",
+      });
+    },
+    onError: (error: unknown) => {
+      const detail =
+        (error as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail ?? "Could not update availability. Please try again.";
+      notifications.show({
+        title: "Update failed",
+        message: detail,
         color: "red",
       });
     },

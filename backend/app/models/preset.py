@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import JSON, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -22,6 +22,9 @@ class PricePreset(TimestampMixin, Base):
     index_type: Mapped[str] = mapped_column(String(20))
     apply_vat: Mapped[bool] = mapped_column(default=False)
     charming_mode: Mapped[str] = mapped_column(String(10), default="none")
+    config: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True, default=None,
+    )
 
     user: Mapped[User] = relationship(back_populates="price_presets")
 

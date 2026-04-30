@@ -75,6 +75,16 @@ function SubscriptionsTab({ appId }: { appId: string }) {
   const [preview, setPreview] = useState<PricePreviewResponse | null>(null);
   const [manualTerritories, setManualTerritories] = useState<Set<string>>(new Set());
   const [manualItems, setManualItems] = useState<Map<string, PricePreviewItem>>(new Map());
+  const [forcedTerritories, setForcedTerritories] = useState<Set<string>>(new Set());
+
+  const handleToggleForce = useCallback((territoryCode: string) => {
+    setForcedTerritories((prev) => {
+      const next = new Set(prev);
+      if (next.has(territoryCode)) next.delete(territoryCode);
+      else next.add(territoryCode);
+      return next;
+    });
+  }, []);
 
   const { data: groups, isLoading: groupsLoading } = useSubscriptions(appId);
   const { data: territories = [] } = useTerritories();
@@ -151,12 +161,15 @@ function SubscriptionsTab({ appId }: { appId: string }) {
     (
       pAppId: string,
       pSubId: string,
-      items: { territory_code: string; price_point_id: string }[],
+      items: { territory_code: string; price_point_id: string; force?: boolean }[],
     ) => {
       applyMutation.mutate(
         { appId: pAppId, subId: pSubId, data: { items } },
         {
-          onSuccess: () => setPreview(null),
+          onSuccess: () => {
+            setPreview(null);
+            setForcedTerritories(new Set());
+          },
         },
       );
     },
@@ -382,6 +395,7 @@ function SubscriptionsTab({ appId }: { appId: string }) {
             subId={selectedSubId}
             territories={territories}
             preview={preview}
+            forcedTerritories={forcedTerritories}
             onPreview={handlePreview}
             onApply={handleApply}
             onClearPreview={handleClearPreview}
@@ -404,6 +418,8 @@ function SubscriptionsTab({ appId }: { appId: string }) {
             manualTerritories={manualTerritories}
             onToggleManual={handleToggleManual}
             onManualPriceChange={handleManualPriceChange}
+            forcedTerritories={forcedTerritories}
+            onToggleForce={handleToggleForce}
           />
         </>
       )}
@@ -416,6 +432,16 @@ function IAPsTab({ appId }: { appId: string }) {
   const [preview, setPreview] = useState<IAPPricePreviewResponse | null>(null);
   const [manualTerritories, setManualTerritories] = useState<Set<string>>(new Set());
   const [manualItems, setManualItems] = useState<Map<string, PricePreviewItem>>(new Map());
+  const [forcedTerritories, setForcedTerritories] = useState<Set<string>>(new Set());
+
+  const handleToggleForce = useCallback((territoryCode: string) => {
+    setForcedTerritories((prev) => {
+      const next = new Set(prev);
+      if (next.has(territoryCode)) next.delete(territoryCode);
+      else next.add(territoryCode);
+      return next;
+    });
+  }, []);
 
   const { data: iaps, isLoading: iapsLoading } = useIAPs(appId);
   const { data: territories = [] } = useTerritories();
@@ -469,13 +495,16 @@ function IAPsTab({ appId }: { appId: string }) {
     (
       _pAppId: string,
       _pSubId: string,
-      items: { territory_code: string; price_point_id: string }[],
+      items: { territory_code: string; price_point_id: string; force?: boolean }[],
     ) => {
       if (!selectedIapId) return;
       applyMutation.mutate(
         { appId, iapId: selectedIapId, data: { items } },
         {
-          onSuccess: () => setPreview(null),
+          onSuccess: () => {
+            setPreview(null);
+            setForcedTerritories(new Set());
+          },
         },
       );
     },
@@ -713,6 +742,7 @@ function IAPsTab({ appId }: { appId: string }) {
             subId={selectedIapId}
             territories={territories}
             preview={panelPreview}
+            forcedTerritories={forcedTerritories}
             onPreview={handlePreview}
             onApply={handleApply}
             onClearPreview={handleClearPreview}
@@ -735,6 +765,8 @@ function IAPsTab({ appId }: { appId: string }) {
             manualTerritories={manualTerritories}
             onToggleManual={handleToggleManual}
             onManualPriceChange={handleManualPriceChange}
+            forcedTerritories={forcedTerritories}
+            onToggleForce={handleToggleForce}
           />
         </>
       )}

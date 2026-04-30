@@ -7,6 +7,7 @@ from app.models.economic_index import EconomicIndex
 from app.models.territory import Territory
 from app.services.indices.base import IndexFetcher, IndexRecord
 from app.services.indices.bigmac import BigMacFetcher
+from app.services.indices.gdp import GDPFetcher
 from app.services.indices.netflix import NetflixFetcher
 from app.services.indices.ppp import PPPFetcher
 from app.services.indices.spotify import SpotifyFetcher
@@ -24,6 +25,7 @@ class IndexRefreshService:
             BigMacFetcher(),
             NetflixFetcher(),
             SpotifyFetcher(),
+            GDPFetcher(),
         ]
         self._fetcher_map: dict[str, IndexFetcher] = {
             f.index_type: f for f in self.fetchers

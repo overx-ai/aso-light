@@ -26,7 +26,9 @@ import {
   IconAdjustments,
 } from "@tabler/icons-react";
 import PresetManager from "@/components/pricing/PresetManager";
+import GDPBracketEditor from "@/components/pricing/GDPBracketEditor";
 import type {
+  GDPBracketConfig,
   PricePreviewRequest,
   PricePreviewResponse,
   PricePreviewItem,
@@ -41,7 +43,15 @@ const INDEX_TYPE_OPTIONS = [
   { value: "netflix", label: "Netflix" },
   { value: "spotify", label: "Spotify" },
   { value: "fixed_payout", label: "Fixed Payout" },
+  { value: "gdp_brackets", label: "GDP Brackets" },
 ];
+
+const DEFAULT_GDP_CONFIG: GDPBracketConfig = {
+  tier_prices_usd: { top: 9.99, mid: 4.99, low: 1.99, special: 2.99 },
+  tier_thresholds_usd: { top_min: 40000, mid_min: 15000 },
+  manual_overrides: {},
+  special_territories: [],
+};
 
 const CHARMING_OPTIONS = [
   { value: "smart", label: "Smart" },
@@ -55,11 +65,12 @@ interface PriceMultiplierPanelProps {
   subId: string;
   territories: Territory[];
   preview: PricePreviewResponse | null;
+  forcedTerritories?: Set<string>;
   onPreview: (appId: string, subId: string, data: PricePreviewRequest) => void;
   onApply: (
     appId: string,
     subId: string,
-    items: { territory_code: string; price_point_id: string }[],
+    items: { territory_code: string; price_point_id: string; force?: boolean }[],
   ) => void;
   onClearPreview: () => void;
   isPreviewLoading: boolean;
@@ -71,6 +82,7 @@ export default function PriceMultiplierPanel({
   subId,
   territories,
   preview,
+  forcedTerritories,
   onPreview,
   onApply,
   onClearPreview,
@@ -82,10 +94,20 @@ export default function PriceMultiplierPanel({
   const [baseTerritory, setBaseTerritory] = useState("US");
   const [applyVat, setApplyVat] = useState(true);
   const [charmingMode, setCharmingMode] = useState("smart");
+  const [gdpConfig, setGdpConfig] = useState<GDPBracketConfig>(DEFAULT_GDP_CONFIG);
+
+  const isForced = (code: string) =>
+    forcedTerritories ? forcedTerritories.has(code) : false;
 
   const [confirmOpened, { open: openConfirm, close: closeConfirm }] =
     useDisclosure(false);
   const [panelOpened, { toggle: togglePanel }] = useDisclosure(true);
+  const [
+    gdpEditorOpened,
+    { open: openGdpEditor, close: closeGdpEditor },
+  ] = useDisclosure(false);
+
+  const isGdpBrackets = indexType === "gdp_brackets";
 
   const territoryOptions = territories.map((t) => ({
     value: t.code,
@@ -93,6 +115,18 @@ export default function PriceMultiplierPanel({
   }));
 
   const handlePreview = () => {
+    if (isGdpBrackets) {
+      onPreview(appId, subId, {
+        index_type: "gdp_brackets",
+        base_price: 0,
+        base_territory_code: baseTerritory,
+        apply_vat: applyVat,
+        charming_mode: charmingMode,
+        gdp_config: gdpConfig,
+      });
+      return;
+    }
+
     const price = typeof basePrice === "string" ? parseFloat(basePrice) : basePrice;
     if (isNaN(price) || price <= 0) return;
 
@@ -110,14 +144,13 @@ export default function PriceMultiplierPanel({
     const items = preview.items
       .filter(
         (item: PricePreviewItem) =>
-          item.price_point_id !== null &&
-          item.diff_percent !== null &&
-          Math.abs(item.diff_percent) > 0.01 &&
-          !item.would_be_skipped,
+          wouldChange(item) &&
+          (!item.would_be_skipped || isForced(item.territory_code)),
       )
       .map((item: PricePreviewItem) => ({
         territory_code: item.territory_code,
         price_point_id: item.price_point_id!,
+        force: isForced(item.territory_code) ? true : undefined,
       }));
 
     onApply(appId, subId, items);
@@ -130,22 +163,35 @@ export default function PriceMultiplierPanel({
     setBaseTerritory(preset.base_territory_code);
     setApplyVat(preset.apply_vat);
     setCharmingMode(preset.charming_mode);
+    if (preset.index_type === "gdp_brackets" && preset.config) {
+      setGdpConfig(preset.config as unknown as GDPBracketConfig);
+    }
   }, []);
 
-  const changedCount = preview
-    ? preview.items.filter(
-        (item: PricePreviewItem) =>
-          item.price_point_id !== null &&
-          item.diff_percent !== null &&
-          Math.abs(item.diff_percent) > 0.01 &&
-          !item.would_be_skipped,
-      ).length
-    : 0;
+  // A territory counts as "would change" when there's an Apple
+  // price_point_id to apply AND either:
+  //   * no current price (so applying creates a new manual entry), or
+  //   * the diff is large enough to be worth submitting.
+  const wouldChange = (item: PricePreviewItem) => {
+    if (item.price_point_id === null) return false;
+    if (item.current_price === null) return true;
+    return (
+      item.diff_percent !== null && Math.abs(item.diff_percent) > 0.01
+    );
+  };
 
-  const skippedCount = preview
-    ? preview.items.filter((item: PricePreviewItem) => item.would_be_skipped)
+  const skippedItems = preview
+    ? preview.items.filter((item) => wouldChange(item) && item.would_be_skipped)
+    : [];
+  const safeChangedCount = preview
+    ? preview.items.filter((item) => wouldChange(item) && !item.would_be_skipped)
         .length
     : 0;
+  const forcedCount = skippedItems.filter((item) =>
+    isForced(item.territory_code),
+  ).length;
+  const changedCount = safeChangedCount + forcedCount;
+  const skippedCount = skippedItems.length - forcedCount;
 
   return (
     <>
@@ -182,17 +228,38 @@ export default function PriceMultiplierPanel({
                 onChange={(v) => v && setIndexType(v)}
                 size="sm"
               />
-              <NumberInput
-                label="Base Price"
-                value={basePrice}
-                onChange={setBasePrice}
-                min={0.01}
-                step={0.01}
-                decimalScale={2}
-                fixedDecimalScale
-                prefix="$"
-                size="sm"
-              />
+              {isGdpBrackets ? (
+                <div>
+                  <Text size="xs" fw={500} mb={4}>
+                    Tier Configuration
+                  </Text>
+                  <Button
+                    variant="light"
+                    onClick={openGdpEditor}
+                    size="sm"
+                    fullWidth
+                  >
+                    Configure brackets
+                    {" — "}
+                    Top ${gdpConfig.tier_prices_usd.top.toFixed(2)} ·
+                    Mid ${gdpConfig.tier_prices_usd.mid.toFixed(2)} ·
+                    Low ${gdpConfig.tier_prices_usd.low.toFixed(2)} ·
+                    Special ${gdpConfig.tier_prices_usd.special.toFixed(2)}
+                  </Button>
+                </div>
+              ) : (
+                <NumberInput
+                  label="Base Price"
+                  value={basePrice}
+                  onChange={setBasePrice}
+                  min={0.01}
+                  step={0.01}
+                  decimalScale={2}
+                  fixedDecimalScale
+                  prefix="$"
+                  size="sm"
+                />
+              )}
               <Select
                 label="Base Territory"
                 data={territoryOptions}
@@ -200,6 +267,7 @@ export default function PriceMultiplierPanel({
                 onChange={(v) => v && setBaseTerritory(v)}
                 searchable
                 size="sm"
+                disabled={isGdpBrackets}
               />
             </Group>
 
@@ -234,6 +302,9 @@ export default function PriceMultiplierPanel({
                   index_type: indexType,
                   apply_vat: applyVat,
                   charming_mode: charmingMode,
+                  config: isGdpBrackets
+                    ? (gdpConfig as unknown as Record<string, unknown>)
+                    : null,
                 }}
                 onLoadPreset={handleLoadPreset}
               />
@@ -293,6 +364,17 @@ export default function PriceMultiplierPanel({
             This will update prices for {changedCount} territories in App Store
             Connect. This action will take effect immediately.
           </Alert>
+          {forcedCount > 0 && (
+            <Alert
+              icon={<IconAlertTriangle size={20} />}
+              title="Forced overrides"
+              color="red"
+            >
+              {forcedCount} territories exceed the ±50% safety band and will
+              be applied anyway because you forced them. Double-check those
+              prices.
+            </Alert>
+          )}
           {skippedCount > 0 && (
             <Alert
               icon={<IconAlertTriangle size={20} />}
@@ -300,7 +382,7 @@ export default function PriceMultiplierPanel({
               color="orange"
             >
               {skippedCount} territories will not be updated because the price
-              change exceeds safety limits (+20% / -25%, likely incorrect rates).
+              change exceeds safety limits (±50%, likely incorrect rates).
             </Alert>
           )}
           <Group justify="flex-end">
@@ -317,6 +399,13 @@ export default function PriceMultiplierPanel({
           </Group>
         </Stack>
       </Modal>
+
+      <GDPBracketEditor
+        opened={gdpEditorOpened}
+        onClose={closeGdpEditor}
+        value={gdpConfig}
+        onChange={setGdpConfig}
+      />
     </>
   );
 }

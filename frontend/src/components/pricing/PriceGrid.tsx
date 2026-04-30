@@ -7,8 +7,14 @@ import {
   Group,
   Text,
   Paper,
+  Tooltip,
 } from "@mantine/core";
-import { IconSearch, IconPin, IconPinFilled } from "@tabler/icons-react";
+import {
+  IconBolt,
+  IconPin,
+  IconPinFilled,
+  IconSearch,
+} from "@tabler/icons-react";
 import { DataTable, type DataTableSortStatus } from "mantine-datatable";
 import PriceDiffBadge from "@/components/pricing/PriceDiffBadge";
 import type { PricePoint, PricePreviewItem } from "@/types";
@@ -26,6 +32,7 @@ interface PriceGridRow {
   has_change: boolean;
   would_be_skipped: boolean;
   is_manual: boolean;
+  is_forced: boolean;
 }
 
 interface PriceGridProps {
@@ -35,12 +42,15 @@ interface PriceGridProps {
   manualTerritories?: Set<string>;
   onToggleManual?: (territoryCode: string) => void;
   onManualPriceChange?: (territoryCode: string, price: number) => void;
+  forcedTerritories?: Set<string>;
+  onToggleForce?: (territoryCode: string) => void;
 }
 
 function buildRows(
   prices: PricePoint[],
   previewItems: PricePreviewItem[] | null,
   manualTerritories?: Set<string>,
+  forcedTerritories?: Set<string>,
 ): PriceGridRow[] {
   const previewMap = new Map<string, PricePreviewItem>();
   if (previewItems) {
@@ -48,34 +58,53 @@ function buildRows(
       previewMap.set(item.territory_code, item);
     }
   }
+  const priceMap = new Map<string, PricePoint>();
+  for (const p of prices) {
+    priceMap.set(p.territory_code, p);
+  }
 
-  // If we have prices, merge with preview
-  if (prices.length > 0) {
-    return prices.map((p) => {
-      const preview = previewMap.get(p.territory_code);
+  // Take the union of territories from both sides — this lets the
+  // Preview pane suggest prices for territories that don't have
+  // current prices yet (e.g. an IAP only currently sold in 4 places
+  // but the user wants to roll it out to all 175).
+  const allCodes = new Set<string>();
+  for (const code of priceMap.keys()) allCodes.add(code);
+  for (const code of previewMap.keys()) allCodes.add(code);
+
+  if (allCodes.size > 0) {
+    const rows: PriceGridRow[] = [];
+    for (const code of allCodes) {
+      const p = priceMap.get(code);
+      const preview = previewMap.get(code);
+      const territoryName =
+        p?.territory_name ?? preview?.territory_name ?? code;
+      const currency =
+        p?.currency_code ?? preview?.currency_code ?? "";
       const hasChange =
         preview !== undefined &&
         preview.diff_percent !== null &&
         Math.abs(preview.diff_percent) > 0.01;
-
-      return {
-        territory_code: p.territory_code,
-        territory_name: p.territory_name,
-        currency_code: p.currency_code,
-        current_price: p.customer_price,
-        proceeds: p.proceeds,
-        suggested_price: preview?.nearest_apple_price ?? preview?.suggested_price ?? null,
+      rows.push({
+        territory_code: code,
+        territory_name: territoryName,
+        currency_code: currency,
+        current_price: p?.customer_price ?? null,
+        proceeds: p?.proceeds ?? null,
+        suggested_price:
+          preview?.nearest_apple_price ?? preview?.suggested_price ?? null,
         nearest_apple_price: preview?.nearest_apple_price ?? null,
         diff_percent: preview?.diff_percent ?? null,
-        price_point_id: preview?.price_point_id ?? p.price_point_id,
+        price_point_id: preview?.price_point_id ?? p?.price_point_id ?? null,
         has_change: hasChange,
         would_be_skipped: preview?.would_be_skipped ?? false,
-        is_manual: manualTerritories?.has(p.territory_code) ?? false,
-      };
-    });
+        is_manual: manualTerritories?.has(code) ?? false,
+        is_forced: forcedTerritories?.has(code) ?? false,
+      });
+    }
+    return rows;
   }
 
-  // If only preview (no current prices yet)
+  // Empty state — keep the legacy fall-through for safety.
   if (previewItems) {
     return previewItems.map((item) => ({
       territory_code: item.territory_code,
@@ -91,6 +120,7 @@ function buildRows(
         item.diff_percent !== null && Math.abs(item.diff_percent) > 0.01,
       would_be_skipped: item.would_be_skipped,
       is_manual: manualTerritories?.has(item.territory_code) ?? false,
+      is_forced: forcedTerritories?.has(item.territory_code) ?? false,
     }));
   }
 
@@ -140,6 +170,8 @@ export default function PriceGrid({
   manualTerritories,
   onToggleManual,
   onManualPriceChange,
+  forcedTerritories,
+  onToggleForce,
 }: PriceGridProps) {
   const [search, setSearch] = useState("");
   const [sortStatus, setSortStatus] = useState<DataTableSortStatus<PriceGridRow>>({
@@ -150,8 +182,8 @@ export default function PriceGrid({
   const hasPreview = previewItems !== null && previewItems.length > 0;
 
   const rows = useMemo(
-    () => buildRows(prices, previewItems, manualTerritories),
-    [prices, previewItems, manualTerritories],
+    () => buildRows(prices, previewItems, manualTerritories, forcedTerritories),
+    [prices, previewItems, manualTerritories, forcedTerritories],
   );
 
   const filteredRows = useMemo(() => {
@@ -209,6 +241,12 @@ export default function PriceGrid({
             return {
               backgroundColor: "var(--mantine-color-blue-0)",
               borderLeft: "3px solid var(--mantine-color-blue-5)",
+            };
+          }
+          if (row.would_be_skipped && row.is_forced) {
+            return {
+              backgroundColor: "var(--mantine-color-red-0)",
+              borderLeft: "3px solid var(--mantine-color-red-6)",
             };
           }
           if (row.would_be_skipped) {
@@ -347,6 +385,36 @@ export default function PriceGrid({
               </Text>
             ),
           },
+          ...(onToggleForce
+            ? [
+                {
+                  accessor: "force" as const,
+                  title: "",
+                  width: 44,
+                  render: (row: PriceGridRow) => {
+                    if (!row.would_be_skipped && !row.is_forced) return null;
+                    return (
+                      <Tooltip
+                        label={
+                          row.is_forced
+                            ? "Force-applied: bypassing ±50% safety. Click to undo."
+                            : "Skipped by ±50% safety. Click to force-apply."
+                        }
+                      >
+                        <ActionIcon
+                          size="sm"
+                          variant={row.is_forced ? "filled" : "subtle"}
+                          color={row.is_forced ? "red" : "gray"}
+                          onClick={() => onToggleForce(row.territory_code)}
+                        >
+                          <IconBolt size={14} />
+                        </ActionIcon>
+                      </Tooltip>
+                    );
+                  },
+                },
+              ]
+            : []),
         ]}
         noRecordsText="No pricing data available"
       />

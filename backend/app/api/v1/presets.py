@@ -85,6 +85,7 @@ async def create_preset(
         index_type=body.index_type,
         apply_vat=body.apply_vat,
         charming_mode=body.charming_mode,
+        config=body.config,
     )
     session.add(preset)
     await session.flush()

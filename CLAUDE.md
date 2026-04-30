@@ -57,7 +57,7 @@ App Store Optimization SaaS — web-based alternative to aso.dev. Focuses on pri
 - **IAP endpoints require ASC API v2**: localizations (`?include=inAppPurchaseLocalizations`), price schedule (`iapPriceSchedule`), and price points all use `/v2/inAppPurchases/{id}/...`; create/update mutations still use v1 top-level resources
 - **ASC rate limiter**: 150ms min interval between requests, global backoff on 429, max 6 retries
 - **Price point cache**: filesystem-based under `backend/.cache/price_points/`, not DB — per-territory JSON files
-- **Price safety limits**: +20% up / -25% down — skip territory if price change exceeds these thresholds
+- **Price safety limits**: ±50% — skip territory if price change exceeds this threshold in either direction (constant `SAFETY_BAND_PCT` in `backend/app/api/v1/pricing.py`)
 
 ## Project-Specific Rules
 

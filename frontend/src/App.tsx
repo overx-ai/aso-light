@@ -7,6 +7,7 @@ import DashboardPage from "@/pages/DashboardPage";
 import CredentialsPage from "@/pages/CredentialsPage";
 import PricingPage from "@/pages/PricingPage";
 import KeywordsPage from "@/pages/KeywordsPage";
+import AvailabilityPage from "@/pages/AvailabilityPage";
 import SettingsPage from "@/pages/SettingsPage";
 
 export default function App() {
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="credentials" element={<CredentialsPage />} />
           <Route path="apps/:id/pricing" element={<PricingPage />} />
           <Route path="apps/:id/keywords" element={<KeywordsPage />} />
+          <Route path="apps/:id/availability" element={<AvailabilityPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Route>

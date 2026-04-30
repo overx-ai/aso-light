@@ -7,12 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.models.economic_index import EconomicIndex
+from app.models.territory import Territory
 from app.services.indices.refresh import IndexRefreshService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-VALID_INDEX_TYPES = {"ppp", "bigmac", "netflix", "spotify"}
+VALID_INDEX_TYPES = {"ppp", "bigmac", "netflix", "spotify", "gdp_per_capita_ppp"}
+GDP_INDEX_TYPE = "gdp_per_capita_ppp"
 
 
 @router.get("/status")
@@ -65,7 +67,7 @@ async def refresh_indices(
     """Trigger refresh of economic indices.
 
     Optionally specify an index_type query parameter to refresh only
-    one type (ppp, bigmac, netflix, spotify).
+    one type (ppp, bigmac, netflix, spotify, gdp_per_capita_ppp).
     """
     service = IndexRefreshService(session)
 
@@ -81,3 +83,37 @@ async def refresh_indices(
 
     results = await service.refresh_all()
     return {"refreshed": results}
+
+
+@router.get("/gdp")
+async def list_gdp(
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    """Return GDP/capita PPP per territory, sorted descending.
+
+    Powers the GDP-bracket UI's tier-assignment table. Territories without
+    GDP data are included with a null value so the user sees the full set.
+    """
+    rows = await session.execute(
+        select(
+            Territory.code,
+            Territory.name,
+            Territory.currency_code,
+            EconomicIndex.value,
+        )
+        .outerjoin(
+            EconomicIndex,
+            (EconomicIndex.territory_id == Territory.id)
+            & (EconomicIndex.index_type == GDP_INDEX_TYPE),
+        )
+        .order_by(EconomicIndex.value.desc().nullslast(), Territory.name)
+    )
+    return [
+        {
+            "territory_code": row.code,
+            "territory_name": row.name,
+            "currency_code": row.currency_code,
+            "gdp_per_capita_ppp": row.value,
+        }
+        for row in rows
+    ]

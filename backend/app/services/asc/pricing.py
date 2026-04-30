@@ -153,7 +153,9 @@ class ASCPricingService:
         """
         params: dict[str, str | int] = {
             "include": "territory",
-            "fields[subscriptionPricePoints]": "customerPrice,proceeds,proceedsYear2",
+            # `territory` must be in the field spec or Apple omits the
+            # relationship from the response (and we lose the currency).
+            "fields[subscriptionPricePoints]": "customerPrice,proceeds,proceedsYear2,territory",
             "fields[territories]": "currency",
             "limit": 200,
         }
@@ -231,7 +233,7 @@ class ASCPricingService:
             f"/subscriptionPricePoints/{price_point_id}/equalizations",
             params={
                 "include": "territory",
-                "fields[subscriptionPricePoints]": "customerPrice,proceeds,proceedsYear2",
+                "fields[subscriptionPricePoints]": "customerPrice,proceeds,proceedsYear2,territory",
                 "fields[territories]": "currency",
                 "limit": 200,
             },
@@ -759,7 +761,7 @@ class ASCPricingService:
 
         params_parts = [
             "include=territory",
-            "fields[inAppPurchasePricePoints]=customerPrice,proceeds",
+            "fields[inAppPurchasePricePoints]=customerPrice,proceeds,territory",
             "fields[territories]=currency",
             "limit=200",
         ]
@@ -828,6 +830,7 @@ class ASCPricingService:
         self,
         iap_id: str,
         price_entries: list[dict],
+        base_territory_alpha3: str = "USA",
     ) -> dict:
         """Set manual prices on an IAP via price schedule.
 
@@ -836,28 +839,37 @@ class ASCPricingService:
         Creates a new price schedule that replaces all manual prices.
         All territories must be submitted at once.
 
+        Apple's JSON:API extension requires:
+        * ``baseTerritory`` — the alpha-3 territory whose price acts as
+          the master fallback for any territory the schedule omits.
+        * ``manualPrices`` inline-created entries with **local-id**
+          placeholders of the form ``${...}`` (curly braces, not bare).
+
         Args:
             iap_id: ASC in-app purchase ID.
             price_entries: List of dicts with keys:
-                - territory_code: alpha-2 territory code (used as temp ID)
+                - territory_code: alpha-2 territory code (used in the
+                  local id to keep entries unique within the request)
                 - price_point_id: ASC price point ID to set
+            base_territory_alpha3: alpha-3 (e.g. ``"USA"``) of the
+                fallback territory.
 
         Returns:
             The created inAppPurchasePriceSchedule resource dict.
         """
-        # Build the included array with one inAppPurchasePrices per territory
         included: list[dict] = []
         manual_prices_data: list[dict] = []
 
         for entry in price_entries:
-            temp_id = f"${entry['territory_code']}"
+            # Curly-brace local-id format Apple requires for inline creation.
+            local_id = "${" + entry["territory_code"] + "}"
             manual_prices_data.append({
                 "type": "inAppPurchasePrices",
-                "id": temp_id,
+                "id": local_id,
             })
             included.append({
                 "type": "inAppPurchasePrices",
-                "id": temp_id,
+                "id": local_id,
                 "relationships": {
                     "inAppPurchasePricePoint": {
                         "data": {
@@ -876,6 +888,12 @@ class ASCPricingService:
                         "data": {
                             "type": "inAppPurchases",
                             "id": iap_id,
+                        }
+                    },
+                    "baseTerritory": {
+                        "data": {
+                            "type": "territories",
+                            "id": base_territory_alpha3,
                         }
                     },
                     "manualPrices": {
@@ -897,10 +915,12 @@ class ASCPricingService:
     async def get_iap_price_schedule(self, iap_id: str) -> list[dict]:
         """Fetch current prices for an IAP via the v2 price schedule.
 
-        Uses ``GET /v2/inAppPurchases/{iap_id}/iapPriceSchedule?include=manualPrices``
-        then decodes the base64 price IDs to extract territory and price
-        point info.  For each price, fetches the matching price point to
-        resolve ``customerPrice`` and ``proceeds``.
+        Apple's ``?include=manualPrices`` parameter silently caps the
+        included resources at ~10 entries — for IAPs with more manual
+        prices we have to follow the ``relationships.manualPrices.related``
+        link and paginate it explicitly. We then fetch the matching
+        price point for each manual price to resolve customerPrice,
+        proceeds, and currency.
 
         Returns:
             List of enriched price dicts with territory_code, customer_price,
@@ -912,21 +932,39 @@ class ASCPricingService:
         http = await self.client._get_client()
         base_v2 = self.client.BASE_URL.replace("/v1", "/v2")
 
-        url = (
+        # 1. Fetch the parent schedule to get the manualPrices related link.
+        await self.client._throttle()
+        raw = await http.get(
             f"{base_v2}/inAppPurchases/{iap_id}/iapPriceSchedule"
-            f"?include=manualPrices"
         )
-        raw = await http.get(url)
         if raw.status_code >= 400:
             body = raw.json() if raw.content else {"errors": []}
             raise ASCAPIError(raw.status_code, body)
+        related = (
+            raw.json()
+            .get("data", {})
+            .get("relationships", {})
+            .get("manualPrices", {})
+            .get("links", {})
+            .get("related")
+        )
 
-        data = raw.json()
-        included = data.get("included", [])
+        # 2. Paginate the related endpoint to collect every manual price.
+        manual_items: list[dict] = []
+        next_url = f"{related}?limit=200" if related else None
+        while next_url:
+            await self.client._throttle()
+            page_raw = await http.get(next_url)
+            if page_raw.status_code >= 400:
+                body = page_raw.json() if page_raw.content else {"errors": []}
+                raise ASCAPIError(page_raw.status_code, body)
+            page = page_raw.json()
+            manual_items.extend(page.get("data", []))
+            next_url = page.get("links", {}).get("next")
 
-        # Decode base64 price IDs → {t: territory_alpha3, p: price_point_num}
+        # 3. Decode base64 ids → {t: territory_alpha3, p: price_point_num}
         prices_info: list[dict] = []
-        for item in included:
+        for item in manual_items:
             if item.get("type") != "inAppPurchasePrices":
                 continue
             pid = item["id"]
@@ -966,7 +1004,7 @@ class ASCPricingService:
                 f"{base_v2}/inAppPurchases/{iap_id}/pricePoints"
                 f"?filter[territory]={terr_a3}"
                 f"&include=territory"
-                f"&fields[inAppPurchasePricePoints]=customerPrice,proceeds"
+                f"&fields[inAppPurchasePricePoints]=customerPrice,proceeds,territory"
                 f"&fields[territories]=currency"
                 f"&limit=200"
             )
