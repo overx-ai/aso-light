@@ -3,6 +3,7 @@ import {
   ActionIcon,
   Badge,
   NumberInput,
+  Switch,
   TextInput,
   Group,
   Text,
@@ -10,6 +11,7 @@ import {
   Tooltip,
 } from "@mantine/core";
 import {
+  IconAlertTriangle,
   IconBolt,
   IconPin,
   IconPinFilled,
@@ -17,7 +19,36 @@ import {
 } from "@tabler/icons-react";
 import { DataTable, type DataTableSortStatus } from "mantine-datatable";
 import PriceDiffBadge from "@/components/pricing/PriceDiffBadge";
-import type { PricePoint, PricePreviewItem } from "@/types";
+import type {
+  IntroOffer,
+  IntroOfferDuration,
+  PricePoint,
+  PricePreviewItem,
+} from "@/types";
+
+const INTRO_DURATION_LABEL: Record<IntroOfferDuration, string> = {
+  THREE_DAYS: "3d",
+  ONE_WEEK: "1w",
+  TWO_WEEKS: "2w",
+  ONE_MONTH: "1mo",
+  TWO_MONTHS: "2mo",
+  THREE_MONTHS: "3mo",
+  SIX_MONTHS: "6mo",
+  ONE_YEAR: "1y",
+};
+
+function formatIntroLabel(offer: IntroOffer): string {
+  const period = INTRO_DURATION_LABEL[offer.duration] ?? offer.duration;
+  if (offer.offer_mode === "FREE_TRIAL") {
+    const reps =
+      offer.number_of_periods > 1 ? ` × ${offer.number_of_periods}` : "";
+    return `Free ${period}${reps}`;
+  }
+  if (offer.offer_mode === "PAY_UP_FRONT") {
+    return `Up-front ${period}`;
+  }
+  return `Pay/${period} × ${offer.number_of_periods}`;
+}
 
 interface PriceGridRow {
   territory_code: string;
@@ -33,6 +64,8 @@ interface PriceGridRow {
   would_be_skipped: boolean;
   is_manual: boolean;
   is_forced: boolean;
+  /** Territory is in the sub's availability list but has no price. */
+  is_missing_price: boolean;
 }
 
 interface PriceGridProps {
@@ -44,6 +77,12 @@ interface PriceGridProps {
   onManualPriceChange?: (territoryCode: string, price: number) => void;
   forcedTerritories?: Set<string>;
   onToggleForce?: (territoryCode: string) => void;
+  /** Subscription introductory offers, keyed by alpha-2 territory_code on render. */
+  introOffers?: IntroOffer[];
+  /** Alpha-2 codes the sub is available in. Drives missing-price flagging. */
+  availableTerritories?: string[];
+  /** alpha-2 → display name; used to render rows for unpriced territories. */
+  territoryNameMap?: Map<string, string>;
 }
 
 function buildRows(
@@ -51,6 +90,8 @@ function buildRows(
   previewItems: PricePreviewItem[] | null,
   manualTerritories?: Set<string>,
   forcedTerritories?: Set<string>,
+  availableTerritories?: string[],
+  territoryNameMap?: Map<string, string>,
 ): PriceGridRow[] {
   const previewMap = new Map<string, PricePreviewItem>();
   if (previewItems) {
@@ -62,14 +103,15 @@ function buildRows(
   for (const p of prices) {
     priceMap.set(p.territory_code, p);
   }
+  const availSet = new Set(availableTerritories ?? []);
 
-  // Take the union of territories from both sides — this lets the
-  // Preview pane suggest prices for territories that don't have
-  // current prices yet (e.g. an IAP only currently sold in 4 places
-  // but the user wants to roll it out to all 175).
+  // Union of territories from prices, preview, and the sub's availability.
+  // Including availability surfaces "available but unpriced" rows so the
+  // user can see gaps that previously hid silently.
   const allCodes = new Set<string>();
   for (const code of priceMap.keys()) allCodes.add(code);
   for (const code of previewMap.keys()) allCodes.add(code);
+  for (const code of availSet) allCodes.add(code);
 
   if (allCodes.size > 0) {
     const rows: PriceGridRow[] = [];
@@ -77,13 +119,17 @@ function buildRows(
       const p = priceMap.get(code);
       const preview = previewMap.get(code);
       const territoryName =
-        p?.territory_name ?? preview?.territory_name ?? code;
+        p?.territory_name ??
+        preview?.territory_name ??
+        territoryNameMap?.get(code) ??
+        code;
       const currency =
         p?.currency_code ?? preview?.currency_code ?? "";
       const hasChange =
         preview !== undefined &&
         preview.diff_percent !== null &&
         Math.abs(preview.diff_percent) > 0.01;
+      const isMissingPrice = availSet.has(code) && p === undefined;
       rows.push({
         territory_code: code,
         territory_name: territoryName,
@@ -99,6 +145,7 @@ function buildRows(
         would_be_skipped: preview?.would_be_skipped ?? false,
         is_manual: manualTerritories?.has(code) ?? false,
         is_forced: forcedTerritories?.has(code) ?? false,
+        is_missing_price: isMissingPrice,
       });
     }
     return rows;
@@ -121,6 +168,7 @@ function buildRows(
       would_be_skipped: item.would_be_skipped,
       is_manual: manualTerritories?.has(item.territory_code) ?? false,
       is_forced: forcedTerritories?.has(item.territory_code) ?? false,
+      is_missing_price: false,
     }));
   }
 
@@ -172,30 +220,65 @@ export default function PriceGrid({
   onManualPriceChange,
   forcedTerritories,
   onToggleForce,
+  introOffers,
+  availableTerritories,
+  territoryNameMap,
 }: PriceGridProps) {
   const [search, setSearch] = useState("");
+  const [missingOnly, setMissingOnly] = useState(false);
   const [sortStatus, setSortStatus] = useState<DataTableSortStatus<PriceGridRow>>({
     columnAccessor: "territory_code",
     direction: "asc",
   });
 
+  const introOfferByTerritory = useMemo(() => {
+    const m = new Map<string, IntroOffer>();
+    for (const offer of introOffers ?? []) {
+      if (offer.territory_code) m.set(offer.territory_code, offer);
+    }
+    return m;
+  }, [introOffers]);
+  const hasIntroOffers = introOfferByTerritory.size > 0;
+
   const hasPreview = previewItems !== null && previewItems.length > 0;
 
   const rows = useMemo(
-    () => buildRows(prices, previewItems, manualTerritories, forcedTerritories),
-    [prices, previewItems, manualTerritories, forcedTerritories],
+    () =>
+      buildRows(
+        prices,
+        previewItems,
+        manualTerritories,
+        forcedTerritories,
+        availableTerritories,
+        territoryNameMap,
+      ),
+    [
+      prices,
+      previewItems,
+      manualTerritories,
+      forcedTerritories,
+      availableTerritories,
+      territoryNameMap,
+    ],
+  );
+
+  const missingCount = useMemo(
+    () => rows.filter((r) => r.is_missing_price).length,
+    [rows],
   );
 
   const filteredRows = useMemo(() => {
-    if (!search.trim()) return rows;
+    let filtered = rows;
+    if (missingOnly) filtered = filtered.filter((r) => r.is_missing_price);
+    if (!search.trim()) return filtered;
     const lower = search.toLowerCase();
-    return rows.filter(
+    return filtered.filter(
       (r) =>
         r.territory_code.toLowerCase().includes(lower) ||
         r.territory_name.toLowerCase().includes(lower) ||
         r.currency_code.toLowerCase().includes(lower),
     );
-  }, [rows, search]);
+  }, [rows, search, missingOnly]);
 
   const sortedRows = useMemo(
     () => sortRows(filteredRows, sortStatus),
@@ -213,16 +296,49 @@ export default function PriceGrid({
           style={{ flex: 1, maxWidth: 400 }}
           size="sm"
         />
-        <Text size="xs" c="dimmed">
-          {sortedRows.length} territories
+        {missingCount > 0 && (
+          <Switch
+            size="sm"
+            label={`Missing prices (${missingCount})`}
+            color="red"
+            checked={missingOnly}
+            onChange={(e) => setMissingOnly(e.currentTarget.checked)}
+          />
+        )}
+        <Group gap="xs">
+          <Badge size="lg" variant="light" color="blue">
+            {sortedRows.length === rows.length
+              ? `${rows.length} territories`
+              : `${sortedRows.length} of ${rows.length} territories`}
+          </Badge>
+          {missingCount > 0 && (
+            <Badge size="lg" variant="light" color="red">
+              {missingCount} missing
+            </Badge>
+          )}
           {hasPreview &&
-            ` | ${rows.filter((r) => r.has_change && !r.would_be_skipped).length} with changes`}
+            rows.filter((r) => r.has_change && !r.would_be_skipped).length >
+              0 && (
+              <Badge size="lg" variant="light" color="yellow">
+                {
+                  rows.filter((r) => r.has_change && !r.would_be_skipped)
+                    .length
+                }{" "}
+                with changes
+              </Badge>
+            )}
           {hasPreview &&
-            rows.filter((r) => r.would_be_skipped).length > 0 &&
-            ` | ${rows.filter((r) => r.would_be_skipped).length} skipped`}
-          {rows.filter((r) => r.is_manual).length > 0 &&
-            ` | ${rows.filter((r) => r.is_manual).length} manual`}
-        </Text>
+            rows.filter((r) => r.would_be_skipped).length > 0 && (
+              <Badge size="lg" variant="light" color="orange">
+                {rows.filter((r) => r.would_be_skipped).length} skipped
+              </Badge>
+            )}
+          {rows.filter((r) => r.is_manual).length > 0 && (
+            <Badge size="lg" variant="light" color="grape">
+              {rows.filter((r) => r.is_manual).length} manual
+            </Badge>
+          )}
+        </Group>
       </Group>
 
       <DataTable
@@ -257,6 +373,12 @@ export default function PriceGrid({
           }
           if (row.has_change) {
             return { backgroundColor: "var(--mantine-color-yellow-0)" };
+          }
+          if (row.is_missing_price) {
+            return {
+              backgroundColor: "var(--mantine-color-red-0)",
+              borderLeft: "3px solid var(--mantine-color-red-6)",
+            };
           }
           return undefined;
         }}
@@ -315,11 +437,26 @@ export default function PriceGrid({
             sortable: true,
             textAlign: "right" as const,
             width: 130,
-            render: (row: PriceGridRow) => (
-              <Text size="sm">
-                {formatPrice(row.current_price, row.currency_code)}
-              </Text>
-            ),
+            render: (row: PriceGridRow) =>
+              row.is_missing_price ? (
+                <Tooltip
+                  label="Sub is available here but no price set"
+                  withArrow
+                >
+                  <Badge
+                    size="sm"
+                    variant="light"
+                    color="red"
+                    leftSection={<IconAlertTriangle size={12} />}
+                  >
+                    No price
+                  </Badge>
+                </Tooltip>
+              ) : (
+                <Text size="sm">
+                  {formatPrice(row.current_price, row.currency_code)}
+                </Text>
+              ),
           },
           ...(hasPreview
             ? [
@@ -385,6 +522,31 @@ export default function PriceGrid({
               </Text>
             ),
           },
+          ...(hasIntroOffers
+            ? [
+                {
+                  accessor: "intro_offer" as const,
+                  title: "Intro Offer",
+                  textAlign: "right" as const,
+                  width: 130,
+                  render: (row: PriceGridRow) => {
+                    const offer = introOfferByTerritory.get(row.territory_code);
+                    if (!offer) {
+                      return (
+                        <Text size="xs" c="dimmed">
+                          —
+                        </Text>
+                      );
+                    }
+                    return (
+                      <Badge size="sm" variant="light" color="grape">
+                        {formatIntroLabel(offer)}
+                      </Badge>
+                    );
+                  },
+                },
+              ]
+            : []),
           ...(onToggleForce
             ? [
                 {

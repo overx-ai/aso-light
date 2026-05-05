@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -26,10 +27,15 @@ from app.models.territory import Territory
 from app.schemas.pricing import (
     BulkLocalizationRequest,
     BulkLocalizationResponse,
+    GroupLocalizationCreate,
+    GroupLocalizationResponse,
+    GroupLocalizationUpdate,
     IAPPricePointResponse,
     IAPPricePreviewResponse,
     IAPPricesResponse,
     IAPResponse,
+    IntroOfferCreate,
+    IntroOfferResponse,
     LocalizationCreate,
     LocalizationResponse,
     LocalizationUpdate,
@@ -45,16 +51,29 @@ from app.schemas.pricing import (
     PriceResolveRequest,
     PriceResolveResponse,
     ReviewScreenshotResponse,
+    SubscriptionAvailabilityResponse,
+    SubscriptionCreate,
+    SubscriptionGroupCreate,
+    SubscriptionGroupResponse,
+    SubscriptionGroupUpdate,
     SubscriptionGroupWithSubscriptionsResponse,
     SubscriptionPricesResponse,
+    SubscriptionResponse,
+    SubscriptionUpdate,
     SyncPricesResponse,
 )
 from app.data.territories import ALPHA2_TO_ALPHA3
+from app.services.asc.availability import ASCAvailabilityService
 from app.services.asc.client import ASCClient
 from app.services.asc.errors import ASCAPIError
 from app.services.asc.price_point_cache import PricePointCache
 from app.services.asc.pricing import ASCPricingService
 from app.services.pricing.currency import effective_currency
+
+# Reverse map: Apple territory IDs are alpha-3 (USA, GBR, ARE), our DB
+# stores alpha-2 (US, GB, AE). Use this when parsing JSON:API responses
+# whose `territories` resource id is alpha-3.
+ALPHA3_TO_ALPHA2: dict[str, str] = {v: k for k, v in ALPHA2_TO_ALPHA3.items()}
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -140,6 +159,61 @@ async def _get_verified_subscription(
             detail="Subscription not found for this app",
         )
     return subscription
+
+
+async def _get_verified_subscription_group(
+    group_id: int, app_id: int, session: AsyncSession
+) -> SubscriptionGroup:
+    """Load a SubscriptionGroup and verify it belongs to the given app."""
+    result = await session.execute(
+        select(SubscriptionGroup).where(
+            SubscriptionGroup.id == group_id,
+            SubscriptionGroup.app_id == app_id,
+        )
+    )
+    group = result.scalar_one_or_none()
+    if group is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Subscription group not found for this app",
+        )
+    return group
+
+
+async def _resolve_app_target_territories(
+    client: ASCClient,
+    app_asc_id: str,
+) -> tuple[list[str], bool]:
+    """Determine the alpha-3 territories a sub should be available in.
+
+    Source priority:
+    1. The app's own ``appAvailabilityV2`` (the canonical "where the app
+       sells") if Apple has the resource.
+    2. Apple's full ``/v1/territories`` catalog (175) if (1) returns 404
+       — some apps never had appAvailabilityV2 initialized server-side
+       and would otherwise produce subs with zero territories.
+
+    Returns ``(alpha3_codes, available_in_new_territories)``. Note that
+    apps without appAvailabilityV2 default to ``True`` for the new-
+    territories flag (Apple's safest default).
+    """
+    availability_service = ASCAvailabilityService(client)
+    try:
+        app_av = await availability_service.get_app_availability(app_asc_id)
+        alpha3 = sorted(
+            ALPHA2_TO_ALPHA3[t["territory_code"]]
+            for t in app_av["territories"]
+            if t["available"] and t["territory_code"] in ALPHA2_TO_ALPHA3
+        )
+        return alpha3, app_av["available_in_new_territories"]
+    except ASCAPIError as exc:
+        if exc.status_code != 404:
+            raise
+        # Fall back to Apple's full catalog.
+        terrs = await client._get_all_pages(
+            "/territories", params={"limit": 200}
+        )
+        return sorted({t["id"] for t in terrs}), True
 
 
 async def _get_verified_iap(
@@ -324,7 +398,7 @@ async def get_subscription_prices(
     )
     cached_prices = cached_result.scalars().all()
 
-    pp_cache = PricePointCache(app.asc_app_id)
+    pp_cache = PricePointCache()
     price_responses: list[PricePointResponse] = []
     for p in cached_prices:
         territory = territory_by_id.get(p.territory_id)
@@ -349,6 +423,45 @@ async def get_subscription_prices(
         subscription_name=subscription.name,
         product_id=subscription.product_id,
         prices=price_responses,
+    )
+
+
+@router.get(
+    "/{app_id}/subscriptions/{subscription_id}/availability",
+    response_model=SubscriptionAvailabilityResponse,
+)
+async def get_subscription_availability(
+    app_id: int,
+    subscription_id: int,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SubscriptionAvailabilityResponse:
+    """Return alpha-2 codes of territories the subscription is available in.
+
+    Sourced live from ASC (no DB caching). Used by the pricing UI to
+    flag territories that are available but missing a price.
+    """
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    subscription = await _get_verified_subscription(
+        subscription_id, app.id, session
+    )
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            alpha3 = await pricing_service.list_subscription_availability(
+                subscription.asc_subscription_id
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    territories = sorted(
+        ALPHA3_TO_ALPHA2[code] for code in alpha3 if code in ALPHA3_TO_ALPHA2
+    )
+    return SubscriptionAvailabilityResponse(
+        subscription_id=subscription.id,
+        territories=territories,
     )
 
 
@@ -466,7 +579,7 @@ async def sync_price_points(
     # all of them. We pass this sub's asc_id to the API caller below.
     # Don't clear() — fetch_and_cache_all skips already-cached entries
     # so a retry only re-fetches the ones that previously failed.
-    cache = PricePointCache(app.asc_app_id)
+    cache = PricePointCache()
 
     async with await _get_asc_client_for_app(app, session) as client:
         pricing_service = ASCPricingService(client)
@@ -501,7 +614,7 @@ async def get_price_point_cache_status(
     app = await _get_verified_app(app_id, user_id, session)
     await _get_verified_subscription(subscription_id, app.id, session)
 
-    cache = PricePointCache(app.asc_app_id)
+    cache = PricePointCache()
     info = await cache.status()
     return PricePointCacheStatus(**info)
 
@@ -548,7 +661,7 @@ async def preview_subscription_prices(
 
     # Load cached tier ladder (app-wide) and enrich with this sub's
     # computed price_point_ids so downstream nearest-match works.
-    cache = PricePointCache(app.asc_app_id)
+    cache = PricePointCache()
     price_points_by_territory: dict[str, list[dict]] = {}
     all_territories = _unique_territories(territory_map)
     for territory in all_territories:
@@ -871,7 +984,7 @@ async def resolve_manual_price(
     app = await _get_verified_app(app_id, user_id, session)
     subscription = await _get_verified_subscription(subscription_id, app.id, session)
 
-    cache = PricePointCache(app.asc_app_id)
+    cache = PricePointCache()
     pps = await cache.get_with_price_point_ids(
         body.territory_code, subscription.asc_subscription_id,
     )
@@ -939,13 +1052,22 @@ async def apply_subscription_prices(
         if territory:
             current_price_by_code[territory.code] = p.customer_price
 
-    cache = PricePointCache(app.asc_app_id)
+    cache = PricePointCache()
 
     applied = 0
     failed = 0
     skipped = 0
     errors: list[str] = []
     skipped_items: list[PriceApplySkippedItem] = []
+    applied_alpha2: list[str] = []
+
+    logger.info(
+        "Apply request: subscription=%s items=%d sample=%s intro_offer=%s",
+        subscription_id,
+        len(body.items),
+        [i.territory_code for i in body.items[:5]],
+        body.intro_offer.model_dump() if body.intro_offer else None,
+    )
 
     async with await _get_asc_client_for_app(app, session) as client:
         pricing_service = ASCPricingService(client)
@@ -994,10 +1116,11 @@ async def apply_subscription_prices(
                 )
                 continue
 
-            # Safety check: skip if change exceeds ±50% (unless item.force)
+            # Safety check: skip if change exceeds ±50% (unless item.force).
+            # ``new_price`` is guaranteed non-None here (the unknown-id
+            # branch above ``continue``s).
             if (
                 not item.force
-                and new_price is not None
                 and current_price is not None
                 and current_price > 0
                 and (
@@ -1033,6 +1156,7 @@ async def apply_subscription_prices(
                     price_point_id=item.price_point_id,
                 )
                 applied += 1
+                applied_alpha2.append(tc)
             except ASCAPIError as exc:
                 failed += 1
                 errors.append(
@@ -1040,8 +1164,181 @@ async def apply_subscription_prices(
                 )
                 logger.warning(
                     "Failed to apply price for subscription %s, "
-                    "territory %s: %s",
-                    subscription_id, tc, exc.message,
+                    "territory %s (status %d): %s | apple_body=%s",
+                    subscription_id, tc, exc.status_code, exc.message,
+                    exc.response_body,
+                )
+
+        # Optional: bundled free-trial intro offer.
+        # Apple rejects worldwide intro offers (ENTITY_ERROR.RELATIONSHIP.
+        # REQUIRED — territory is mandatory) and has no PATCH endpoint —
+        # only delete + create per territory. We diff existing vs target
+        # so a re-apply only touches territories whose offer is missing
+        # or has a different config; otherwise it's a no-op.
+        intro_offer_synced = False
+        intro_offer_error: str | None = None
+        intro_offer_applied = 0
+        intro_offer_failed = 0
+        intro_offer_kept = 0
+        intro_offer_deleted = 0
+        if body.intro_offer is not None:
+            try:
+                existing_offers = (
+                    await pricing_service.list_subscription_introductory_offers(
+                        subscription.asc_subscription_id
+                    )
+                )
+            except ASCAPIError as exc:
+                intro_offer_error = exc.message
+                logger.warning(
+                    "Failed to list existing intro offers for subscription "
+                    "%s (status %d): %s | apple_body=%s",
+                    subscription_id, exc.status_code, exc.message,
+                    exc.response_body,
+                )
+                existing_offers = []
+
+            if intro_offer_error is None:
+                # Target every territory the sub is now priced in. The DB
+                # cache covers prices that already existed before this
+                # apply; ``applied_alpha2`` covers ones we just POSTed
+                # (important when this is the sub's *first* apply — the
+                # DB cache is empty until the next sync).
+                priced_rows = await session.execute(
+                    select(SubscriptionPrice.territory_id).where(
+                        SubscriptionPrice.subscription_id == subscription.id
+                    )
+                )
+                cached_alpha2 = {
+                    territory_by_id[tid].code
+                    for (tid,) in priced_rows.all()
+                    if tid in territory_by_id
+                }
+                target_alpha2 = sorted(cached_alpha2.union(applied_alpha2))
+                target_set = set(target_alpha2)
+
+                # Index existing offers by alpha-2 territory.
+                existing_by_alpha2: dict[str, dict] = {}
+                for item_dict in existing_offers:
+                    resource = item_dict.get("resource") or {}
+                    offer_id = resource.get("id")
+                    attrs = resource.get("attributes") or {}
+                    rel = (resource.get("relationships") or {}).get("territory") or {}
+                    terr_alpha3 = (rel.get("data") or {}).get("id")
+                    terr_alpha2 = (
+                        ALPHA3_TO_ALPHA2.get(terr_alpha3) if terr_alpha3 else None
+                    )
+                    if not offer_id or not terr_alpha2:
+                        continue
+                    existing_by_alpha2[terr_alpha2] = {
+                        "offer_id": offer_id,
+                        "offer_mode": attrs.get("offerMode"),
+                        "duration": attrs.get("duration"),
+                        "number_of_periods": attrs.get("numberOfPeriods"),
+                    }
+
+                desired_mode = "FREE_TRIAL"
+                desired_duration = body.intro_offer.duration
+                desired_periods = body.intro_offer.number_of_periods
+
+                # Diff.
+                to_delete_ids: list[str] = []
+                to_create_alpha2: list[str] = []
+
+                for alpha2 in target_alpha2:
+                    existing = existing_by_alpha2.get(alpha2)
+                    if existing is None:
+                        to_create_alpha2.append(alpha2)
+                    elif (
+                        existing["offer_mode"] != desired_mode
+                        or existing["duration"] != desired_duration
+                        or existing["number_of_periods"] != desired_periods
+                    ):
+                        to_delete_ids.append(existing["offer_id"])
+                        to_create_alpha2.append(alpha2)
+                    else:
+                        intro_offer_kept += 1
+
+                # Orphans: existing offers in territories no longer priced.
+                for alpha2, existing in existing_by_alpha2.items():
+                    if alpha2 not in target_set:
+                        to_delete_ids.append(existing["offer_id"])
+
+                sem = asyncio.Semaphore(2)
+
+                async def _delete_one(offer_id: str) -> bool:
+                    async with sem:
+                        try:
+                            await pricing_service.delete_subscription_introductory_offer(
+                                offer_id
+                            )
+                            return True
+                        except ASCAPIError as exc:
+                            logger.warning(
+                                "Failed to delete intro offer %s for "
+                                "subscription %s (status %d): %s | apple_body=%s",
+                                offer_id, subscription_id, exc.status_code,
+                                exc.message, exc.response_body,
+                            )
+                            return False
+
+                async def _create_one(alpha2: str) -> bool:
+                    alpha3 = ALPHA2_TO_ALPHA3.get(alpha2)
+                    if alpha3 is None:
+                        return False
+                    async with sem:
+                        try:
+                            await pricing_service.create_subscription_introductory_offer(
+                                subscription_id=subscription.asc_subscription_id,
+                                offer_mode=desired_mode,
+                                duration=desired_duration,
+                                number_of_periods=desired_periods,
+                                territory_id=alpha3,
+                            )
+                            return True
+                        except ASCAPIError as exc:
+                            logger.warning(
+                                "Failed to apply intro offer for subscription "
+                                "%s, territory %s (status %d): %s | "
+                                "apple_body=%s",
+                                subscription_id, alpha2, exc.status_code,
+                                exc.message, exc.response_body,
+                            )
+                            return False
+
+                if to_delete_ids:
+                    delete_results = await asyncio.gather(
+                        *[_delete_one(oid) for oid in to_delete_ids],
+                        return_exceptions=False,
+                    )
+                    intro_offer_deleted = sum(1 for ok in delete_results if ok)
+
+                if to_create_alpha2:
+                    create_results = await asyncio.gather(
+                        *[_create_one(c) for c in to_create_alpha2],
+                        return_exceptions=False,
+                    )
+                    intro_offer_applied = sum(1 for ok in create_results if ok)
+                    intro_offer_failed = len(create_results) - intro_offer_applied
+
+                intro_offer_synced = (
+                    intro_offer_applied > 0
+                    or (intro_offer_kept > 0 and not to_create_alpha2)
+                )
+                if intro_offer_failed > 0 and intro_offer_error is None:
+                    intro_offer_error = (
+                        f"{intro_offer_failed} of "
+                        f"{intro_offer_applied + intro_offer_failed} "
+                        f"territories failed"
+                    )
+
+                logger.info(
+                    "Intro offer diff for subscription %s: "
+                    "target=%d kept=%d deleted=%d created=%d failed=%d "
+                    "(priced_in_db=%d applied_this_run=%d)",
+                    subscription_id, len(target_alpha2), intro_offer_kept,
+                    intro_offer_deleted, intro_offer_applied,
+                    intro_offer_failed, len(cached_alpha2), len(applied_alpha2),
                 )
 
     return PriceApplyResponse(
@@ -1050,6 +1347,8 @@ async def apply_subscription_prices(
         skipped=skipped,
         errors=errors,
         skipped_items=skipped_items,
+        intro_offer_synced=intro_offer_synced,
+        intro_offer_error=intro_offer_error,
     )
 
 
@@ -1307,7 +1606,7 @@ async def sync_iap_price_points(
     # Don't clear() — Apple rate-limits this endpoint heavily; let
     # fetch_and_cache_all skip already-cached entries so a retry only
     # picks up the ones that previously failed.
-    cache = PricePointCache(app.asc_app_id, product_type="iap")
+    cache = PricePointCache(product_type="iap")
 
     async with await _get_asc_client_for_app(app, session) as client:
         pricing_service = ASCPricingService(client)
@@ -1343,7 +1642,7 @@ async def get_iap_price_point_cache_status(
     app = await _get_verified_app(app_id, user_id, session)
     await _get_verified_iap(iap_id, app.id, session)
 
-    cache = PricePointCache(app.asc_app_id, product_type="iap")
+    cache = PricePointCache(product_type="iap")
     info = await cache.status()
     return PricePointCacheStatus(**info)
 
@@ -1386,7 +1685,7 @@ async def preview_iap_prices(
     }
 
     # Load app-wide IAP tier ladder, enriched with this IAP's IDs.
-    cache = PricePointCache(app.asc_app_id, product_type="iap")
+    cache = PricePointCache(product_type="iap")
     price_points_by_territory: dict[str, list[dict]] = {}
     all_territories = _unique_territories(territory_map)
     for territory in all_territories:
@@ -1617,7 +1916,7 @@ async def resolve_iap_manual_price(
     app = await _get_verified_app(app_id, user_id, session)
     iap = await _get_verified_iap(iap_id, app.id, session)
 
-    cache = PricePointCache(app.asc_app_id, product_type="iap")
+    cache = PricePointCache(product_type="iap")
     pps = await cache.get_with_price_point_ids(
         body.territory_code, iap.asc_iap_id,
     )
@@ -1682,7 +1981,7 @@ async def apply_iap_prices(
         if territory:
             current_price_by_code[territory.code] = p.customer_price
 
-    cache = PricePointCache(app.asc_app_id, product_type="iap")
+    cache = PricePointCache(product_type="iap")
 
     applied = 0
     failed = 0
@@ -1804,8 +2103,9 @@ async def apply_iap_prices(
                 failed += len(price_entries)
                 errors.append(f"Batch apply failed: {exc.message}")
                 logger.warning(
-                    "Failed to apply IAP prices for iap %s: %s",
-                    iap_id, exc.message,
+                    "Failed to apply IAP prices for iap %s (status %d): %s | "
+                    "apple_body=%s",
+                    iap_id, exc.status_code, exc.message, exc.response_body,
                 )
 
     return PriceApplyResponse(
@@ -1823,14 +2123,81 @@ async def apply_iap_prices(
 
 
 def _parse_localization(resource: dict) -> LocalizationResponse:
-    """Convert a JSON:API localization resource to a response schema."""
+    """Convert a JSON:API localization resource to a response schema.
+
+    Includes ``state`` so clients can filter REJECTED localizations during
+    recovery flows. Mirrors ``_parse_group_localization`` which has always
+    surfaced state.
+    """
     attrs = resource.get("attributes", {})
     return LocalizationResponse(
         id=resource["id"],
         locale=attrs.get("locale", ""),
         name=attrs.get("name", ""),
         description=attrs.get("description", ""),
+        state=attrs.get("state"),
     )
+
+
+def _parse_group_localization(resource: dict) -> GroupLocalizationResponse:
+    """Convert a JSON:API subscriptionGroupLocalization to a response schema."""
+    attrs = resource.get("attributes", {})
+    return GroupLocalizationResponse(
+        id=resource["id"],
+        locale=attrs.get("locale", ""),
+        name=attrs.get("name", ""),
+        custom_app_name=attrs.get("customAppName"),
+        state=attrs.get("state"),
+    )
+
+
+def _parse_intro_offer(item: dict) -> IntroOfferResponse:
+    """Convert an intro offer + included payload to a response schema.
+
+    ``item`` is the dict shape produced by
+    ``ASCPricingService.list_subscription_introductory_offers``:
+    ``{"resource": <offer>, "included": [<territory|pricePoint>]}``.
+    """
+    resource = item["resource"]
+    included = item.get("included", []) or []
+    attrs = resource.get("attributes", {})
+    rels = resource.get("relationships", {}) or {}
+
+    territory_id = (
+        rels.get("territory", {}).get("data", {}) or {}
+    ).get("id")
+    price_point_id = (
+        rels.get("subscriptionPricePoint", {}).get("data", {}) or {}
+    ).get("id")
+
+    territory_a2: str | None = None
+    if territory_id:
+        # Apple territory IDs are alpha-3 (USA, GBR, etc.). If we ever
+        # see one we don't have a mapping for, surface ``None`` rather
+        # than leaking the alpha-3 — the schema contract is alpha-2.
+        territory_a2 = ALPHA3_TO_ALPHA2.get(territory_id)
+
+    return IntroOfferResponse(
+        id=resource["id"],
+        territory_code=territory_a2,
+        offer_mode=attrs.get("offerMode"),
+        duration=attrs.get("duration"),
+        number_of_periods=int(attrs.get("numberOfPeriods", 1)),
+        price_point_id=price_point_id,
+        start_date=attrs.get("startDate"),
+        end_date=attrs.get("endDate"),
+    )
+
+
+def _normalize_locale(loc: str) -> str:
+    """Reduce a locale tag to its primary subtag for matching.
+
+    Apple stores some short codes in their canonical regional form
+    (``th`` -> ``th-TH``, ``uk`` -> ``uk-UA``). Comparing on the primary
+    subtag lets us recognise that a request for ``th`` already exists
+    as ``th-TH`` and PATCH instead of POST.
+    """
+    return loc.split("-", 1)[0].lower()
 
 
 async def _bulk_sync_localizations(
@@ -1850,23 +2217,35 @@ async def _bulk_sync_localizations(
     Returns:
         BulkLocalizationResponse with counts and final state.
     """
-    existing_by_locale: dict[str, dict] = {}
+    existing_by_exact: dict[str, dict] = {}
+    existing_by_prefix: dict[str, dict] = {}
     for item in existing:
         locale = item.get("attributes", {}).get("locale", "")
-        if locale:
-            existing_by_locale[locale] = item
+        if not locale:
+            continue
+        existing_by_exact[locale] = item
+        # Last writer wins for collisions (e.g. pt-PT vs pt-BR) — the
+        # exact-match dict takes precedence in lookup, so prefix
+        # collisions only matter when the requester sent a bare prefix.
+        existing_by_prefix[_normalize_locale(locale)] = item
 
     created = 0
     updated = 0
     results: list[LocalizationResponse] = []
+    matched_ids: set[str] = set()
 
     for loc in requested:
-        if loc.locale in existing_by_locale:
+        existing_item = (
+            existing_by_exact.get(loc.locale)
+            or existing_by_prefix.get(_normalize_locale(loc.locale))
+        )
+        if existing_item is not None:
             resource = await update_fn(
-                existing_by_locale[loc.locale]["id"],
+                existing_item["id"],
                 loc.name,
                 loc.description,
             )
+            matched_ids.add(existing_item["id"])
             updated += 1
         else:
             resource = await create_fn(loc.locale, loc.name, loc.description)
@@ -1874,9 +2253,8 @@ async def _bulk_sync_localizations(
         results.append(_parse_localization(resource.get("data", resource)))
 
     # Include untouched existing localizations in the response
-    touched_locales = {loc.locale for loc in requested}
-    for locale, item in existing_by_locale.items():
-        if locale not in touched_locales:
+    for item in existing:
+        if item.get("id") and item["id"] not in matched_ids:
             results.append(_parse_localization(item))
 
     return BulkLocalizationResponse(
@@ -1989,6 +2367,42 @@ async def update_subscription_localization(
     return _parse_localization(result.get("data", result))
 
 
+@router.delete(
+    "/{app_id}/subscriptions/{subscription_id}/localizations/{localization_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_subscription_localization(
+    app_id: int,
+    subscription_id: int,
+    localization_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Delete a subscription localization.
+
+    Recovery path for localizations stuck in REJECTED state: Apple's PATCH
+    is blocked there (409), but DELETE is allowed. After delete, the client
+    should POST a fresh localization (which is born in PREPARE_FOR_SUBMISSION
+    state and unblocks the parent subscription's Submit for Review button).
+    """
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    # Authorization: subscription must belong to this app.
+    await _get_verified_subscription(subscription_id, app.id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            await pricing_service.delete_subscription_localization(
+                localization_id,
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.message,
+            )
+
+
 @router.post(
     "/{app_id}/subscriptions/{subscription_id}/localizations/bulk",
     response_model=BulkLocalizationResponse,
@@ -2015,24 +2429,26 @@ async def bulk_sync_subscription_localizations(
         pricing_service = ASCPricingService(client)
         asc_sub_id = subscription.asc_subscription_id
 
-        existing = await pricing_service.list_subscription_localizations(
-            asc_sub_id
-        )
-
-        return await _bulk_sync_localizations(
-            existing=existing,
-            requested=body.localizations,
-            create_fn=lambda locale, name, desc: (
-                pricing_service.create_subscription_localization(
-                    asc_sub_id, locale, name, desc
-                )
-            ),
-            update_fn=lambda loc_id, name, desc: (
-                pricing_service.update_subscription_localization(
-                    loc_id, name, desc
-                )
-            ),
-        )
+        try:
+            existing = await pricing_service.list_subscription_localizations(
+                asc_sub_id
+            )
+            return await _bulk_sync_localizations(
+                existing=existing,
+                requested=body.localizations,
+                create_fn=lambda locale, name, desc: (
+                    pricing_service.create_subscription_localization(
+                        asc_sub_id, locale, name, desc
+                    )
+                ),
+                update_fn=lambda loc_id, name, desc: (
+                    pricing_service.update_subscription_localization(
+                        loc_id, name, desc
+                    )
+                ),
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
 
 # ------------------------------------------------------------------
@@ -2156,22 +2572,24 @@ async def bulk_sync_iap_localizations(
         pricing_service = ASCPricingService(client)
         asc_iap_id = iap.asc_iap_id
 
-        existing = await pricing_service.list_iap_localizations(asc_iap_id)
-
-        return await _bulk_sync_localizations(
-            existing=existing,
-            requested=body.localizations,
-            create_fn=lambda locale, name, desc: (
-                pricing_service.create_iap_localization(
-                    asc_iap_id, locale, name, desc
-                )
-            ),
-            update_fn=lambda loc_id, name, desc: (
-                pricing_service.update_iap_localization(
-                    loc_id, name, desc
-                )
-            ),
-        )
+        try:
+            existing = await pricing_service.list_iap_localizations(asc_iap_id)
+            return await _bulk_sync_localizations(
+                existing=existing,
+                requested=body.localizations,
+                create_fn=lambda locale, name, desc: (
+                    pricing_service.create_iap_localization(
+                        asc_iap_id, locale, name, desc
+                    )
+                ),
+                update_fn=lambda loc_id, name, desc: (
+                    pricing_service.update_iap_localization(
+                        loc_id, name, desc
+                    )
+                ),
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
 
 # ------------------------------------------------------------------
@@ -2309,3 +2727,454 @@ async def upload_iap_review_screenshot(
                 detail=f"Screenshot upload failed: {exc.message}",
             )
     return _parse_screenshot(result.get("data"))  # type: ignore[return-value]
+
+
+# ------------------------------------------------------------------
+# Subscription group create / update
+# ------------------------------------------------------------------
+
+
+@router.post(
+    "/{app_id}/subscription-groups",
+    response_model=SubscriptionGroupResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_subscription_group(
+    app_id: int,
+    body: SubscriptionGroupCreate,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SubscriptionGroupResponse:
+    """Create a subscription group in ASC and mirror it to our DB."""
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            result = await pricing_service.create_subscription_group(
+                app.asc_app_id, body.reference_name
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    asc_group_id = result["data"]["id"]
+    reference_name = (
+        result["data"]
+        .get("attributes", {})
+        .get("referenceName", body.reference_name)
+    )
+
+    group = SubscriptionGroup(
+        app_id=app.id,
+        asc_group_id=asc_group_id,
+        name=reference_name,
+    )
+    session.add(group)
+    await session.commit()
+    await session.refresh(group)
+
+    return SubscriptionGroupResponse.model_validate(group)
+
+
+@router.patch(
+    "/{app_id}/subscription-groups/{group_id}",
+    response_model=SubscriptionGroupResponse,
+)
+async def update_subscription_group(
+    app_id: int,
+    group_id: int,
+    body: SubscriptionGroupUpdate,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SubscriptionGroupResponse:
+    """Rename a subscription group."""
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    group = await _get_verified_subscription_group(group_id, app.id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            await pricing_service.update_subscription_group(
+                group.asc_group_id, body.reference_name
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    group.name = body.reference_name
+    await session.commit()
+    await session.refresh(group)
+
+    return SubscriptionGroupResponse.model_validate(group)
+
+
+# ------------------------------------------------------------------
+# Subscription group localizations
+# ------------------------------------------------------------------
+
+
+@router.get(
+    "/{app_id}/subscription-groups/{group_id}/localizations",
+    response_model=list[GroupLocalizationResponse],
+)
+async def list_subscription_group_localizations(
+    app_id: int,
+    group_id: int,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[GroupLocalizationResponse]:
+    """List localizations for a subscription group."""
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    group = await _get_verified_subscription_group(group_id, app.id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            data = await pricing_service.list_subscription_group_localizations(
+                group.asc_group_id
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    return [_parse_group_localization(item) for item in data]
+
+
+@router.post(
+    "/{app_id}/subscription-groups/{group_id}/localizations",
+    response_model=GroupLocalizationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_subscription_group_localization(
+    app_id: int,
+    group_id: int,
+    body: GroupLocalizationCreate,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> GroupLocalizationResponse:
+    """Create a subscriptionGroupLocalization."""
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    group = await _get_verified_subscription_group(group_id, app.id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            result = await pricing_service.create_subscription_group_localization(
+                group.asc_group_id,
+                body.locale,
+                body.name,
+                body.custom_app_name,
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    return _parse_group_localization(result.get("data", result))
+
+
+@router.patch(
+    "/{app_id}/subscription-groups/{group_id}/localizations/{localization_id}",
+    response_model=GroupLocalizationResponse,
+)
+async def update_subscription_group_localization(
+    app_id: int,
+    group_id: int,
+    localization_id: str,
+    body: GroupLocalizationUpdate,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> GroupLocalizationResponse:
+    """Update a subscriptionGroupLocalization (locale is immutable)."""
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    # Authorization: the group must belong to this app.
+    await _get_verified_subscription_group(group_id, app.id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            result = await pricing_service.update_subscription_group_localization(
+                localization_id, body.name, body.custom_app_name
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    return _parse_group_localization(result.get("data", result))
+
+
+@router.delete(
+    "/{app_id}/subscription-groups/{group_id}/localizations/{localization_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_subscription_group_localization(
+    app_id: int,
+    group_id: int,
+    localization_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Delete a subscriptionGroupLocalization.
+
+    Recovery path mirroring ``delete_subscription_localization``: Apple's
+    PATCH on group localizations works in REJECTED state, but state
+    itself does not transition. To move a group localization out of
+    REJECTED you must DELETE + re-CREATE; the new row is born in
+    PREPARE_FOR_SUBMISSION.
+    """
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    await _get_verified_subscription_group(group_id, app.id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            await pricing_service.delete_subscription_group_localization(
+                localization_id,
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.message,
+            )
+
+
+# ------------------------------------------------------------------
+# Subscription create / update
+# ------------------------------------------------------------------
+
+
+@router.post(
+    "/{app_id}/subscription-groups/{group_id}/subscriptions",
+    response_model=SubscriptionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_subscription(
+    app_id: int,
+    group_id: int,
+    body: SubscriptionCreate,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SubscriptionResponse:
+    """Create a new auto-renewable subscription within a group."""
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    group = await _get_verified_subscription_group(group_id, app.id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            result = await pricing_service.create_subscription(
+                group_id=group.asc_group_id,
+                product_id=body.product_id,
+                name=body.name,
+                period=body.period,
+                family_sharable=body.family_sharable,
+                available_in_all_territories=body.available_in_all_territories,
+                group_level=body.group_level,
+                review_note=body.review_note,
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+        asc_sub_id = result["data"]["id"]
+
+        # Apple ships new subs with zero territories enabled. Without this
+        # follow-up POST, every subsequent prices/apply fails with the
+        # generic "An error occurred while processing the pricing
+        # information" message. Source the territory list from the app's
+        # own availability (canonical Apple-recognized set) — never from
+        # our 203-entry alpha-2 map, which Apple silently truncates and
+        # has previously dropped HKG, blocking subs at MISSING_METADATA.
+        if body.available_in_all_territories:
+            try:
+                alpha3, avail_in_new = await _resolve_app_target_territories(
+                    client, app.asc_app_id
+                )
+                await pricing_service.create_subscription_availability(
+                    subscription_id=asc_sub_id,
+                    available_alpha3_codes=alpha3,
+                    available_in_new_territories=avail_in_new,
+                )
+            except ASCAPIError as exc:
+                # The sub already exists in ASC at this point; surface the
+                # availability failure but don't roll back the create.
+                logger.warning(
+                    "Subscription %s created but availability POST failed "
+                    "(%d): %s — apply will fail until availability is set "
+                    "manually",
+                    asc_sub_id, exc.status_code, exc.message,
+                )
+
+    attrs = result["data"].get("attributes", {})
+
+    sub = Subscription(
+        group_id=group.id,
+        asc_subscription_id=asc_sub_id,
+        name=attrs.get("name", body.name),
+        product_id=attrs.get("productId", body.product_id),
+    )
+    session.add(sub)
+    await session.commit()
+    await session.refresh(sub)
+
+    return SubscriptionResponse.model_validate(sub)
+
+
+@router.patch(
+    "/{app_id}/subscriptions/{subscription_id}",
+    response_model=SubscriptionResponse,
+)
+async def update_subscription(
+    app_id: int,
+    subscription_id: int,
+    body: SubscriptionUpdate,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SubscriptionResponse:
+    """Update editable subscription metadata.
+
+    productId and subscriptionPeriod are immutable in ASC and rejected
+    by the schema.
+    """
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    sub = await _get_verified_subscription(subscription_id, app.id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            await pricing_service.update_subscription(
+                sub.asc_subscription_id,
+                name=body.name,
+                group_level=body.group_level,
+                family_sharable=body.family_sharable,
+                review_note=body.review_note,
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    if body.name is not None:
+        sub.name = body.name
+        await session.commit()
+        await session.refresh(sub)
+
+    return SubscriptionResponse.model_validate(sub)
+
+
+# ------------------------------------------------------------------
+# Introductory offers
+# ------------------------------------------------------------------
+
+
+@router.get(
+    "/{app_id}/subscriptions/{subscription_id}/intro-offers",
+    response_model=list[IntroOfferResponse],
+)
+async def list_subscription_intro_offers(
+    app_id: int,
+    subscription_id: int,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[IntroOfferResponse]:
+    """List introductory offers for a subscription."""
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    sub = await _get_verified_subscription(subscription_id, app.id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            data = await pricing_service.list_subscription_introductory_offers(
+                sub.asc_subscription_id
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    return [_parse_intro_offer(item) for item in data]
+
+
+@router.post(
+    "/{app_id}/subscriptions/{subscription_id}/intro-offers",
+    response_model=IntroOfferResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_subscription_intro_offer(
+    app_id: int,
+    subscription_id: int,
+    body: IntroOfferCreate,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> IntroOfferResponse:
+    """Create an introductory offer for a subscription."""
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    sub = await _get_verified_subscription(subscription_id, app.id, session)
+
+    territory_id = ALPHA2_TO_ALPHA3.get(body.territory_code)
+    if territory_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown territory_code: {body.territory_code}",
+        )
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            result = await pricing_service.create_subscription_introductory_offer(
+                subscription_id=sub.asc_subscription_id,
+                offer_mode=body.offer_mode,
+                duration=body.duration,
+                number_of_periods=body.number_of_periods,
+                territory_id=territory_id,
+                price_point_id=body.price_point_id,
+                start_date=body.start_date.isoformat() if body.start_date else None,
+                end_date=body.end_date.isoformat() if body.end_date else None,
+            )
+        except ASCAPIError as exc:
+            logger.warning(
+                "Failed to create intro offer for subscription %s "
+                "(status %d): %s | request=%s | apple_body=%s",
+                subscription_id,
+                exc.status_code,
+                exc.message,
+                {
+                    "territory_code": body.territory_code,
+                    "territory_id": territory_id,
+                    "offer_mode": body.offer_mode,
+                    "duration": body.duration,
+                    "number_of_periods": body.number_of_periods,
+                    "price_point_id": body.price_point_id,
+                },
+                exc.response_body,
+            )
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    return _parse_intro_offer(
+        {"resource": result.get("data", result), "included": []}
+    )
+
+
+@router.delete(
+    "/{app_id}/subscriptions/{subscription_id}/intro-offers/{offer_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_subscription_intro_offer(
+    app_id: int,
+    subscription_id: int,
+    offer_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Delete an introductory offer."""
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    # Authorization: the subscription must belong to this app.
+    await _get_verified_subscription(subscription_id, app.id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            await pricing_service.delete_subscription_introductory_offer(offer_id)
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)

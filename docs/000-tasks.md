@@ -32,6 +32,9 @@
 | T-017 | Review screenshot upload (subs + IAPs) | Full-stack | 2026-04-12 | 3-step flow, _put_binary for S3 |
 | T-018 | Manual price pins | Full-stack | 2026-04-12 | Pin toggle, resolve to nearest Apple tier |
 | T-019 | IAP full pricing workflow | Full-stack | 2026-04-12 | Mirrors subs: sync, preview, apply, pins |
+| T-020 | GDP-bracket pricing strategy (spec 005) | Full-stack | 2026-04-30 | 4 absolute tiers + World Bank GDP data; safety band → ±50% |
+| T-021 | App availability management page | Full-stack | 2026-04-30 | Per-territory availability editor |
+| T-022 | Subscription management (groups + subs + group locs + intro offers) | Full-stack | 2026-05-01 | Spec 006; submit-for-review remains manual |
 
 ## Backlog
 

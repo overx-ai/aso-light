@@ -1,18 +1,19 @@
 """Filesystem cache for Apple's per-territory tier ladder.
 
-Apple's auto-renewable subscription tiers (and IAP tiers) are app-wide
-universals: every subscription on the app shares the exact same set of
-``(tier_num, customer_price, currency_code)`` rows per territory. The
-only piece that varies between subscriptions of the same app is the
-``price_point_id``, which is a base64-encoded
-``{"s": <product_asc_id>, "t": <alpha3>, "p": <tier_num>}`` payload —
+Apple's auto-renewable subscription tiers (and IAP tiers) are a single
+**App-Store-wide** schedule: every subscription on every app shares the
+exact same ``(tier_num, customer_price, currency_code)`` rows per
+territory. The only piece that varies between products is the encoded
+``price_point_id`` — a base64
+``{"s": <product_asc_id>, "t": <alpha3>, "p": <tier_num>}`` payload
 trivially computable client-side from the tier number.
 
-So we cache the tier ladder **once per (app, product_type)** rather than
-once per subscription, and compute price_point_ids on demand. Subsequent
-syncs of additional subscriptions/IAPs become unnecessary.
+So we cache the tier ladder **once per product_type** (subscription /
+iap) globally — *not* per app — and compute price_point_ids on demand.
+The first app to call "Sync Price Tiers" populates the cache; every
+subsequent app reuses it.
 
-Disk layout: ``backend/.cache/price_points/{app_asc_id}/{product_type}/{alpha2}.json``
+Disk layout: ``backend/.cache/price_points/{product_type}/{alpha2}.json``
 
 Each file:
     {
@@ -24,10 +25,14 @@ Each file:
       ]
     }
 
-``proceeds`` is captured from whichever subscription/IAP triggered the
-sync. It is informational only (the apply path doesn't use it). For
-subscriptions that recompute proceedsYear2 differently, the cached
-value is approximate — refresh by syncing from that specific sub.
+``proceeds`` is best-effort: it reflects whichever app last synced this
+territory and may be slightly off for apps on a different commission
+tier (15% small-business vs 30%). It is informational only — the apply
+path uses ``price_point_id`` not ``proceeds``, and ``get_subscription_prices``
+already reads accurate per-app proceeds from the DB rows.
+
+If you have a stale per-app cache from before this change, delete
+``backend/.cache/price_points/`` and re-run "Sync Price Tiers" once.
 """
 
 from __future__ import annotations
@@ -83,27 +88,23 @@ def _decode_tier_num(price_point_id: str) -> str | None:
 
 
 class PricePointCache:
-    """App-wide tier-ladder cache.
+    """Global tier-ladder cache (shared across all apps).
 
     Args:
-        app_asc_id: The ASC identifier for the **app** (not the subscription).
         product_type: ``"subscription"`` or ``"iap"`` — separate ladders.
     """
 
     def __init__(
         self,
-        app_asc_id: str,
         product_type: str = "subscription",
     ) -> None:
-        _validate_path_segment(app_asc_id, "app_asc_id")
         if product_type not in ("subscription", "iap"):
             raise ValueError(
                 f"Invalid product_type: {product_type!r}; "
                 f"expected 'subscription' or 'iap'"
             )
-        self.app_asc_id = app_asc_id
         self.product_type = product_type
-        self._dir = _CACHE_ROOT / app_asc_id / product_type
+        self._dir = _CACHE_ROOT / product_type
 
     def _read_sync(self, alpha2: str) -> list[dict] | None:
         _validate_path_segment(alpha2, "alpha2")

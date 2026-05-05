@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import {
   Container,
   Title,
@@ -20,8 +20,16 @@ import {
   IconReceipt,
   IconRefresh,
   IconCheck,
+  IconPlus,
+  IconPencil,
+  IconLanguageHiragana,
+  IconGift,
 } from "@tabler/icons-react";
-import { Button, Tooltip } from "@mantine/core";
+import { ActionIcon, Button, Tooltip } from "@mantine/core";
+import SubscriptionGroupFormModal from "@/components/pricing/SubscriptionGroupFormModal";
+import GroupLocalizationsModal from "@/components/pricing/GroupLocalizationsModal";
+import SubscriptionFormModal from "@/components/pricing/SubscriptionFormModal";
+import IntroOffersModal from "@/components/pricing/IntroOffersModal";
 import {
   useApp,
   useSubscriptions,
@@ -49,6 +57,8 @@ import {
   useIAPScreenshot,
   useUploadIAPScreenshot,
   useResolvePrice,
+  useIntroOffers,
+  useSubscriptionAvailability,
 } from "@/lib/hooks";
 import PriceGrid from "@/components/pricing/PriceGrid";
 import PriceMultiplierPanel from "@/components/pricing/PriceMultiplierPanel";
@@ -56,6 +66,7 @@ import ExportImportButtons from "@/components/pricing/ExportImportButtons";
 import LocalizationEditor from "@/components/pricing/LocalizationEditor";
 import ReviewScreenshotUpload from "@/components/pricing/ReviewScreenshotUpload";
 import type {
+  IntroOfferDuration,
   PricePreviewRequest,
   PricePreviewResponse,
   PricePreviewItem,
@@ -70,12 +81,54 @@ import type {
 } from "@/types";
 
 function SubscriptionsTab({ appId }: { appId: string }) {
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
-  const [selectedSubId, setSelectedSubId] = useState<string | null>(null);
+  // Selection lives in the URL (?group=X&sub=Y) so a refresh keeps the
+  // user's place. ``replace: true`` avoids polluting browser history.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedGroupId = searchParams.get("group");
+  const selectedSubId = searchParams.get("sub");
+
+  const setSelectedGroupId = useCallback(
+    (value: string | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (value) next.set("group", value);
+          else next.delete("group");
+          // Group change resets the sub.
+          next.delete("sub");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  const setSelectedSubId = useCallback(
+    (value: string | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (value) next.set("sub", value);
+          else next.delete("sub");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
   const [preview, setPreview] = useState<PricePreviewResponse | null>(null);
   const [manualTerritories, setManualTerritories] = useState<Set<string>>(new Set());
   const [manualItems, setManualItems] = useState<Map<string, PricePreviewItem>>(new Map());
   const [forcedTerritories, setForcedTerritories] = useState<Set<string>>(new Set());
+
+  // Write-path modal state
+  const [groupModalMode, setGroupModalMode] = useState<"create" | "edit" | null>(null);
+  const [groupLocsOpen, setGroupLocsOpen] = useState(false);
+  const [subModalMode, setSubModalMode] = useState<"create" | "edit" | null>(null);
+  const [introOffersOpen, setIntroOffersOpen] = useState(false);
 
   const handleToggleForce = useCallback((territoryCode: string) => {
     setForcedTerritories((prev) => {
@@ -100,6 +153,18 @@ function SubscriptionsTab({ appId }: { appId: string }) {
   const { data: cacheStatus } = usePricePointCacheStatus(
     appId,
     selectedSubId ?? "",
+  );
+  const { data: introOffers = [] } = useIntroOffers(
+    appId,
+    selectedSubId ?? "",
+  );
+  const { data: subAvailability } = useSubscriptionAvailability(
+    appId,
+    selectedSubId ?? "",
+  );
+  const territoryNameMap = useMemo(
+    () => new Map(territories.map((t) => [t.code, t.name])),
+    [territories],
   );
 
   const groupOptions = useMemo(
@@ -131,10 +196,9 @@ function SubscriptionsTab({ appId }: { appId: string }) {
   const handleGroupChange = useCallback(
     (value: string | null) => {
       setSelectedGroupId(value);
-      setSelectedSubId(null);
       setPreview(null);
     },
-    [],
+    [setSelectedGroupId],
   );
 
   const handleSubChange = useCallback(
@@ -142,7 +206,7 @@ function SubscriptionsTab({ appId }: { appId: string }) {
       setSelectedSubId(value);
       setPreview(null);
     },
-    [],
+    [setSelectedSubId],
   );
 
   const handlePreview = useCallback(
@@ -162,9 +226,17 @@ function SubscriptionsTab({ appId }: { appId: string }) {
       pAppId: string,
       pSubId: string,
       items: { territory_code: string; price_point_id: string; force?: boolean }[],
+      introOffer?: { duration: IntroOfferDuration; number_of_periods: number } | null,
     ) => {
       applyMutation.mutate(
-        { appId: pAppId, subId: pSubId, data: { items } },
+        {
+          appId: pAppId,
+          subId: pSubId,
+          data: {
+            items,
+            ...(introOffer ? { intro_offer: introOffer } : {}),
+          },
+        },
         {
           onSuccess: () => {
             setPreview(null);
@@ -298,18 +370,32 @@ function SubscriptionsTab({ appId }: { appId: string }) {
 
   if (!groups || groups.length === 0) {
     return (
-      <Paper withBorder p="xl" ta="center" radius="md">
-        <Stack align="center" gap="sm">
-          <IconReceipt size={48} color="var(--mantine-color-dimmed)" />
-          <Title order={4} c="dimmed">
-            No subscriptions found
-          </Title>
-          <Text c="dimmed" size="sm" maw={400}>
-            Sync your app data from App Store Connect to see subscription groups
-            and their pricing.
-          </Text>
-        </Stack>
-      </Paper>
+      <>
+        <Paper withBorder p="xl" ta="center" radius="md">
+          <Stack align="center" gap="md">
+            <IconReceipt size={48} color="var(--mantine-color-dimmed)" />
+            <Title order={4} c="dimmed">
+              No subscriptions found
+            </Title>
+            <Text c="dimmed" size="sm" maw={400}>
+              Sync your app data from App Store Connect, or create a new
+              subscription group to get started.
+            </Text>
+            <Button
+              leftSection={<IconPlus size={16} />}
+              onClick={() => setGroupModalMode("create")}
+            >
+              New subscription group
+            </Button>
+          </Stack>
+        </Paper>
+        <SubscriptionGroupFormModal
+          appId={appId}
+          group={null}
+          opened={groupModalMode === "create"}
+          onClose={() => setGroupModalMode(null)}
+        />
+      </>
     );
   }
 
@@ -334,6 +420,72 @@ function SubscriptionsTab({ appId }: { appId: string }) {
             disabled={!selectedGroupId}
             size="sm"
           />
+        </Group>
+        <Group gap={4}>
+          <Tooltip label="New subscription group" withArrow>
+            <ActionIcon
+              variant="light"
+              size="lg"
+              onClick={() => setGroupModalMode("create")}
+            >
+              <IconPlus size={16} />
+            </ActionIcon>
+          </Tooltip>
+          {selectedGroup && (
+            <>
+              <Tooltip label="Rename group" withArrow>
+                <ActionIcon
+                  variant="light"
+                  size="lg"
+                  onClick={() => setGroupModalMode("edit")}
+                >
+                  <IconPencil size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="Group localizations" withArrow>
+                <ActionIcon
+                  variant="light"
+                  size="lg"
+                  onClick={() => setGroupLocsOpen(true)}
+                >
+                  <IconLanguageHiragana size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="New subscription" withArrow>
+                <ActionIcon
+                  variant="light"
+                  size="lg"
+                  color="grape"
+                  onClick={() => setSubModalMode("create")}
+                >
+                  <IconPlus size={16} />
+                </ActionIcon>
+              </Tooltip>
+            </>
+          )}
+          {selectedSub && (
+            <>
+              <Tooltip label="Edit subscription" withArrow>
+                <ActionIcon
+                  variant="light"
+                  size="lg"
+                  onClick={() => setSubModalMode("edit")}
+                >
+                  <IconPencil size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="Introductory offers" withArrow>
+                <ActionIcon
+                  variant="light"
+                  size="lg"
+                  color="teal"
+                  onClick={() => setIntroOffersOpen(true)}
+                >
+                  <IconGift size={16} />
+                </ActionIcon>
+              </Tooltip>
+            </>
+          )}
         </Group>
         {selectedSubId && (
           <Group gap="xs">
@@ -401,6 +553,7 @@ function SubscriptionsTab({ appId }: { appId: string }) {
             onClearPreview={handleClearPreview}
             isPreviewLoading={previewMutation.isPending}
             isApplyLoading={applyMutation.isPending}
+            showIntroOffer
           />
 
           <Group justify="flex-end">
@@ -420,15 +573,60 @@ function SubscriptionsTab({ appId }: { appId: string }) {
             onManualPriceChange={handleManualPriceChange}
             forcedTerritories={forcedTerritories}
             onToggleForce={handleToggleForce}
+            introOffers={introOffers}
+            availableTerritories={subAvailability?.territories}
+            territoryNameMap={territoryNameMap}
           />
         </>
       )}
+
+      <SubscriptionGroupFormModal
+        appId={appId}
+        group={groupModalMode === "edit" ? selectedGroup : null}
+        opened={groupModalMode !== null}
+        onClose={() => setGroupModalMode(null)}
+      />
+      <GroupLocalizationsModal
+        appId={appId}
+        group={selectedGroup}
+        opened={groupLocsOpen}
+        onClose={() => setGroupLocsOpen(false)}
+      />
+      <SubscriptionFormModal
+        appId={appId}
+        group={selectedGroup}
+        subscription={subModalMode === "edit" ? selectedSub : null}
+        opened={subModalMode !== null}
+        onClose={() => setSubModalMode(null)}
+      />
+      <IntroOffersModal
+        appId={appId}
+        subscription={selectedSub}
+        opened={introOffersOpen}
+        onClose={() => setIntroOffersOpen(false)}
+      />
     </Stack>
   );
 }
 
 function IAPsTab({ appId }: { appId: string }) {
-  const [selectedIapId, setSelectedIapId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedIapId = searchParams.get("iap");
+  const setSelectedIapId = useCallback(
+    (value: string | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (value) next.set("iap", value);
+          else next.delete("iap");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
   const [preview, setPreview] = useState<IAPPricePreviewResponse | null>(null);
   const [manualTerritories, setManualTerritories] = useState<Set<string>>(new Set());
   const [manualItems, setManualItems] = useState<Map<string, PricePreviewItem>>(new Map());
@@ -475,7 +673,7 @@ function IAPsTab({ appId }: { appId: string }) {
       setManualTerritories(new Set());
       setManualItems(new Map());
     },
-    [],
+    [setSelectedIapId],
   );
 
   const handlePreview = useCallback(
@@ -962,6 +1160,20 @@ export default function PricingPage() {
   const appId = id ?? "";
   const { data: app, isLoading } = useApp(appId);
 
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get("tab") ?? "subscriptions";
+  const setActiveTab = (value: string | null) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value && value !== "subscriptions") next.set("tab", value);
+        else next.delete("tab");
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
   return (
     <Container size="xl">
       {isLoading ? (
@@ -978,7 +1190,7 @@ export default function PricingPage() {
         </div>
       )}
 
-      <Tabs defaultValue="subscriptions">
+      <Tabs value={activeTab} onChange={setActiveTab}>
         <Tabs.List>
           <Tabs.Tab
             value="subscriptions"

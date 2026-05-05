@@ -13,6 +13,12 @@ from app.db.session import async_session_factory, engine
 
 import app.models  # noqa: F401 — register all models with Base.metadata
 
+# App-level loggers default to INFO so logger.info() lines (apply payload,
+# intro-offer results, etc.) show up in the dev log without bumping each
+# call site to warning. uvicorn keeps its own access logs at INFO too.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:    %(name)s: %(message)s")
+logging.getLogger("app").setLevel(logging.INFO)
+
 logger = logging.getLogger(__name__)
 
 

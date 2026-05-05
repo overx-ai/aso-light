@@ -68,6 +68,9 @@ App Store Optimization SaaS — web-based alternative to aso.dev. Focuses on pri
 - Netflix/Spotify indices are seed data — update `app/services/indices/netflix.py` and `spotify.py` quarterly
 - `RATE_CACHE_API_URL` defaults to `https://api.overx.ai` — the rate-cache-api from `1B-bots/rate-cache-api`
 - Currency rounding profiles are in `app/services/pricing/currency_rounding.py` — update when App Store adds new territories
+- **Subscription immutables**: `productId` and `subscriptionPeriod` are immutable in ASC after create — never expose them on update paths (`SubscriptionUpdate` schema enforces this)
+- **Intro offers**: `FREE_TRIAL` rejects `price_point_id`; `PAY_AS_YOU_GO` / `PAY_UP_FRONT` require it; `FREE_TRIAL` and `PAY_UP_FRONT` force `number_of_periods = 1` (validated in `IntroOfferCreate`); `IntroOfferDuration` extends `SubscriptionPeriod` with `THREE_DAYS` and `TWO_WEEKS`
+- Submit-for-review is **not** automated — subscription state transitions are done manually in App Store Connect
 
 ## Modes
 When I switch to plan mode (shift+tab), you MUST only outline steps and reasoning.
@@ -80,3 +83,4 @@ Do NOT execute any tools in plan mode. Wait for me to switch back to act mode be
 - [docs/002-asc-integration.md](docs/002-asc-integration.md) — ASC API integration details
 - [docs/003-keyword-analysis.md](docs/003-keyword-analysis.md) — Keyword analysis system
 - [docs/004-localization-management.md](docs/004-localization-management.md) — Localization management
+- [docs/005-subscription-management.md](docs/005-subscription-management.md) — Subscription / group / intro-offer write paths

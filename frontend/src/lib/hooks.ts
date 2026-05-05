@@ -24,6 +24,17 @@ import type {
   Localization,
   LocalizationCreate,
   BulkLocalizationResponse,
+  SubscriptionGroupCreate,
+  SubscriptionGroupUpdate,
+  SubscriptionCreate,
+  SubscriptionUpdate,
+  Subscription,
+  SubscriptionAvailability,
+  GroupLocalization,
+  GroupLocalizationCreate,
+  GroupLocalizationUpdate,
+  IntroOffer,
+  IntroOfferCreate,
   ReviewScreenshot,
   PriceResolveResponse,
   Territory,
@@ -54,6 +65,8 @@ export const queryKeys = {
   subscriptions: (appId: string) => ["subscriptions", appId] as const,
   subscriptionPrices: (appId: string, subId: string) =>
     ["subscriptionPrices", appId, subId] as const,
+  subscriptionAvailability: (appId: string, subId: string) =>
+    ["subscriptionAvailability", appId, subId] as const,
   iaps: (appId: string) => ["iaps", appId] as const,
   iapPrices: (appId: string, iapId: string) =>
     ["iapPrices", appId, iapId] as const,
@@ -75,6 +88,10 @@ export const queryKeys = {
     ["pricePointCacheStatus", appId, subId] as const,
   subscriptionLocalizations: (appId: string, subId: string) =>
     ["subscriptionLocalizations", appId, subId] as const,
+  groupLocalizations: (appId: string, groupId: string) =>
+    ["groupLocalizations", appId, groupId] as const,
+  introOffers: (appId: string, subId: string) =>
+    ["introOffers", appId, subId] as const,
   iapLocalizations: (appId: string, iapId: string) =>
     ["iapLocalizations", appId, iapId] as const,
   subscriptionScreenshot: (appId: string, subId: string) =>
@@ -269,6 +286,19 @@ export function useSubscriptionPrices(appId: string, subId: string) {
     queryFn: async () => {
       const response = await api.get<SubscriptionPrices>(
         `/apps/${appId}/subscriptions/${subId}/prices`,
+      );
+      return response.data;
+    },
+    enabled: !!appId && !!subId,
+  });
+}
+
+export function useSubscriptionAvailability(appId: string, subId: string) {
+  return useQuery({
+    queryKey: queryKeys.subscriptionAvailability(appId, subId),
+    queryFn: async () => {
+      const response = await api.get<SubscriptionAvailability>(
+        `/apps/${appId}/subscriptions/${subId}/availability`,
       );
       return response.data;
     },
@@ -1527,4 +1557,251 @@ export function useUpdateAppAvailability() {
       });
     },
   });
+}
+
+// ---- Subscription group / subscription / intro offer write-paths ----
+
+function ascErrorMessage(error: unknown, fallback: string): string {
+  return (
+    (error as { response?: { data?: { detail?: string } } })?.response?.data
+      ?.detail ?? fallback
+  );
+}
+
+/** Shared notification copy for the simple ASC write-path mutations below. */
+interface NotifyCopy {
+  successTitle: string;
+  successMessage: string;
+  errorTitle: string;
+  errorFallback: string;
+}
+
+/**
+ * Build a useMutation config that runs `mutationFn`, invalidates the given
+ * query keys on success, and shows a green/red toast on result.
+ *
+ * Hand-rolled instead of inlined because we have 6 near-identical
+ * group/sub/intro-offer write paths and the boilerplate dwarfed the unique
+ * lines.
+ */
+function useNotifyingMutation<TVars, TData>(
+  mutationFn: (vars: TVars) => Promise<TData>,
+  invalidateKeys: readonly (readonly unknown[])[],
+  copy: NotifyCopy,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: () => {
+      for (const key of invalidateKeys) {
+        queryClient.invalidateQueries({ queryKey: key });
+      }
+      notifications.show({
+        title: copy.successTitle,
+        message: copy.successMessage,
+        color: "green",
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        title: copy.errorTitle,
+        message: ascErrorMessage(error, copy.errorFallback),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useCreateSubscriptionGroup(appId: string) {
+  return useNotifyingMutation(
+    async (body: SubscriptionGroupCreate) => {
+      const response = await api.post<SubscriptionGroup>(
+        `/apps/${appId}/subscription-groups`,
+        body,
+      );
+      return response.data;
+    },
+    [queryKeys.subscriptions(appId)],
+    {
+      successTitle: "Group created",
+      successMessage: "Subscription group added.",
+      errorTitle: "Create failed",
+      errorFallback: "Could not create subscription group.",
+    },
+  );
+}
+
+export function useUpdateSubscriptionGroup(appId: string) {
+  return useNotifyingMutation(
+    async ({
+      groupId,
+      body,
+    }: {
+      groupId: string;
+      body: SubscriptionGroupUpdate;
+    }) => {
+      const response = await api.patch<SubscriptionGroup>(
+        `/apps/${appId}/subscription-groups/${groupId}`,
+        body,
+      );
+      return response.data;
+    },
+    [queryKeys.subscriptions(appId)],
+    {
+      successTitle: "Group renamed",
+      successMessage: "Subscription group updated.",
+      errorTitle: "Update failed",
+      errorFallback: "Could not rename group.",
+    },
+  );
+}
+
+export function useGroupLocalizations(appId: string, groupId: string) {
+  return useQuery({
+    queryKey: queryKeys.groupLocalizations(appId, groupId),
+    queryFn: async () => {
+      const response = await api.get<GroupLocalization[]>(
+        `/apps/${appId}/subscription-groups/${groupId}/localizations`,
+      );
+      return response.data;
+    },
+    enabled: !!appId && !!groupId,
+  });
+}
+
+export function useCreateGroupLocalization(appId: string, groupId: string) {
+  return useNotifyingMutation(
+    async (body: GroupLocalizationCreate) => {
+      const response = await api.post<GroupLocalization>(
+        `/apps/${appId}/subscription-groups/${groupId}/localizations`,
+        body,
+      );
+      return response.data;
+    },
+    [queryKeys.groupLocalizations(appId, groupId)],
+    {
+      successTitle: "Localization added",
+      successMessage: "Group localization saved.",
+      errorTitle: "Create failed",
+      errorFallback: "Could not add localization.",
+    },
+  );
+}
+
+export function useUpdateGroupLocalization(appId: string, groupId: string) {
+  return useNotifyingMutation(
+    async ({
+      localizationId,
+      body,
+    }: {
+      localizationId: string;
+      body: GroupLocalizationUpdate;
+    }) => {
+      const response = await api.patch<GroupLocalization>(
+        `/apps/${appId}/subscription-groups/${groupId}/localizations/${localizationId}`,
+        body,
+      );
+      return response.data;
+    },
+    [queryKeys.groupLocalizations(appId, groupId)],
+    {
+      successTitle: "Localization updated",
+      successMessage: "Group localization saved.",
+      errorTitle: "Update failed",
+      errorFallback: "Could not update localization.",
+    },
+  );
+}
+
+export function useCreateSubscription(appId: string, groupId: string) {
+  return useNotifyingMutation(
+    async (body: SubscriptionCreate) => {
+      const response = await api.post<Subscription>(
+        `/apps/${appId}/subscription-groups/${groupId}/subscriptions`,
+        body,
+      );
+      return response.data;
+    },
+    [queryKeys.subscriptions(appId)],
+    {
+      successTitle: "Subscription created",
+      successMessage: "New subscription added.",
+      errorTitle: "Create failed",
+      errorFallback: "Could not create subscription.",
+    },
+  );
+}
+
+export function useUpdateSubscription(appId: string) {
+  return useNotifyingMutation(
+    async ({
+      subId,
+      body,
+    }: {
+      subId: string;
+      body: SubscriptionUpdate;
+    }) => {
+      const response = await api.patch<Subscription>(
+        `/apps/${appId}/subscriptions/${subId}`,
+        body,
+      );
+      return response.data;
+    },
+    [queryKeys.subscriptions(appId)],
+    {
+      successTitle: "Subscription updated",
+      successMessage: "Metadata saved.",
+      errorTitle: "Update failed",
+      errorFallback: "Could not update subscription.",
+    },
+  );
+}
+
+export function useIntroOffers(appId: string, subId: string) {
+  return useQuery({
+    queryKey: queryKeys.introOffers(appId, subId),
+    queryFn: async () => {
+      const response = await api.get<IntroOffer[]>(
+        `/apps/${appId}/subscriptions/${subId}/intro-offers`,
+      );
+      return response.data;
+    },
+    enabled: !!appId && !!subId,
+  });
+}
+
+export function useCreateIntroOffer(appId: string, subId: string) {
+  return useNotifyingMutation(
+    async (body: IntroOfferCreate) => {
+      const response = await api.post<IntroOffer>(
+        `/apps/${appId}/subscriptions/${subId}/intro-offers`,
+        body,
+      );
+      return response.data;
+    },
+    [queryKeys.introOffers(appId, subId)],
+    {
+      successTitle: "Offer created",
+      successMessage: "Introductory offer added.",
+      errorTitle: "Create failed",
+      errorFallback: "Could not create offer.",
+    },
+  );
+}
+
+export function useDeleteIntroOffer(appId: string, subId: string) {
+  return useNotifyingMutation(
+    async (offerId: string) => {
+      await api.delete(
+        `/apps/${appId}/subscriptions/${subId}/intro-offers/${offerId}`,
+      );
+    },
+    [queryKeys.introOffers(appId, subId)],
+    {
+      successTitle: "Offer deleted",
+      successMessage: "Introductory offer removed.",
+      errorTitle: "Delete failed",
+      errorFallback: "Could not delete offer.",
+    },
+  );
 }

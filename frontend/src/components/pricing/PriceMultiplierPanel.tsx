@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   Paper,
   Group,
@@ -27,8 +27,10 @@ import {
 } from "@tabler/icons-react";
 import PresetManager from "@/components/pricing/PresetManager";
 import GDPBracketEditor from "@/components/pricing/GDPBracketEditor";
+import { INTRO_DURATION_OPTIONS } from "@/components/pricing/subscriptionConstants";
 import type {
   GDPBracketConfig,
+  IntroOfferDuration,
   PricePreviewRequest,
   PricePreviewResponse,
   PricePreviewItem,
@@ -36,7 +38,16 @@ import type {
   Territory,
 } from "@/types";
 
-const INDEX_TYPE_OPTIONS = [
+// "No changes (intro offer only)" is meaningful only for subscriptions
+// — IAPs don't have intro offers, so for those callers (showIntroOffer
+// = false) we drop this option from the dropdown to avoid presenting a
+// silently no-op apply.
+const INTRO_OFFER_ONLY_OPTION = {
+  value: "none",
+  label: "No changes (intro offer only)",
+};
+
+const PRICE_INDEX_OPTIONS = [
   { value: "exchange_rate", label: "Exchange Rate" },
   { value: "ppp", label: "PPP" },
   { value: "bigmac", label: "Big Mac" },
@@ -71,10 +82,13 @@ interface PriceMultiplierPanelProps {
     appId: string,
     subId: string,
     items: { territory_code: string; price_point_id: string; force?: boolean }[],
+    introOffer?: { duration: IntroOfferDuration; number_of_periods: number } | null,
   ) => void;
   onClearPreview: () => void;
   isPreviewLoading: boolean;
   isApplyLoading: boolean;
+  /** Show the worldwide free-trial toggle (subscriptions only). */
+  showIntroOffer?: boolean;
 }
 
 export default function PriceMultiplierPanel({
@@ -88,13 +102,23 @@ export default function PriceMultiplierPanel({
   onClearPreview,
   isPreviewLoading,
   isApplyLoading,
+  showIntroOffer = false,
 }: PriceMultiplierPanelProps) {
-  const [indexType, setIndexType] = useState("exchange_rate");
+  // For subscriptions, the "intro-offer-only" mode is the default
+  // because the panel is most often opened to push a free trial. IAPs
+  // (showIntroOffer=false) don't support intro offers, so default to a
+  // real index that will produce a preview.
+  const [indexType, setIndexType] = useState(
+    showIntroOffer ? "none" : "exchange_rate",
+  );
   const [basePrice, setBasePrice] = useState<number | string>(9.99);
   const [baseTerritory, setBaseTerritory] = useState("US");
   const [applyVat, setApplyVat] = useState(true);
   const [charmingMode, setCharmingMode] = useState("smart");
   const [gdpConfig, setGdpConfig] = useState<GDPBracketConfig>(DEFAULT_GDP_CONFIG);
+  const [introOfferEnabled, setIntroOfferEnabled] = useState(false);
+  const [introOfferDuration, setIntroOfferDuration] =
+    useState<IntroOfferDuration>("ONE_MONTH");
 
   const isForced = (code: string) =>
     forcedTerritories ? forcedTerritories.has(code) : false;
@@ -108,6 +132,17 @@ export default function PriceMultiplierPanel({
   ] = useDisclosure(false);
 
   const isGdpBrackets = indexType === "gdp_brackets";
+  const isNoChanges = indexType === "none";
+
+  // When "No changes" is selected the only thing the panel does is push
+  // the free trial — so force the toggle on (and clear the existing
+  // preview, if any, so the Apply confirm copy is correct).
+  useEffect(() => {
+    if (isNoChanges) {
+      setIntroOfferEnabled(true);
+      onClearPreview();
+    }
+  }, [isNoChanges, onClearPreview]);
 
   const territoryOptions = territories.map((t) => ({
     value: t.code,
@@ -140,20 +175,26 @@ export default function PriceMultiplierPanel({
   };
 
   const handleApply = () => {
-    if (!preview) return;
-    const items = preview.items
-      .filter(
-        (item: PricePreviewItem) =>
-          wouldChange(item) &&
-          (!item.would_be_skipped || isForced(item.territory_code)),
-      )
-      .map((item: PricePreviewItem) => ({
-        territory_code: item.territory_code,
-        price_point_id: item.price_point_id!,
-        force: isForced(item.territory_code) ? true : undefined,
-      }));
+    const items =
+      isNoChanges || !preview
+        ? []
+        : preview.items
+            .filter(
+              (item: PricePreviewItem) =>
+                wouldChange(item) &&
+                (!item.would_be_skipped || isForced(item.territory_code)),
+            )
+            .map((item: PricePreviewItem) => ({
+              territory_code: item.territory_code,
+              price_point_id: item.price_point_id!,
+              force: isForced(item.territory_code) ? true : undefined,
+            }));
 
-    onApply(appId, subId, items);
+    const introOffer =
+      showIntroOffer && introOfferEnabled
+        ? { duration: introOfferDuration, number_of_periods: 1 }
+        : null;
+    onApply(appId, subId, items, introOffer);
     closeConfirm();
   };
 
@@ -223,12 +264,16 @@ export default function PriceMultiplierPanel({
             <Group grow align="flex-end">
               <Select
                 label="Price Index"
-                data={INDEX_TYPE_OPTIONS}
+                data={
+                  showIntroOffer
+                    ? [INTRO_OFFER_ONLY_OPTION, ...PRICE_INDEX_OPTIONS]
+                    : PRICE_INDEX_OPTIONS
+                }
                 value={indexType}
                 onChange={(v) => v && setIndexType(v)}
                 size="sm"
               />
-              {isGdpBrackets ? (
+              {!isNoChanges && (isGdpBrackets ? (
                 <div>
                   <Text size="xs" fw={500} mb={4}>
                     Tier Configuration
@@ -259,68 +304,105 @@ export default function PriceMultiplierPanel({
                   prefix="$"
                   size="sm"
                 />
-              )}
-              <Select
-                label="Base Territory"
-                data={territoryOptions}
-                value={baseTerritory}
-                onChange={(v) => v && setBaseTerritory(v)}
-                searchable
-                size="sm"
-                disabled={isGdpBrackets}
-              />
-            </Group>
-
-            <Group>
-              <Switch
-                label="Apply VAT"
-                checked={applyVat}
-                onChange={(e) => setApplyVat(e.currentTarget.checked)}
-                size="sm"
-              />
-              <div>
-                <Text size="xs" fw={500} mb={4}>
-                  Charming Price
-                </Text>
-                <SegmentedControl
-                  data={CHARMING_OPTIONS}
-                  value={charmingMode}
-                  onChange={setCharmingMode}
-                  size="xs"
+              ))}
+              {!isNoChanges && (
+                <Select
+                  label="Base Territory"
+                  data={territoryOptions}
+                  value={baseTerritory}
+                  onChange={(v) => v && setBaseTerritory(v)}
+                  searchable
+                  size="sm"
+                  disabled={isGdpBrackets}
                 />
-              </div>
+              )}
             </Group>
 
-            <Group justify="space-between">
-              <PresetManager
-                currentSettings={{
-                  base_territory_code: baseTerritory,
-                  base_price:
-                    typeof basePrice === "string"
-                      ? parseFloat(basePrice) || 0
-                      : basePrice,
-                  index_type: indexType,
-                  apply_vat: applyVat,
-                  charming_mode: charmingMode,
-                  config: isGdpBrackets
-                    ? (gdpConfig as unknown as Record<string, unknown>)
-                    : null,
-                }}
-                onLoadPreset={handleLoadPreset}
-              />
-            </Group>
+            {!isNoChanges && (
+              <Group>
+                <Switch
+                  label="Apply VAT"
+                  checked={applyVat}
+                  onChange={(e) => setApplyVat(e.currentTarget.checked)}
+                  size="sm"
+                />
+                <div>
+                  <Text size="xs" fw={500} mb={4}>
+                    Charming Price
+                  </Text>
+                  <SegmentedControl
+                    data={CHARMING_OPTIONS}
+                    value={charmingMode}
+                    onChange={setCharmingMode}
+                    size="xs"
+                  />
+                </div>
+              </Group>
+            )}
+
+            {!isNoChanges && (
+              <Group justify="space-between">
+                <PresetManager
+                  currentSettings={{
+                    base_territory_code: baseTerritory,
+                    base_price:
+                      typeof basePrice === "string"
+                        ? parseFloat(basePrice) || 0
+                        : basePrice,
+                    index_type: indexType,
+                    apply_vat: applyVat,
+                    charming_mode: charmingMode,
+                    config: isGdpBrackets
+                      ? (gdpConfig as unknown as Record<string, unknown>)
+                      : null,
+                  }}
+                  onLoadPreset={handleLoadPreset}
+                />
+              </Group>
+            )}
+
+            {showIntroOffer && (
+              <Group align="flex-end" gap="sm">
+                {!isNoChanges && (
+                  <Switch
+                    label="Include free trial on apply"
+                    description="Replaces any existing intro offers."
+                    checked={introOfferEnabled}
+                    onChange={(e) =>
+                      setIntroOfferEnabled(e.currentTarget.checked)
+                    }
+                    size="sm"
+                  />
+                )}
+                <Select
+                  label="Trial duration"
+                  data={INTRO_DURATION_OPTIONS}
+                  value={introOfferDuration}
+                  onChange={(v) =>
+                    setIntroOfferDuration(
+                      (v as IntroOfferDuration) ?? "ONE_MONTH",
+                    )
+                  }
+                  disabled={!introOfferEnabled}
+                  size="sm"
+                  w={140}
+                />
+              </Group>
+            )}
 
             <Group>
-              <Button
-                leftSection={<IconEye size={16} />}
-                onClick={handlePreview}
-                loading={isPreviewLoading}
-                variant="filled"
-                size="sm"
-              >
-                Preview Prices
-              </Button>
-              {preview && (
+              {!isNoChanges && (
+                <Button
+                  leftSection={<IconEye size={16} />}
+                  onClick={handlePreview}
+                  loading={isPreviewLoading}
+                  variant="filled"
+                  size="sm"
+                >
+                  Preview Prices
+                </Button>
+              )}
+              {(preview || isNoChanges) && (
                 <>
                   <Button
                     leftSection={<IconUpload size={16} />}
@@ -329,19 +411,25 @@ export default function PriceMultiplierPanel({
                     color="green"
                     variant="filled"
                     size="sm"
-                    disabled={changedCount === 0}
+                    disabled={
+                      !isNoChanges &&
+                      changedCount === 0 &&
+                      !(showIntroOffer && introOfferEnabled)
+                    }
                   >
                     Apply to App Store
                   </Button>
-                  <Button
-                    leftSection={<IconX size={16} />}
-                    onClick={onClearPreview}
-                    variant="subtle"
-                    color="gray"
-                    size="sm"
-                  >
-                    Clear Preview
-                  </Button>
+                  {!isNoChanges && (
+                    <Button
+                      leftSection={<IconX size={16} />}
+                      onClick={onClearPreview}
+                      variant="subtle"
+                      color="gray"
+                      size="sm"
+                    >
+                      Clear Preview
+                    </Button>
+                  )}
                 </>
               )}
             </Group>
@@ -358,11 +446,25 @@ export default function PriceMultiplierPanel({
         <Stack>
           <Alert
             icon={<IconAlertCircle size={20} />}
-            title="Apply prices to App Store Connect?"
+            title="Apply to App Store Connect?"
             color="yellow"
           >
-            This will update prices for {changedCount} territories in App Store
-            Connect. This action will take effect immediately.
+            {changedCount > 0 ? (
+              <>
+                This will update prices for {changedCount} territories
+                {showIntroOffer && introOfferEnabled
+                  ? " and replace any existing introductory offers with a free trial in every priced territory"
+                  : ""}
+                . This action takes effect immediately.
+              </>
+            ) : (
+              <>
+                {isNoChanges ? "Prices won't change" : "Prices already match"}
+                {" "}— this will replace any existing introductory offers with
+                a free trial in every priced territory. This action takes
+                effect immediately.
+              </>
+            )}
           </Alert>
           {forcedCount > 0 && (
             <Alert

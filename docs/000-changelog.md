@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- **Subscription management write-paths**: Create / rename subscription groups, create / update subscriptions, CRUD group localizations, list / create / delete introductory offers — all driven from the Subscriptions tab via 4 new modals. Submit-for-review remains manual.
+- **GDP-bracket pricing strategy** (spec 005): 4 absolute-price tiers (top / mid / low / special) with World Bank GDP/capita PPP data and per-preset config (`PricePreset.config` JSON column). Loosens price safety band to symmetric ±50%.
+- **App availability management page**: Per-territory availability editor backed by `subscriptionAvailability` ASC API.
 - **IAP full pricing workflow**: Sync, preview, apply, manual pins for in-app purchases — mirrors subscription pricing with shared components
 - **Manual price pins**: Pin territories for manual price management, resolve to nearest Apple price tier per-territory
 - **Review screenshot upload**: 3-step upload flow (reserve → PUT binary → commit) for both subscriptions and IAPs

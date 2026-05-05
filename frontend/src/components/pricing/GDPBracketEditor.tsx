@@ -179,7 +179,7 @@ export default function GDPBracketEditor({
                   value={value.tier_prices_usd[tier]}
                   onChange={(v) => updatePrice(tier, v)}
                   min={0.01}
-                  step={0.01}
+                  step={1}
                   decimalScale={2}
                   fixedDecimalScale
                   prefix="$"

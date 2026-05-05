@@ -135,6 +135,7 @@ TERRITORIES: list[dict] = [
     {"code": "NP", "name": "Nepal", "currency_code": "NPR", "vat_rate": 0.13},
     {"code": "MV", "name": "Maldives", "currency_code": "MVR", "vat_rate": 0.08},
     {"code": "BT", "name": "Bhutan", "currency_code": "BTN", "vat_rate": 0.0},
+    {"code": "AF", "name": "Afghanistan", "currency_code": "USD", "vat_rate": 0.0},
 
     # Oceania
     {"code": "AU", "name": "Australia", "currency_code": "AUD", "vat_rate": 0.10},

@@ -362,12 +362,16 @@ class ASCPricingService:
         ``GET /v1/subscriptions/{subscription_id}/subscriptionLocalizations``
 
         Returns:
-            List of JSON:API resource objects with locale, name, description.
+            List of JSON:API resource objects with locale, name, description, state.
+            ``state`` is one of: ``PREPARE_FOR_SUBMISSION``, ``WAITING_FOR_REVIEW``,
+            ``IN_REVIEW``, ``REJECTED``, ``APPROVED``, ``DEVELOPER_ACTION_NEEDED``.
+            Required for clients to filter REJECTED localizations during
+            recovery flows (see ``delete_subscription_localization``).
         """
         return await self.client._get_all_pages(
             f"/subscriptions/{subscription_id}/subscriptionLocalizations",
             params={
-                "fields[subscriptionLocalizations]": "locale,name,description",
+                "fields[subscriptionLocalizations]": "locale,name,description,state",
                 "limit": 200,
             },
         )
@@ -433,6 +437,24 @@ class ASCPricingService:
         }
         return await self.client._patch(
             f"/subscriptionLocalizations/{localization_id}", json=body
+        )
+
+    async def delete_subscription_localization(
+        self, localization_id: str
+    ) -> None:
+        """Delete a subscription localization.
+
+        ``DELETE /v1/subscriptionLocalizations/{localization_id}``
+
+        Apple allows deletion regardless of localization state (including
+        ``REJECTED``), unlike PATCH which is blocked on REJECTED with a 409.
+        This is the recovery path when a localization is stuck in REJECTED:
+        delete and re-create. The new localization is born in
+        ``PREPARE_FOR_SUBMISSION`` state, which unblocks the parent
+        subscription's "Submit for Review" button.
+        """
+        await self.client._delete(
+            f"/subscriptionLocalizations/{localization_id}"
         )
 
     # ------------------------------------------------------------------
@@ -1053,3 +1075,357 @@ class ASCPricingService:
             })
 
         return result
+
+    # ------------------------------------------------------------------
+    # Subscription Groups — create / update
+    # ------------------------------------------------------------------
+
+    async def create_subscription_group(
+        self, app_id: str, reference_name: str
+    ) -> dict:
+        """``POST /v1/subscriptionGroups`` — create a subscription group."""
+        body = {
+            "data": {
+                "type": "subscriptionGroups",
+                "attributes": {"referenceName": reference_name},
+                "relationships": {
+                    "app": {"data": {"type": "apps", "id": app_id}},
+                },
+            }
+        }
+        return await self.client._post("/subscriptionGroups", json=body)
+
+    async def update_subscription_group(
+        self, group_id: str, reference_name: str
+    ) -> dict:
+        """``PATCH /v1/subscriptionGroups/{group_id}`` — rename a group."""
+        body = {
+            "data": {
+                "type": "subscriptionGroups",
+                "id": group_id,
+                "attributes": {"referenceName": reference_name},
+            }
+        }
+        return await self.client._patch(
+            f"/subscriptionGroups/{group_id}", json=body
+        )
+
+    # ------------------------------------------------------------------
+    # Subscription Group Localizations
+    # ------------------------------------------------------------------
+
+    async def list_subscription_group_localizations(
+        self, group_id: str
+    ) -> list[dict]:
+        """``GET /v1/subscriptionGroups/{group_id}/subscriptionGroupLocalizations``"""
+        return await self.client._get_all_pages(
+            f"/subscriptionGroups/{group_id}/subscriptionGroupLocalizations",
+            params={
+                "fields[subscriptionGroupLocalizations]":
+                    "locale,name,customAppName,state",
+                "limit": 200,
+            },
+        )
+
+    async def create_subscription_group_localization(
+        self,
+        group_id: str,
+        locale: str,
+        name: str,
+        custom_app_name: str | None = None,
+    ) -> dict:
+        """``POST /v1/subscriptionGroupLocalizations``"""
+        attributes: dict[str, str] = {"locale": locale, "name": name}
+        if custom_app_name is not None:
+            attributes["customAppName"] = custom_app_name
+        body = {
+            "data": {
+                "type": "subscriptionGroupLocalizations",
+                "attributes": attributes,
+                "relationships": {
+                    "subscriptionGroup": {
+                        "data": {"type": "subscriptionGroups", "id": group_id},
+                    },
+                },
+            }
+        }
+        return await self.client._post(
+            "/subscriptionGroupLocalizations", json=body
+        )
+
+    async def update_subscription_group_localization(
+        self,
+        localization_id: str,
+        name: str,
+        custom_app_name: str | None = None,
+    ) -> dict:
+        """``PATCH /v1/subscriptionGroupLocalizations/{localization_id}``"""
+        attributes: dict[str, str] = {"name": name}
+        if custom_app_name is not None:
+            attributes["customAppName"] = custom_app_name
+        body = {
+            "data": {
+                "type": "subscriptionGroupLocalizations",
+                "id": localization_id,
+                "attributes": attributes,
+            }
+        }
+        return await self.client._patch(
+            f"/subscriptionGroupLocalizations/{localization_id}", json=body
+        )
+
+    async def delete_subscription_group_localization(
+        self, localization_id: str
+    ) -> None:
+        """Delete a subscription group localization.
+
+        ``DELETE /v1/subscriptionGroupLocalizations/{localization_id}``
+
+        Apple allows deletion regardless of state (including ``REJECTED``).
+        Recreate via ``create_subscription_group_localization`` to land
+        the new row in ``PREPARE_FOR_SUBMISSION`` instead.
+        """
+        await self.client._delete(
+            f"/subscriptionGroupLocalizations/{localization_id}"
+        )
+
+    # ------------------------------------------------------------------
+    # Subscriptions — create / update
+    # ------------------------------------------------------------------
+
+    async def create_subscription(
+        self,
+        group_id: str,
+        product_id: str,
+        name: str,
+        period: str,
+        family_sharable: bool = False,
+        available_in_all_territories: bool = True,
+        group_level: int = 1,
+        review_note: str | None = None,
+    ) -> dict:
+        """``POST /v1/subscriptions``
+
+        ``period`` is one of ONE_WEEK, ONE_MONTH, TWO_MONTHS, THREE_MONTHS,
+        SIX_MONTHS, ONE_YEAR. ``available_in_all_territories=False`` lets
+        the caller set per-territory availability later via
+        ``subscriptionAvailabilities``.
+        """
+        # ``availableInAllTerritories`` is NOT a valid attribute on the
+        # ``subscriptions`` resource — Apple rejects POSTs that include it.
+        # Per-territory availability is controlled via the separate
+        # ``subscriptionAvailabilities`` resource (set after creation).
+        attributes: dict[str, object] = {
+            "name": name,
+            "productId": product_id,
+            "subscriptionPeriod": period,
+            "familySharable": family_sharable,
+            "groupLevel": group_level,
+        }
+        if review_note is not None:
+            attributes["reviewNote"] = review_note
+        body = {
+            "data": {
+                "type": "subscriptions",
+                "attributes": attributes,
+                "relationships": {
+                    "group": {
+                        "data": {"type": "subscriptionGroups", "id": group_id},
+                    },
+                },
+            }
+        }
+        return await self.client._post("/subscriptions", json=body)
+
+    async def create_subscription_availability(
+        self,
+        subscription_id: str,
+        available_alpha3_codes: list[str],
+        available_in_new_territories: bool = True,
+    ) -> dict:
+        """``POST /v1/subscriptionAvailabilities``
+
+        Required follow-up to ``create_subscription`` — Apple ships new
+        subs with **zero territories enabled**, which causes every
+        ``subscriptionPrices`` POST to fail with the unhelpful generic
+        message "An error occurred while processing the pricing
+        information." Calling this immediately after create makes the
+        sub available in the supplied territories.
+
+        Args:
+            subscription_id: ASC subscription id (the value returned by
+                ``create_subscription``).
+            available_alpha3_codes: Alpha-3 territory ids
+                (use ``ALPHA2_TO_ALPHA3`` to convert from our DB).
+            available_in_new_territories: When True, future App Store
+                territories Apple adds are auto-included.
+        """
+        body = {
+            "data": {
+                "type": "subscriptionAvailabilities",
+                "attributes": {
+                    "availableInNewTerritories": available_in_new_territories,
+                },
+                "relationships": {
+                    "subscription": {
+                        "data": {
+                            "type": "subscriptions", "id": subscription_id,
+                        },
+                    },
+                    "availableTerritories": {
+                        "data": [
+                            {"type": "territories", "id": code}
+                            for code in available_alpha3_codes
+                        ],
+                    },
+                },
+            }
+        }
+        return await self.client._post(
+            "/subscriptionAvailabilities", json=body
+        )
+
+    async def list_subscription_availability(
+        self, subscription_id: str
+    ) -> list[str]:
+        """Return alpha-3 territory ids the sub is currently available in.
+
+        Reads ``/v1/subscriptionAvailabilities/{id}/availableTerritories``.
+        The availability resource id matches the subscription id 1:1
+        (Apple's convention — verified empirically).
+        """
+        pages = await self.client._get_all_pages(
+            f"/subscriptionAvailabilities/{subscription_id}/availableTerritories",
+        )
+        return [
+            t["id"]
+            for t in pages
+            if t.get("type") == "territories" and t.get("id")
+        ]
+
+    async def update_subscription(
+        self,
+        subscription_id: str,
+        name: str | None = None,
+        group_level: int | None = None,
+        family_sharable: bool | None = None,
+        review_note: str | None = None,
+    ) -> dict:
+        """``PATCH /v1/subscriptions/{subscription_id}``
+
+        ``productId`` and ``subscriptionPeriod`` are immutable per Apple
+        and intentionally absent from this method.
+        """
+        attributes: dict[str, object] = {}
+        if name is not None:
+            attributes["name"] = name
+        if group_level is not None:
+            attributes["groupLevel"] = group_level
+        if family_sharable is not None:
+            attributes["familySharable"] = family_sharable
+        if review_note is not None:
+            attributes["reviewNote"] = review_note
+        if not attributes:
+            raise ValueError(
+                "update_subscription called with no fields to update"
+            )
+        body = {
+            "data": {
+                "type": "subscriptions",
+                "id": subscription_id,
+                "attributes": attributes,
+            }
+        }
+        return await self.client._patch(
+            f"/subscriptions/{subscription_id}", json=body
+        )
+
+    # ------------------------------------------------------------------
+    # Introductory Offers
+    # ------------------------------------------------------------------
+
+    async def list_subscription_introductory_offers(
+        self, subscription_id: str
+    ) -> list[dict]:
+        """``GET /v1/subscriptions/{subscription_id}/introductoryOffers``
+
+        Returns the raw JSON:API list. Callers shape it via the
+        accompanying ``included`` block (territory + price point) which
+        we surface by issuing a one-shot ``_get`` in the route layer.
+        """
+        response = await self.client._get(
+            f"/subscriptions/{subscription_id}/introductoryOffers",
+            params={
+                "include": "territory,subscriptionPricePoint",
+                "fields[subscriptionIntroductoryOffers]":
+                    "startDate,endDate,duration,offerMode,numberOfPeriods",
+                "limit": 200,
+            },
+        )
+        return [
+            {"resource": item, "included": response.get("included", [])}
+            for item in response.get("data", [])
+        ]
+
+    async def create_subscription_introductory_offer(
+        self,
+        subscription_id: str,
+        offer_mode: str,
+        duration: str,
+        number_of_periods: int,
+        territory_id: str | None = None,
+        price_point_id: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict:
+        """``POST /v1/subscriptionIntroductoryOffers``
+
+        ``territory_id`` is Apple's alpha-3 territory code (e.g. ``USA``).
+        Caller is responsible for converting from our alpha-2 storage
+        codes via ``ALPHA2_TO_ALPHA3``. Pass ``None`` for worldwide.
+        """
+        attributes: dict[str, object] = {
+            "offerMode": offer_mode,
+            "duration": duration,
+            "numberOfPeriods": number_of_periods,
+        }
+        if start_date is not None:
+            attributes["startDate"] = start_date
+        if end_date is not None:
+            attributes["endDate"] = end_date
+
+        relationships: dict[str, dict] = {
+            "subscription": {
+                "data": {"type": "subscriptions", "id": subscription_id},
+            },
+        }
+        if territory_id is not None:
+            relationships["territory"] = {
+                "data": {"type": "territories", "id": territory_id},
+            }
+        if price_point_id is not None:
+            relationships["subscriptionPricePoint"] = {
+                "data": {
+                    "type": "subscriptionPricePoints",
+                    "id": price_point_id,
+                },
+            }
+
+        body = {
+            "data": {
+                "type": "subscriptionIntroductoryOffers",
+                "attributes": attributes,
+                "relationships": relationships,
+            }
+        }
+        return await self.client._post(
+            "/subscriptionIntroductoryOffers", json=body
+        )
+
+    async def delete_subscription_introductory_offer(
+        self, offer_id: str
+    ) -> None:
+        """``DELETE /v1/subscriptionIntroductoryOffers/{offer_id}``"""
+        await self.client._delete(
+            f"/subscriptionIntroductoryOffers/{offer_id}"
+        )

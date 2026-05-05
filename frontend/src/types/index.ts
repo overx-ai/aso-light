@@ -150,8 +150,14 @@ export interface PriceApplyItem {
   force?: boolean;
 }
 
+export interface IntroOfferApplyConfig {
+  duration: IntroOfferDuration;
+  number_of_periods: number;
+}
+
 export interface PriceApplyRequest {
   items: PriceApplyItem[];
+  intro_offer?: IntroOfferApplyConfig | null;
 }
 
 export interface PriceApplySkippedItem {
@@ -168,6 +174,8 @@ export interface PriceApplyResponse {
   skipped: number;
   errors: string[];
   skipped_items: PriceApplySkippedItem[];
+  intro_offer_synced?: boolean;
+  intro_offer_error?: string | null;
 }
 
 export interface PricePointSyncResponse {
@@ -391,4 +399,98 @@ export interface PriceImportItem {
 export interface PriceImportResponse {
   items: PriceImportItem[];
   count: number;
+}
+
+// ---- Subscription / group write paths ----
+
+export type SubscriptionPeriod =
+  | "ONE_WEEK"
+  | "ONE_MONTH"
+  | "TWO_MONTHS"
+  | "THREE_MONTHS"
+  | "SIX_MONTHS"
+  | "ONE_YEAR";
+
+// Intro-offer durations include shorter codes (THREE_DAYS, TWO_WEEKS)
+// that the regular subscriptionPeriod enum does not support.
+export type IntroOfferDuration =
+  | "THREE_DAYS"
+  | "ONE_WEEK"
+  | "TWO_WEEKS"
+  | "ONE_MONTH"
+  | "TWO_MONTHS"
+  | "THREE_MONTHS"
+  | "SIX_MONTHS"
+  | "ONE_YEAR";
+
+export type IntroOfferMode = "FREE_TRIAL" | "PAY_AS_YOU_GO" | "PAY_UP_FRONT";
+
+export interface SubscriptionGroupCreate {
+  reference_name: string;
+}
+
+export interface SubscriptionGroupUpdate {
+  reference_name: string;
+}
+
+export interface GroupLocalization {
+  id: string;
+  locale: string;
+  name: string;
+  custom_app_name: string | null;
+  state: string | null;
+}
+
+export interface GroupLocalizationCreate {
+  locale: string;
+  name: string;
+  custom_app_name?: string | null;
+}
+
+export interface GroupLocalizationUpdate {
+  name: string;
+  custom_app_name?: string | null;
+}
+
+export interface SubscriptionCreate {
+  product_id: string;
+  name: string;
+  period: SubscriptionPeriod;
+  family_sharable: boolean;
+  available_in_all_territories: boolean;
+  group_level: number;
+  review_note?: string | null;
+}
+
+export interface SubscriptionUpdate {
+  name?: string | null;
+  group_level?: number | null;
+  family_sharable?: boolean | null;
+  review_note?: string | null;
+}
+
+export interface IntroOffer {
+  id: string;
+  territory_code: string | null;
+  offer_mode: IntroOfferMode;
+  duration: IntroOfferDuration;
+  number_of_periods: number;
+  price_point_id: string | null;
+  start_date: string | null;
+  end_date: string | null;
+}
+
+export interface SubscriptionAvailability {
+  subscription_id: number;
+  territories: string[];
+}
+
+export interface IntroOfferCreate {
+  territory_code?: string | null;
+  offer_mode: IntroOfferMode;
+  duration: IntroOfferDuration;
+  number_of_periods: number;
+  price_point_id?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
 }

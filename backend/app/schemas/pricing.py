@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 GDPTier = Literal["top", "mid", "low", "special"]
+SubscriptionPeriod = Literal[
+    "ONE_WEEK", "ONE_MONTH", "TWO_MONTHS", "THREE_MONTHS",
+    "SIX_MONTHS", "ONE_YEAR",
+]
+# Introductory-offer durations include shorter periods (THREE_DAYS,
+# TWO_WEEKS) that the regular subscriptionPeriod enum does not.
+IntroOfferDuration = Literal[
+    "THREE_DAYS", "ONE_WEEK", "TWO_WEEKS", "ONE_MONTH", "TWO_MONTHS",
+    "THREE_MONTHS", "SIX_MONTHS", "ONE_YEAR",
+]
+IntroOfferMode = Literal["FREE_TRIAL", "PAY_AS_YOU_GO", "PAY_UP_FRONT"]
 
 
 class SubscriptionGroupResponse(BaseModel):
@@ -64,6 +76,13 @@ class SubscriptionPricesResponse(BaseModel):
     subscription_name: str
     product_id: str
     prices: list[PricePointResponse]
+
+
+class SubscriptionAvailabilityResponse(BaseModel):
+    """Alpha-2 territory codes where a subscription is currently available."""
+
+    subscription_id: int
+    territories: list[str]
 
 
 class GDPBracketConfig(BaseModel):
@@ -178,10 +197,23 @@ class PriceApplyItem(BaseModel):
     force: bool = False  # Bypass the ±50% safety band for this territory only.
 
 
+class IntroOfferApplyConfig(BaseModel):
+    """Worldwide free-trial config bundled with a price-apply request.
+
+    Only ``FREE_TRIAL`` is supported here because PAY_AS_YOU_GO and
+    PAY_UP_FRONT need a per-territory ``subscriptionPricePoint`` and
+    therefore can't be expressed as a single worldwide offer.
+    """
+
+    duration: IntroOfferDuration
+    number_of_periods: int = Field(default=1, ge=1, le=12)
+
+
 class PriceApplyRequest(BaseModel):
     """Request body for applying prices to a subscription."""
 
     items: list[PriceApplyItem]
+    intro_offer: IntroOfferApplyConfig | None = None
 
 
 class PriceApplySkippedItem(BaseModel):
@@ -202,6 +234,8 @@ class PriceApplyResponse(BaseModel):
     skipped: int = 0
     errors: list[str] = []
     skipped_items: list[PriceApplySkippedItem] = []
+    intro_offer_synced: bool = False  # True if intro_offer config was applied
+    intro_offer_error: str | None = None
 
 
 class SyncPricesResponse(BaseModel):
@@ -335,3 +369,144 @@ class ReviewScreenshotResponse(BaseModel):
     file_name: str
     file_size: int
     image_url: str | None = None
+
+
+# ------------------------------------------------------------------
+# Subscription group / subscription / intro offer write paths
+# ------------------------------------------------------------------
+
+
+class SubscriptionGroupCreate(BaseModel):
+    """Create a new subscription group in ASC."""
+
+    reference_name: str = Field(min_length=1, max_length=64)
+
+
+class SubscriptionGroupUpdate(BaseModel):
+    """Rename an existing subscription group."""
+
+    reference_name: str = Field(min_length=1, max_length=64)
+
+
+class GroupLocalizationCreate(BaseModel):
+    """Create a subscriptionGroupLocalization for a given locale."""
+
+    locale: str
+    name: str = Field(min_length=1, max_length=30)
+    custom_app_name: str | None = None
+
+
+class GroupLocalizationUpdate(BaseModel):
+    """Update a subscriptionGroupLocalization (locale is immutable)."""
+
+    name: str = Field(min_length=1, max_length=30)
+    custom_app_name: str | None = None
+
+
+class GroupLocalizationResponse(BaseModel):
+    """A single subscriptionGroupLocalization resource."""
+
+    id: str
+    locale: str
+    name: str
+    custom_app_name: str | None = None
+    state: str | None = None
+
+
+class SubscriptionCreate(BaseModel):
+    """Create an auto-renewable subscription within a group."""
+
+    product_id: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=64)
+    period: SubscriptionPeriod
+    family_sharable: bool = False
+    available_in_all_territories: bool = True
+    group_level: int = Field(default=1, ge=1, le=10)
+    review_note: str | None = Field(default=None, max_length=4000)
+
+
+class SubscriptionUpdate(BaseModel):
+    """Update editable subscription metadata.
+
+    ``productId`` and ``subscriptionPeriod`` are immutable in ASC and
+    are intentionally not exposed here.
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    group_level: int | None = Field(default=None, ge=1, le=10)
+    family_sharable: bool | None = None
+    review_note: str | None = Field(default=None, max_length=4000)
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "SubscriptionUpdate":
+        if all(
+            getattr(self, f) is None
+            for f in ("name", "group_level", "family_sharable", "review_note")
+        ):
+            raise ValueError("At least one field must be provided")
+        return self
+
+
+class IntroOfferCreate(BaseModel):
+    """Create a subscription introductory offer.
+
+    ``territory_code`` is alpha-2 (matching our DB convention); the
+    route converts to alpha-3 before calling ASC. Apple **requires** a
+    territory on every introductory offer — there is no worldwide
+    option. To target every territory, use the price-apply route's
+    bundled ``intro_offer`` config which loops through all priced
+    territories.
+    """
+
+    territory_code: str
+    offer_mode: IntroOfferMode
+    duration: IntroOfferDuration
+    number_of_periods: int = Field(ge=1, le=12)
+    price_point_id: str | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+
+    @field_validator("territory_code")
+    @classmethod
+    def _alpha2(cls, v: str) -> str:
+        if not isinstance(v, str) or len(v) != 2 or not v.isalpha():
+            raise ValueError(f"Territory code must be alpha-2: {v!r}")
+        return v.upper()
+
+    @model_validator(mode="after")
+    def _offer_mode_constraints(self) -> "IntroOfferCreate":
+        needs_price = self.offer_mode in {"PAY_AS_YOU_GO", "PAY_UP_FRONT"}
+        if needs_price and not self.price_point_id:
+            raise ValueError(
+                f"price_point_id is required for offer_mode={self.offer_mode}"
+            )
+        if self.offer_mode == "FREE_TRIAL" and self.price_point_id:
+            raise ValueError(
+                "FREE_TRIAL offers must not include a price_point_id"
+            )
+        if (
+            self.offer_mode in {"FREE_TRIAL", "PAY_UP_FRONT"}
+            and self.number_of_periods != 1
+        ):
+            raise ValueError(
+                f"number_of_periods must be 1 for offer_mode={self.offer_mode}"
+            )
+        return self
+
+
+class IntroOfferResponse(BaseModel):
+    """A subscriptionIntroductoryOffer resource (alpha-2 territory code).
+
+    ``territory_code`` is ``None`` only when our reverse alpha-3 → alpha-2
+    lookup fails on a territory Apple has but we don't track. Every
+    Apple intro offer is tied to a territory.
+    """
+
+    id: str
+    territory_code: str | None
+    offer_mode: IntroOfferMode
+    duration: IntroOfferDuration
+    number_of_periods: int
+    price_point_id: str | None = None
+    start_date: date | None = None
+    end_date: date | None = None
