@@ -10,11 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.v1._deps import _get_verified_app
 from app.core.security import get_current_user
 from app.db.session import get_session
-from app.models.app import App
 from app.models.competitor import CompetitorApp
-from app.models.credential import ASCCredential
 from app.models.keyword import Keyword, KeywordRanking, KeywordTracking
 from app.models.territory import Territory
 from app.schemas.keyword import (
@@ -41,35 +40,6 @@ router = APIRouter()
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
-
-
-async def _get_verified_app(
-    app_id: int,
-    user_id: int,
-    session: AsyncSession,
-) -> App:
-    """Load an App and verify ownership via credential chain."""
-    result = await session.execute(select(App).where(App.id == app_id))
-    app = result.scalar_one_or_none()
-    if app is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="App not found",
-        )
-
-    cred_result = await session.execute(
-        select(ASCCredential.id).where(
-            ASCCredential.id == app.credential_id,
-            ASCCredential.user_id == user_id,
-        )
-    )
-    if cred_result.scalar_one_or_none() is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access this app",
-        )
-
-    return app
 
 
 def _build_tracking_response(

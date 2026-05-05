@@ -2,7 +2,19 @@
 
 ## [Unreleased]
 
-### Added
+### Added — Phase 5: Metadata Editor + Cross-Loc + AI Translation (2026-05-05)
+- **Metadata Editor** (spec 007): per-locale CRUD for App Store metadata (name, subtitle, description, keywords, promotional text, what's new, marketing/support/privacy URLs) via ASC `appInfoLocalizations` and `appStoreVersionLocalizations`. Preview-then-apply pattern mirrors `pricing.py`. State-machine guard refuses non-`promotionalText` mutations on `READY_FOR_DISTRIBUTION` (409). UI greys out forbidden fields based on `editable_fields` list returned by `GET /apps/{id}/metadata`.
+- **Bulk fan-out**: edit one field once, broadcast to N selected locales (cap 50) with diff preview before commit. `force=True` overrides only soft skips (unchanged, state-guess); never overrides hard skips (char overflow, missing row).
+- **Claude AI translation** (`AbstractTranslator` ABC + `AnthropicTranslator` impl): one-click translate metadata fields via Anthropic Claude Haiku 4.5. Field-aware prompts (char limit + brand allowlist). Keywords-field post-processing (split commas, dedupe, lowercase, truncate 100). **Suggestion-only — never auto-applied.** Per-app rolling 30-day soft cap (500) via `MetadataTranslationCache` (composite-indexed for cap-query speed).
+- **Cross-Localization Grid page**: territories × indexed locales pivot, GDP-sorted (default), green dot = metadata filled, blue dot = indexed-but-empty. Surfaces Apple's secondary-indexing pattern (e.g. `es-MX` content shows in BR/AR/CL/CO/PE) with "community-derived" disclaimer.
+- **Color-coded keyword coverage** on Keywords page: per-keyword colored dots showing where each tracked keyword lives across locales (green=title, orange=subtitle, yellow=keywords field, gray=none). Backed by pure `classify_keyword()` in `services/metadata/coloring.py` (18 unit tests).
+- **`Territory.gdp_per_capita_usd`** column + World Bank 2024 PPP seed data — powers GDP-sort.
+- **Shared API deps**: `backend/app/api/v1/_deps.py` — `_get_verified_app` + `_get_asc_client_for_app` extracted from `pricing.py`/`keywords.py` (single source of truth for ASC ownership check).
+- **`ANTHROPIC_API_KEY`** config setting (optional; without it `/translate` returns 503 and the UI button is disabled).
+- **Migrations**: `002_add_gdp_per_capita_to_territories`, `003_add_metadata_tables`. Hand-written (idempotent `_has_column`/`_has_table` pattern matching existing `001_preset_config`).
+- **Routes**: `apps/:id/metadata`, `apps/:id/cross-localization` wired into per-app sub-nav.
+
+### Added — Pre-Phase-5
 - **Subscription management write-paths**: Create / rename subscription groups, create / update subscriptions, CRUD group localizations, list / create / delete introductory offers — all driven from the Subscriptions tab via 4 new modals. Submit-for-review remains manual.
 - **GDP-bracket pricing strategy** (spec 005): 4 absolute-price tiers (top / mid / low / special) with World Bank GDP/capita PPP data and per-preset config (`PricePreset.config` JSON column). Loosens price safety band to symmetric ±50%.
 - **App availability management page**: Per-territory availability editor backed by `subscriptionAvailability` ASC API.

@@ -22,6 +22,7 @@ async def seed_territories(session: AsyncSession) -> None:
     updated = 0
 
     for data in TERRITORIES:
+        gdp = data.get("gdp_per_capita_usd")
         territory_id = code_to_id.get(data["code"])
         if territory_id is not None:
             territory = await session.get(Territory, territory_id)
@@ -30,6 +31,10 @@ async def seed_territories(session: AsyncSession) -> None:
             territory.name = data["name"]
             territory.currency_code = data["currency_code"]
             territory.vat_rate = data["vat_rate"]
+            # Only backfill GDP when DB column is empty — avoid clobbering
+            # any future operator override of seed values.
+            if territory.gdp_per_capita_usd is None and gdp is not None:
+                territory.gdp_per_capita_usd = gdp
             updated += 1
         else:
             territory = Territory(
@@ -37,6 +42,7 @@ async def seed_territories(session: AsyncSession) -> None:
                 name=data["name"],
                 currency_code=data["currency_code"],
                 vat_rate=data["vat_rate"],
+                gdp_per_capita_usd=gdp,
                 is_active=True,
             )
             session.add(territory)

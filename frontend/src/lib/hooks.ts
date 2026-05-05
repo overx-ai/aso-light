@@ -54,6 +54,18 @@ import type {
   CrossLocalizationEntry,
   CompetitorApp,
   CompetitorKeywordResult,
+  AppMetadataSnapshot,
+  AppMetadataLocalization,
+  MetadataKind,
+  LocaleUpsertIn,
+  BulkPreviewIn,
+  BulkPreviewOut,
+  BulkApplyIn,
+  BulkApplyOut,
+  TranslateIn,
+  TranslateOut,
+  KeywordCoverageOut,
+  CrossLocalizationGridOut,
 } from "@/types";
 
 // ---- Query Keys ----
@@ -98,6 +110,10 @@ export const queryKeys = {
     ["subscriptionScreenshot", appId, subId] as const,
   iapScreenshot: (appId: string, iapId: string) =>
     ["iapScreenshot", appId, iapId] as const,
+  appMetadata: (appId: string | number) => ["app-metadata", appId] as const,
+  keywordCoverage: (appId: string | number) =>
+    ["keyword-coverage", appId] as const,
+  crossLocalizationGrid: ["cross-localization-grid"] as const,
 };
 
 // ---- Credential Hooks ----
@@ -1804,4 +1820,263 @@ export function useDeleteIntroOffer(appId: string, subId: string) {
       errorFallback: "Could not delete offer.",
     },
   );
+}
+
+// ---- Metadata Editor + Cross-Localization Hooks ----
+
+export function useAppMetadata(appId: number) {
+  return useQuery({
+    queryKey: queryKeys.appMetadata(appId),
+    queryFn: async (): Promise<AppMetadataSnapshot | null> => {
+      const response = await api.get<AppMetadataSnapshot | "">(
+        `/apps/${appId}/metadata`,
+      );
+      // Backend returns 204 No Content when the app has never been synced.
+      if (response.status === 204) return null;
+      return (response.data || null) as AppMetadataSnapshot | null;
+    },
+    enabled: !!appId,
+    staleTime: 60_000,
+  });
+}
+
+export function useSyncMetadata() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (appId: number): Promise<AppMetadataSnapshot> => {
+      const response = await api.post<AppMetadataSnapshot>(
+        `/apps/${appId}/metadata/sync`,
+      );
+      return response.data;
+    },
+    onSuccess: (_data, appId) => {
+      invalidateMetadataDerived(queryClient, appId);
+      notifications.show({
+        title: "Metadata synced",
+        message: "Pulled latest metadata from App Store Connect.",
+        color: "green",
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Sync failed",
+        message: ascErrorMessage(
+          error,
+          "Could not sync metadata from App Store Connect.",
+        ),
+        color: "red",
+      });
+    },
+  });
+}
+
+/**
+ * Invalidate every cache that depends on an app's metadata snapshot. Editing,
+ * creating, deleting, or bulk-applying a locale all change which keywords
+ * appear where, so coverage must be refreshed alongside the snapshot.
+ */
+function invalidateMetadataDerived(
+  queryClient: ReturnType<typeof useQueryClient>,
+  appId: number,
+): void {
+  queryClient.invalidateQueries({ queryKey: queryKeys.appMetadata(appId) });
+  queryClient.invalidateQueries({ queryKey: queryKeys.keywordCoverage(appId) });
+}
+
+export function useCreateLocale(appId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      kind,
+      locale,
+      body,
+    }: {
+      kind: MetadataKind;
+      locale: string;
+      body: LocaleUpsertIn;
+    }): Promise<AppMetadataLocalization> => {
+      const response = await api.post<AppMetadataLocalization>(
+        `/apps/${appId}/metadata/${kind}/${locale}`,
+        body,
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      invalidateMetadataDerived(queryClient, appId);
+      notifications.show({
+        title: "Locale created",
+        message: "New localization added.",
+        color: "green",
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Create failed",
+        message: ascErrorMessage(error, "Could not create localization."),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useUpdateLocale(appId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      kind,
+      locale,
+      body,
+    }: {
+      kind: MetadataKind;
+      locale: string;
+      body: LocaleUpsertIn;
+    }): Promise<AppMetadataLocalization> => {
+      const response = await api.patch<AppMetadataLocalization>(
+        `/apps/${appId}/metadata/${kind}/${locale}`,
+        body,
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      invalidateMetadataDerived(queryClient, appId);
+      notifications.show({
+        title: "Locale updated",
+        message: "Metadata saved.",
+        color: "green",
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Update failed",
+        message: ascErrorMessage(error, "Could not update localization."),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useDeleteLocale(appId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      kind,
+      locale,
+    }: {
+      kind: MetadataKind;
+      locale: string;
+    }): Promise<void> => {
+      await api.delete(`/apps/${appId}/metadata/${kind}/${locale}`);
+    },
+    onSuccess: () => {
+      invalidateMetadataDerived(queryClient, appId);
+      notifications.show({
+        title: "Locale deleted",
+        message: "Localization removed.",
+        color: "green",
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Delete failed",
+        message: ascErrorMessage(error, "Could not delete localization."),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function usePreviewBulkMetadata(appId: number) {
+  return useMutation({
+    mutationFn: async (body: BulkPreviewIn): Promise<BulkPreviewOut> => {
+      const response = await api.post<BulkPreviewOut>(
+        `/apps/${appId}/metadata/bulk/preview`,
+        body,
+      );
+      return response.data;
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Preview failed",
+        message: ascErrorMessage(error, "Could not preview bulk update."),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useApplyBulkMetadata(appId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: BulkApplyIn): Promise<BulkApplyOut> => {
+      const response = await api.post<BulkApplyOut>(
+        `/apps/${appId}/metadata/bulk/apply`,
+        body,
+      );
+      return response.data;
+    },
+    onSuccess: (data) => {
+      invalidateMetadataDerived(queryClient, appId);
+      notifications.show({
+        title: "Bulk apply complete",
+        message: `Applied ${data.applied}, skipped ${data.skipped}, failed ${data.failed}.`,
+        color: data.failed > 0 ? "yellow" : "green",
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Bulk apply failed",
+        message: ascErrorMessage(error, "Could not apply bulk update."),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useTranslateMetadata(appId: number) {
+  return useMutation({
+    mutationFn: async (body: TranslateIn): Promise<TranslateOut> => {
+      const response = await api.post<TranslateOut>(
+        `/apps/${appId}/metadata/translate`,
+        body,
+      );
+      return response.data;
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Translation failed",
+        message: ascErrorMessage(
+          error,
+          "Could not generate translations. Check ANTHROPIC_API_KEY.",
+        ),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useKeywordCoverage(appId: number) {
+  return useQuery({
+    queryKey: queryKeys.keywordCoverage(appId),
+    queryFn: async (): Promise<KeywordCoverageOut> => {
+      const response = await api.get<KeywordCoverageOut>(
+        `/apps/${appId}/metadata/keyword-coverage`,
+      );
+      return response.data;
+    },
+    enabled: !!appId,
+    staleTime: 60_000,
+  });
+}
+
+export function useCrossLocalizationGrid() {
+  return useQuery({
+    queryKey: queryKeys.crossLocalizationGrid,
+    queryFn: async (): Promise<CrossLocalizationGridOut> => {
+      const response = await api.get<CrossLocalizationGridOut>(
+        "/keywords/cross-localization-grid",
+      );
+      return response.data;
+    },
+    staleTime: Infinity,
+  });
 }

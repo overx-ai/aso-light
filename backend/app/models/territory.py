@@ -1,4 +1,4 @@
-from sqlalchemy import String
+from sqlalchemy import Float, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -12,6 +12,7 @@ class Territory(Base):
     name: Mapped[str] = mapped_column(String(255))
     currency_code: Mapped[str] = mapped_column(String(3))
     vat_rate: Mapped[float] = mapped_column(default=0.0)
+    gdp_per_capita_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     apple_territory_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True,
     )

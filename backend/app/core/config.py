@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     FERNET_KEY: str = ""
     RATE_CACHE_API_URL: str = "https://api.overx.ai"
+    ANTHROPIC_API_KEY: str | None = None
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
 
     model_config = {

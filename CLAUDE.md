@@ -71,6 +71,8 @@ App Store Optimization SaaS — web-based alternative to aso.dev. Focuses on pri
 - **Subscription immutables**: `productId` and `subscriptionPeriod` are immutable in ASC after create — never expose them on update paths (`SubscriptionUpdate` schema enforces this)
 - **Intro offers**: `FREE_TRIAL` rejects `price_point_id`; `PAY_AS_YOU_GO` / `PAY_UP_FRONT` require it; `FREE_TRIAL` and `PAY_UP_FRONT` force `number_of_periods = 1` (validated in `IntroOfferCreate`); `IntroOfferDuration` extends `SubscriptionPeriod` with `THREE_DAYS` and `TWO_WEEKS`
 - Submit-for-review is **not** automated — subscription state transitions are done manually in App Store Connect
+- **AI translation is suggestion-only**: `AnthropicTranslator` (and any future `AbstractTranslator` impl) returns text for the user to review — the metadata router never auto-applies translations. Per-app monthly soft cap is 500 calls (rolling 30 days, cached); raise via `MetadataTranslationCache` table.
+- **Metadata version state machine**: when `editable_version_state == 'READY_FOR_DISTRIBUTION'`, only `promotional_text` is mutable on `appStoreVersionLocalizations`. The `editable_fields` list returned by `GET /apps/{id}/metadata` is the source of truth for the UI.
 
 ## Modes
 When I switch to plan mode (shift+tab), you MUST only outline steps and reasoning.

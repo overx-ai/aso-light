@@ -15,6 +15,7 @@
 | [003 - Keyword Analysis](003-keyword-analysis.md) | Ranking tracker, cross-localization, suggestions |
 | [004 - Localization Management](004-localization-management.md) | Subscription/IAP display names & descriptions, bulk sync, JSON import |
 | [005 - Subscription Management](005-subscription-management.md) | Create / update groups, subscriptions, group localizations, introductory offers (CRUD via UI; submit-for-review manual) |
+| [006 - Metadata Editor + Cross-Loc](006-metadata-editor.md) | Per-locale app metadata CRUD, bulk fan-out, Claude AI translation, color-coded keyword coverage, cross-localization grid |
 
 ## Specs
 
@@ -23,6 +24,7 @@
 | [004 - Cache Apple Price Points](specs/004-cache-apple-price-points.md) | DB caching for ASC price data | approved |
 | [005 - GDP-Bracket Pricing](specs/005-gdp-bracket-pricing.md) | Absolute-price tiers driven by World Bank GDP/capita PPP | done |
 | [006 - Subscription Management](specs/006-subscription-management.md) | Group / subscription / intro-offer write paths | done |
+| [007 - Metadata Editor + Cross-Loc](specs/007-metadata-editor-and-cross-loc.md) | Phase 5 — metadata editor, AI translation, cross-loc grid | done |
 
 ## Documentation Tree
 
@@ -31,8 +33,10 @@
 ├── 001-pricing-system.md
 │   └── → 002-asc-integration.md (ASC API layer)
 │       ├── → 004-localization-management.md
-│       └── → 005-subscription-management.md
+│       ├── → 005-subscription-management.md
+│       └── → 006-metadata-editor.md (app-level metadata; sibling of 004)
 └── 003-keyword-analysis.md
+    └── → 006-metadata-editor.md (keyword coverage classifier)
 010-audit.md (planned — summarizes 001-009)
 ```
 
@@ -55,6 +59,12 @@
 | Screenshot upload | `frontend/src/components/pricing/ReviewScreenshotUpload.tsx` |
 | Keyword page | `frontend/src/pages/KeywordsPage.tsx` |
 | TanStack hooks | `frontend/src/lib/hooks.ts` |
+| Metadata router | `backend/app/api/v1/metadata.py` |
+| Metadata services | `backend/app/services/metadata/{client,snapshot,bulk,validation,coloring,translate}.py` |
+| Shared API deps | `backend/app/api/v1/_deps.py` (ownership check + ASC client factory) |
+| Metadata page | `frontend/src/pages/MetadataPage.tsx` |
+| Cross-Localization page | `frontend/src/pages/CrossLocalizationPage.tsx` |
+| Metadata components | `frontend/src/components/metadata/*` |
 
 ---
-*Last updated: 2026-05-01*
+*Last updated: 2026-05-05*

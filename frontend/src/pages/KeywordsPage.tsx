@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import {
   Container,
@@ -44,25 +44,44 @@ import {
   useAddCompetitor,
   useRemoveCompetitor,
   useCompetitorKeywords,
+  useKeywordCoverage,
 } from "@/lib/hooks";
 import RankHistoryChart from "@/components/keywords/RankHistoryChart";
 import CrossLocalizationMatrix from "@/components/keywords/CrossLocalizationMatrix";
+import KeywordCoverageDots from "@/components/metadata/KeywordCoverageDots";
 import type {
   KeywordTrackingResponse,
   KeywordSearchResult,
   CompetitorApp,
   CompetitorKeywordResult,
+  KeywordPlacement,
 } from "@/types";
 
 // ---- Tracked Keywords Tab ----
 
 function TrackedKeywordsTab({ appId }: { appId: string }) {
   const { data: trackings, isLoading } = useTrackedKeywords(appId);
+  const coverage = useKeywordCoverage(Number(appId));
   const addKeywordMutation = useAddKeyword();
   const removeKeywordMutation = useRemoveKeyword();
   const refreshMutation = useRefreshKeywordRankings();
   const [addModalOpened, addModalHandlers] = useDisclosure(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  // keyword (lowercased) -> [(locale, placement)] across all locales/fields
+  const coverageByKeyword = useMemo(() => {
+    const map = new Map<
+      string,
+      Array<{ locale: string; placement: KeywordPlacement }>
+    >();
+    for (const item of coverage.data?.items ?? []) {
+      if (item.placement === "none") continue;
+      const key = item.keyword.toLowerCase();
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push({ locale: item.locale, placement: item.placement });
+    }
+    return map;
+  }, [coverage.data]);
 
   // Add keyword form state
   const [newKeywordText, setNewKeywordText] = useState("");
@@ -220,6 +239,19 @@ function TrackedKeywordsTab({ appId }: { appId: string }) {
                   <Text size="xs" c="dimmed">
                     {new Date(row.added_at).toLocaleDateString()}
                   </Text>
+                ),
+              },
+              {
+                accessor: "coverage",
+                title: "Coverage",
+                width: 160,
+                render: (row: KeywordTrackingResponse) => (
+                  <KeywordCoverageDots
+                    placements={
+                      coverageByKeyword.get(row.keyword.text.toLowerCase()) ??
+                      []
+                    }
+                  />
                 ),
               },
               {

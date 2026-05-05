@@ -13,6 +13,7 @@ ASO-Light is a web-based App Store Optimization SaaS tool — a focused alternat
 | Frontend SPA | User interface | React 19 + Mantine v8 + TypeScript |
 | ASC API Client | App Store Connect integration | httpx + PyJWT (ES256) |
 | Rate Cache API | Live exchange rates (166 currencies) | External: `api.overx.ai` |
+| AI Translator | Claude-backed metadata translation suggestions (Phase 5) | Anthropic SDK (`claude-haiku-4-5`) |
 
 ## Data Flow
 
@@ -56,6 +57,7 @@ Register/Login → JWT (HS256, 30min access + 7day refresh)
 ```
 backend/app/
 ├── api/v1/           # Route handlers (thin layer)
+│   ├── _deps.py                ← Shared: _get_verified_app, _get_asc_client_for_app
 │   ├── auth.py
 │   ├── credentials.py
 │   ├── apps.py
@@ -64,7 +66,9 @@ backend/app/
 │   ├── keywords.py
 │   ├── presets.py
 │   ├── export.py
-│   └── indices.py
+│   ├── availability.py
+│   ├── indices.py
+│   └── metadata.py             ← Phase 5: app metadata CRUD + bulk + translate + coverage
 ├── services/
 │   ├── asc/          # App Store Connect API client
 │   │   ├── client.py           ← ASCClient base (JWT, pagination, rate limit, throttle)
@@ -94,6 +98,13 @@ backend/app/
 │   │   ├── itunes_search.py  ← iTunes Search API (ranking)
 │   │   ├── tracker.py        ← KeywordRankingTracker
 │   │   └── cross_localization.py ← Static locale→territory map
+│   ├── metadata/     # Phase 5: app metadata management
+│   │   ├── client.py        ← ASCMetadataService (AppInfo + AppStoreVersion read/write + state guard)
+│   │   ├── snapshot.py      ← MetadataSnapshotService (idempotent ASC → DB sync)
+│   │   ├── bulk.py          ← BulkMetadataService (preview/apply matrix)
+│   │   ├── validation.py    ← Char limits + URL validators
+│   │   ├── coloring.py      ← Pure classify_keyword(...) → 'title'|'subtitle'|'keywords'|'none'
+│   │   └── translate.py     ← AbstractTranslator ABC + AnthropicTranslator + cache
 │   └── export/       # Excel/CSV export+import
 │       ├── excel.py
 │       └── csv.py
@@ -124,6 +135,8 @@ backend/app/
 | Frontend tables | mantine-datatable | Better virtualization for 175-row price grid |
 | DB (dev) | SQLite + aiosqlite | Zero-config local development |
 | DB (prod) | PostgreSQL + asyncpg | Multi-user SaaS needs real DB |
+| AI translation | Anthropic Claude Haiku 4.5 + `AbstractTranslator` ABC | Lowest cost for short-form translation; ABC keeps DeepL/OpenAI plug-in ready |
+| Translation safety | Suggestion-only + per-app rolling 30-day soft cap (500) + cache | No auto-apply ever; bounded spend |
 
 ## Multi-Tenancy Model
 

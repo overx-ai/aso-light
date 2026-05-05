@@ -494,3 +494,130 @@ export interface IntroOfferCreate {
   start_date?: string | null;
   end_date?: string | null;
 }
+
+// ---- Metadata Editor + Cross-Localization Types ----
+
+export type MetadataKind = "app_info" | "version";
+
+export interface AppMetadataLocalization {
+  id: number;
+  app_id: number;
+  kind: MetadataKind;
+  asc_localization_id: string;
+  asc_parent_id: string;
+  locale: string;
+  name: string | null;
+  subtitle: string | null;
+  description: string | null;
+  keywords: string | null;
+  promotional_text: string | null;
+  whats_new: string | null;
+  marketing_url: string | null;
+  support_url: string | null;
+  privacy_policy_url: string | null;
+  synced_at: string;
+}
+
+export interface AppMetadataState {
+  editable_version_id: string | null;
+  editable_version_state: string | null;
+  app_info_id: string | null;
+  editable_fields: string[];
+  last_synced_at: string;
+}
+
+export interface AppMetadataSnapshot {
+  app_info: AppMetadataLocalization[];
+  versions: AppMetadataLocalization[];
+  state: AppMetadataState;
+}
+
+export interface BulkPreviewItem {
+  locale: string;
+  current_value: string | null;
+  new_value: string | null;
+  char_overflow_by: number;
+  would_skip: boolean;
+  reason: string | null;
+}
+
+export interface BulkPreviewOut {
+  items: BulkPreviewItem[];
+}
+
+export interface BulkPreviewIn {
+  field: string;
+  value: string | null;
+  target_locales: string[];
+}
+
+export interface BulkApplyIn extends BulkPreviewIn {
+  force?: boolean;
+}
+
+export type BulkApplyStatus = "applied" | "skipped" | "failed";
+
+export interface BulkApplyResult {
+  locale: string;
+  status: BulkApplyStatus;
+  error: string | null;
+}
+
+export interface BulkApplyOut {
+  applied: number;
+  skipped: number;
+  failed: number;
+  results: BulkApplyResult[];
+}
+
+export interface TranslateIn {
+  source_locale: string;
+  target_locales: string[];
+  fields: string[];
+}
+
+export interface TranslateSuggestionItem {
+  locale: string;
+  field: string;
+  suggestion: string;
+  cached: boolean;
+}
+
+export interface TranslateOut {
+  items: TranslateSuggestionItem[];
+}
+
+export type KeywordPlacement = "title" | "subtitle" | "keywords" | "none";
+
+export interface KeywordCoverageItem {
+  keyword: string;
+  locale: string;
+  placement: KeywordPlacement;
+}
+
+export interface KeywordCoverageOut {
+  items: KeywordCoverageItem[];
+}
+
+export interface CrossLocalizationGridItem {
+  territory_code: string;
+  locale: string;
+  gdp_per_capita_usd: number | null;
+  has_metadata: boolean;
+}
+
+export interface CrossLocalizationGridOut {
+  items: CrossLocalizationGridItem[];
+}
+
+export interface LocaleUpsertIn {
+  name?: string | null;
+  subtitle?: string | null;
+  description?: string | null;
+  keywords?: string | null;
+  promotional_text?: string | null;
+  whats_new?: string | null;
+  marketing_url?: string | null;
+  support_url?: string | null;
+  privacy_policy_url?: string | null;
+}

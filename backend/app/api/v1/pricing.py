@@ -12,10 +12,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.v1._deps import _get_asc_client_for_app, _get_verified_app
 from app.core.security import get_current_user
 from app.db.session import get_session
 from app.models.app import App
-from app.models.credential import ASCCredential
 from app.models.economic_index import EconomicIndex
 from app.models.iap import IAPPrice, InAppPurchase
 from app.models.subscription import (
@@ -89,55 +89,6 @@ SAFETY_LABEL = f"±{int(SAFETY_BAND_PCT * 100)}%"
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
-
-
-async def _get_verified_app(
-    app_id: int,
-    user_id: int,
-    session: AsyncSession,
-) -> App:
-    """Load an App record and verify that it belongs to the current user.
-
-    Raises HTTPException 404/403 on failure.
-    """
-    result = await session.execute(select(App).where(App.id == app_id))
-    app = result.scalar_one_or_none()
-    if app is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="App not found",
-        )
-
-    cred_result = await session.execute(
-        select(ASCCredential.id).where(
-            ASCCredential.id == app.credential_id,
-            ASCCredential.user_id == user_id,
-        )
-    )
-    if cred_result.scalar_one_or_none() is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access this app",
-        )
-
-    return app
-
-
-async def _get_asc_client_for_app(
-    app: App,
-    session: AsyncSession,
-) -> ASCClient:
-    """Build an ASCClient from the credential that owns the given app."""
-    result = await session.execute(
-        select(ASCCredential).where(ASCCredential.id == app.credential_id)
-    )
-    credential = result.scalar_one_or_none()
-    if credential is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Credential for app not found",
-        )
-    return ASCClient.from_credential(credential)
 
 
 async def _get_verified_subscription(

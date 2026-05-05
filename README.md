@@ -13,6 +13,17 @@ Web-based App Store Optimization SaaS — a focused alternative to aso.dev. Mana
 - **Localization management** — subscription and IAP display names and descriptions, bulk sync, JSON import/export
 - **Presets** — save and reuse pricing strategies across apps
 
+### Metadata Editor + AI Translation (Phase 5)
+
+Edit App Store metadata (title, subtitle, keywords, description, promotional text, what's new) per locale without leaving ASO-Light. Bulk fan-out a field across N locales with diff preview. Optional one-click translation via Anthropic Claude.
+
+- Set `ANTHROPIC_API_KEY` in `backend/.env` to enable AI translation suggestions.
+- Translations are SUGGESTIONS only — never auto-applied. You always confirm before saving.
+- Per-app cap: 500 translations / 30 days (cached, so re-translating the same source is free).
+- The Cross-Localization grid surfaces Apple's secondary-indexing pattern (e.g. es-MX content surfaces in US/BR/AR/CL/CO/PE App Stores).
+
+See `docs/specs/007-metadata-editor-and-cross-loc.md` for the full design.
+
 ## Tech Stack
 
 | Layer | Stack |

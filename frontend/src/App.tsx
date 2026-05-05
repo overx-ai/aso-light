@@ -8,6 +8,8 @@ import CredentialsPage from "@/pages/CredentialsPage";
 import PricingPage from "@/pages/PricingPage";
 import KeywordsPage from "@/pages/KeywordsPage";
 import AvailabilityPage from "@/pages/AvailabilityPage";
+import MetadataPage from "@/pages/MetadataPage";
+import CrossLocalizationPage from "@/pages/CrossLocalizationPage";
 import SettingsPage from "@/pages/SettingsPage";
 
 export default function App() {
@@ -22,6 +24,11 @@ export default function App() {
           <Route path="apps/:id/pricing" element={<PricingPage />} />
           <Route path="apps/:id/keywords" element={<KeywordsPage />} />
           <Route path="apps/:id/availability" element={<AvailabilityPage />} />
+          <Route path="apps/:id/metadata" element={<MetadataPage />} />
+          <Route
+            path="apps/:id/cross-localization"
+            element={<CrossLocalizationPage />}
+          />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Route>

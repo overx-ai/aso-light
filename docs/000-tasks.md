@@ -8,6 +8,7 @@
 | T-007 | Background scheduler for index + ranking refresh | Backend | pending | medium | APScheduler or asyncio tasks |
 | T-009 | Code split frontend bundle (1.1MB) | Frontend | pending | low | Dynamic imports for route chunks |
 | T-010 | Alembic migrations (replace create_all in dev) | Backend | pending | medium | Needed before prod deploy |
+| T-024 | Fix pre-existing pytest-asyncio markers | Backend | pending | low | `test_preview_endpoint.py`, `test_preview_pricing.py` — surfaced during Phase 5 quality gate |
 
 ## Completed
 
@@ -35,16 +36,20 @@
 | T-020 | GDP-bracket pricing strategy (spec 005) | Full-stack | 2026-04-30 | 4 absolute tiers + World Bank GDP data; safety band → ±50% |
 | T-021 | App availability management page | Full-stack | 2026-04-30 | Per-territory availability editor |
 | T-022 | Subscription management (groups + subs + group locs + intro offers) | Full-stack | 2026-05-01 | Spec 006; submit-for-review remains manual |
+| T-023 | Metadata Editor + Cross-Loc + AI translation (Phase 5) | Full-stack | 2026-05-05 | Spec 007; 17 sub-tasks; `AnthropicTranslator` (Haiku 4.5); cap 500/app/30d; suggestion-only |
 
 ## Backlog
 
 | # | Task | Area | Priority | Notes |
 |---|------|------|----------|-------|
 | B-001 | Google Play price management | Backend | low | Double scope, not in MVP |
-| B-002 | AI translation integration (OpenAI/DeepL) | Backend | medium | For metadata localization |
-| B-003 | In-App Events management | Backend | low | Phase 5 |
+| B-002 | DeepL / OpenAI / Gemini translation providers | Backend | low | Anthropic shipped in Phase 5; ABC ready — formalize `model_name` property when 2nd provider lands |
+| B-003 | In-App Events management | Backend | low | Phase 6+ |
 | B-004 | Screenshot/asset management (previews, app screenshots) | Backend | low | Review screenshots done; App Store screenshots remain |
-| B-005 | Review management (respond to reviews) | Backend | low | Phase 5 |
+| B-005 | Review management (read + reply + sentiment) | Backend | low | Recommended Phase 7 |
+| B-011 | Competitor Spy (reverse-keyword lookup) | Full-stack | high | Recommended Phase 6; cold-start growth tool |
+| B-012 | Keywords Explorer (autocomplete chains, related queries) | Full-stack | high | Recommended Phase 6 |
+| B-013 | MCP server exposing metadata read/write to Claude Code | Backend | medium | Recommended Phase 8; depends on Phase 5 metadata layer |
 | B-006 | Third-party keyword API (AppTweak/data.ai) | Backend | medium | Optional premium tier |
 | B-007 | Docker Compose for full stack | DevOps | medium | Prod deployment |
 | B-008 | Admin panel for index data management | Frontend | low | Manual override of Netflix/Spotify data |
