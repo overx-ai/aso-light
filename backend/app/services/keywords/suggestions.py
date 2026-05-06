@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import plistlib
+from typing import Any
 
 import httpx
 
@@ -32,6 +34,7 @@ class ITunesSuggestionsService:
                 response = await client.get(
                     self.HINTS_URL,
                     params={
+                        "clientApplication": "Software",
                         "media": "software",
                         "term": term.strip(),
                         "l": locale,
@@ -46,7 +49,7 @@ class ITunesSuggestionsService:
                 )
                 return []
 
-            data = response.json()
+            data = self._parse_response(response)
             suggestions: list[str] = []
             for item in data.get("hints", []):
                 if isinstance(item, dict):
@@ -57,3 +60,20 @@ class ITunesSuggestionsService:
                     suggestions.append(item)
 
             return suggestions
+
+    @staticmethod
+    def _parse_response(response: httpx.Response) -> dict[str, Any]:
+        """Decode the hints response, handling both JSON and Apple's plist XML."""
+        body = response.content
+        if not body:
+            return {}
+        try:
+            return response.json()
+        except ValueError:
+            pass
+        try:
+            parsed = plistlib.loads(body)
+        except (plistlib.InvalidFileException, ValueError, TypeError):
+            logger.warning("iTunes hints API returned unparseable body (%d bytes)", len(body))
+            return {}
+        return parsed if isinstance(parsed, dict) else {}

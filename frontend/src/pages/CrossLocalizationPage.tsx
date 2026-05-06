@@ -4,6 +4,7 @@ import {
   Alert,
   Badge,
   Box,
+  Button,
   Card,
   Container,
   Group,
@@ -15,12 +16,13 @@ import {
   Title,
   Tooltip,
 } from "@mantine/core";
-import { IconAlertCircle, IconLanguage } from "@tabler/icons-react";
+import { IconAlertCircle, IconLanguage, IconWand } from "@tabler/icons-react";
 import { useAppMetadata, useCrossLocalizationGrid } from "@/lib/hooks";
 import type {
   AppMetadataSnapshot,
   CrossLocalizationGridItem,
 } from "@/types";
+import FixMissingLocalesModal from "@/components/metadata/FixMissingLocalesModal";
 
 // ---- Helpers ----
 
@@ -89,6 +91,7 @@ export default function CrossLocalizationPage() {
   const { data: snapshot } = useAppMetadata(appId);
 
   const [sortBy, setSortBy] = useState<"gdp" | "territory">("gdp");
+  const [fixOpened, setFixOpened] = useState(false);
 
   const { sortedTerritories, allLocales, localesWithMetadata } = useMemo(() => {
     const items = grid?.items ?? [];
@@ -108,6 +111,11 @@ export default function CrossLocalizationPage() {
       localesWithMetadata: collectLocalesWithMetadata(snapshot),
     };
   }, [grid, snapshot, sortBy]);
+
+  const missingLocaleCount = useMemo(() => {
+    if (!inAppContext || !snapshot) return 0;
+    return allLocales.filter((l) => !localesWithMetadata.has(l)).length;
+  }, [inAppContext, snapshot, allLocales, localesWithMetadata]);
 
   return (
     <Container size="xl">
@@ -146,7 +154,7 @@ export default function CrossLocalizationPage() {
         </Alert>
       ) : (
         <Stack gap="md">
-          <Group justify="space-between">
+          <Group justify="space-between" wrap="wrap">
             <Switch
               label="Sort by GDP per capita"
               checked={sortBy === "gdp"}
@@ -155,36 +163,67 @@ export default function CrossLocalizationPage() {
               }
             />
             {inAppContext && (
-              <Group gap="xs">
-                <Group gap={4}>
-                  <Box
-                    style={{
-                      width: 10,
-                      height: 10,
-                      borderRadius: "50%",
-                      background: "var(--mantine-color-green-6)",
-                    }}
-                  />
-                  <Text size="xs" c="dimmed">
-                    metadata filled
-                  </Text>
+              <Group gap="md" wrap="wrap">
+                <Group gap="xs">
+                  <Group gap={4}>
+                    <Box
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: "50%",
+                        background: "var(--mantine-color-green-6)",
+                      }}
+                    />
+                    <Text size="xs" c="dimmed">
+                      metadata filled
+                    </Text>
+                  </Group>
+                  <Group gap={4}>
+                    <Box
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: "50%",
+                        background: "var(--mantine-color-blue-3)",
+                      }}
+                    />
+                    <Text size="xs" c="dimmed">
+                      indexed, no metadata
+                    </Text>
+                  </Group>
                 </Group>
-                <Group gap={4}>
-                  <Box
-                    style={{
-                      width: 10,
-                      height: 10,
-                      borderRadius: "50%",
-                      background: "var(--mantine-color-blue-3)",
-                    }}
-                  />
-                  <Text size="xs" c="dimmed">
-                    indexed, no metadata
-                  </Text>
-                </Group>
+                <Tooltip
+                  label={
+                    missingLocaleCount === 0
+                      ? "No blue dots to fix"
+                      : `Translate from a source locale and create the ${missingLocaleCount} missing localizations`
+                  }
+                  withArrow
+                >
+                  <Button
+                    size="xs"
+                    leftSection={<IconWand size={14} />}
+                    variant="light"
+                    color="blue"
+                    onClick={() => setFixOpened(true)}
+                    disabled={missingLocaleCount === 0}
+                  >
+                    Fix missing locales ({missingLocaleCount})
+                  </Button>
+                </Tooltip>
               </Group>
             )}
           </Group>
+
+          {inAppContext && snapshot && (
+            <FixMissingLocalesModal
+              appId={appId}
+              opened={fixOpened}
+              onClose={() => setFixOpened(false)}
+              snapshot={snapshot}
+              indexedLocales={allLocales}
+            />
+          )}
 
           <Card withBorder padding={0} radius="md">
             <Box style={{ overflowX: "auto" }}>

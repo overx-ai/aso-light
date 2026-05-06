@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 EDITABLE_VERSION_STATES: frozenset[str] = frozenset({
     "PREPARE_FOR_SUBMISSION",
-    "READY_FOR_SUBMISSION",
+    "READY_FOR_REVIEW",
     "DEVELOPER_REJECTED",
     "REJECTED",
     "METADATA_REJECTED",
@@ -22,7 +22,7 @@ EDITABLE_VERSION_STATES: frozenset[str] = frozenset({
 })
 
 READ_ONLY_VERSION_STATES_PROMO_ONLY: frozenset[str] = frozenset({
-    "READY_FOR_DISTRIBUTION",
+    "READY_FOR_SALE",
 })
 
 PROMO_ONLY_FIELDS_ON_LIVE: frozenset[str] = frozenset({"promotionalText"})

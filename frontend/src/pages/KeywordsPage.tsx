@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import {
   Container,
@@ -564,7 +564,6 @@ function CrossLocalizationTab() {
 
 function CompetitorsTab({ appId }: { appId: string }) {
   const { data: competitors, isLoading } = useCompetitors(appId);
-  const addMutation = useAddCompetitor();
   const removeMutation = useRemoveCompetitor();
   const checkKeywordsMutation = useCompetitorKeywords();
   const [addModalOpened, addModalHandlers] = useDisclosure(false);
@@ -572,31 +571,6 @@ function CompetitorsTab({ appId }: { appId: string }) {
     competitorId: number;
     results: CompetitorKeywordResult[];
   } | null>(null);
-
-  // Form state
-  const [newName, setNewName] = useState("");
-  const [newAscId, setNewAscId] = useState("");
-  const [newBundleId, setNewBundleId] = useState("");
-
-  const handleAdd = useCallback(() => {
-    if (!newAscId.trim() || !newName.trim()) return;
-    addMutation.mutate(
-      {
-        appId,
-        asc_app_id: newAscId.trim(),
-        name: newName.trim(),
-        bundle_id: newBundleId.trim() || undefined,
-      },
-      {
-        onSuccess: () => {
-          addModalHandlers.close();
-          setNewName("");
-          setNewAscId("");
-          setNewBundleId("");
-        },
-      },
-    );
-  }, [addMutation, appId, newAscId, newName, newBundleId, addModalHandlers]);
 
   const handleCheckKeywords = useCallback(
     (competitorId: number) => {
@@ -783,48 +757,314 @@ function CompetitorsTab({ appId }: { appId: string }) {
         )}
       </Stack>
 
-      <Modal
+      <AddCompetitorModal
+        appId={appId}
         opened={addModalOpened}
         onClose={addModalHandlers.close}
-        title="Add Competitor"
-        size="sm"
-      >
-        <Stack gap="md">
-          <TextInput
-            label="App Name"
-            placeholder="Competitor app name"
-            value={newName}
-            onChange={(e) => setNewName(e.currentTarget.value)}
-            required
-          />
-          <TextInput
-            label="iTunes App ID"
-            placeholder="e.g., 123456789"
-            value={newAscId}
-            onChange={(e) => setNewAscId(e.currentTarget.value)}
-            required
-          />
-          <TextInput
-            label="Bundle ID (optional)"
-            placeholder="e.g., com.example.app"
-            value={newBundleId}
-            onChange={(e) => setNewBundleId(e.currentTarget.value)}
-          />
-          <Group justify="flex-end">
-            <Button variant="default" onClick={addModalHandlers.close}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleAdd}
-              loading={addMutation.isPending}
-              disabled={!newName.trim() || !newAscId.trim()}
-            >
-              Add
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
+        existingAscIds={
+          new Set((competitors ?? []).map((c) => c.asc_app_id))
+        }
+      />
     </>
+  );
+}
+
+// ---- Add Competitor Modal (iTunes typeahead) ----
+
+interface AddCompetitorModalProps {
+  appId: string;
+  opened: boolean;
+  onClose: () => void;
+  existingAscIds: Set<string>;
+}
+
+function AddCompetitorModal({
+  appId,
+  opened,
+  onClose,
+  existingAscIds,
+}: AddCompetitorModalProps) {
+  const [term, setTerm] = useState("");
+  const [country, setCountry] = useState("us");
+  const [debouncedTerm] = useDebouncedValue(term, 350);
+  const [results, setResults] = useState<KeywordSearchResult[]>([]);
+  const [justAdded, setJustAdded] = useState<Set<string>>(new Set());
+  const [showManual, setShowManual] = useState(false);
+
+  // Manual fallback state
+  const [manualName, setManualName] = useState("");
+  const [manualAscId, setManualAscId] = useState("");
+  const [manualBundleId, setManualBundleId] = useState("");
+
+  const search = useKeywordSearch();
+  const add = useAddCompetitor();
+
+  // Reset on open
+  useEffect(() => {
+    if (opened) {
+      setTerm("");
+      setResults([]);
+      setJustAdded(new Set());
+      setShowManual(false);
+      setManualName("");
+      setManualAscId("");
+      setManualBundleId("");
+    }
+  }, [opened]);
+
+  // Trigger search when debounced term changes
+  useEffect(() => {
+    if (!opened) return;
+    const trimmed = debouncedTerm.trim();
+    if (trimmed.length < 2) {
+      setResults([]);
+      return;
+    }
+    search.mutate(
+      { term: trimmed, country },
+      {
+        onSuccess: (out) => setResults(out),
+      },
+    );
+    // We intentionally exclude `search` from deps to avoid re-run loops
+    // (mutation identity is stable enough for our needs).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedTerm, country, opened]);
+
+  const handlePick = (r: KeywordSearchResult) => {
+    if (existingAscIds.has(r.app_id) || justAdded.has(r.app_id)) return;
+    add.mutate(
+      {
+        appId,
+        asc_app_id: r.app_id,
+        name: r.name,
+        bundle_id: r.bundle_id || undefined,
+      },
+      {
+        onSuccess: () => {
+          setJustAdded((prev) => {
+            const next = new Set(prev);
+            next.add(r.app_id);
+            return next;
+          });
+        },
+      },
+    );
+  };
+
+  const handleManualAdd = () => {
+    if (!manualName.trim() || !manualAscId.trim()) return;
+    add.mutate(
+      {
+        appId,
+        asc_app_id: manualAscId.trim(),
+        name: manualName.trim(),
+        bundle_id: manualBundleId.trim() || undefined,
+      },
+      {
+        onSuccess: () => {
+          setManualName("");
+          setManualAscId("");
+          setManualBundleId("");
+          setShowManual(false);
+        },
+      },
+    );
+  };
+
+  const isSearching = search.isPending && debouncedTerm.trim().length >= 2;
+  const trimmedTerm = debouncedTerm.trim();
+
+  return (
+    <Modal
+      opened={opened}
+      onClose={onClose}
+      title="Add Competitor"
+      size="lg"
+    >
+      <Stack gap="sm">
+        <Group gap="xs" align="flex-end">
+          <TextInput
+            label="Search iTunes"
+            placeholder="App name (e.g., Calm, Headspace)…"
+            value={term}
+            onChange={(e) => setTerm(e.currentTarget.value)}
+            leftSection={<IconSearch size={14} />}
+            style={{ flex: 1 }}
+            data-autofocus
+          />
+          <Select
+            label="Country"
+            data={[
+              { value: "us", label: "US" },
+              { value: "gb", label: "GB" },
+              { value: "de", label: "DE" },
+              { value: "fr", label: "FR" },
+              { value: "es", label: "ES" },
+              { value: "jp", label: "JP" },
+              { value: "kr", label: "KR" },
+              { value: "cn", label: "CN" },
+              { value: "ru", label: "RU" },
+              { value: "br", label: "BR" },
+            ]}
+            value={country}
+            onChange={(v) => setCountry(v ?? "us")}
+            style={{ width: 90 }}
+            allowDeselect={false}
+          />
+        </Group>
+
+        <Paper withBorder radius="sm" p={0} mih={260}>
+          {trimmedTerm.length < 2 ? (
+            <Stack align="center" justify="center" mih={260} c="dimmed" gap={4}>
+              <IconSearch size={20} />
+              <Text size="sm">Type at least 2 characters to search</Text>
+            </Stack>
+          ) : isSearching && results.length === 0 ? (
+            <Stack align="center" justify="center" mih={260} gap={4}>
+              <Skeleton h={36} w="90%" />
+              <Skeleton h={36} w="90%" />
+              <Skeleton h={36} w="90%" />
+            </Stack>
+          ) : results.length === 0 ? (
+            <Stack align="center" justify="center" mih={260} c="dimmed">
+              <Text size="sm">No apps found for "{trimmedTerm}"</Text>
+            </Stack>
+          ) : (
+            <Stack gap={0}>
+              {results.map((r) => {
+                const alreadyAdded =
+                  existingAscIds.has(r.app_id) || justAdded.has(r.app_id);
+                const isPending =
+                  add.isPending && add.variables?.asc_app_id === r.app_id;
+                return (
+                  <Group
+                    key={r.app_id}
+                    gap="sm"
+                    wrap="nowrap"
+                    p="xs"
+                    style={{
+                      borderBottom:
+                        "1px solid var(--mantine-color-gray-2)",
+                      cursor: alreadyAdded ? "default" : "pointer",
+                      opacity: alreadyAdded ? 0.55 : 1,
+                      background:
+                        isPending
+                          ? "var(--mantine-color-blue-0)"
+                          : undefined,
+                    }}
+                    onClick={() => !alreadyAdded && handlePick(r)}
+                  >
+                    <Image
+                      src={r.icon_url}
+                      w={40}
+                      h={40}
+                      radius="sm"
+                      fallbackSrc="https://placehold.co/40x40?text=?"
+                    />
+                    <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
+                      <Text size="sm" fw={500} truncate>
+                        {r.name}
+                      </Text>
+                      <Group gap={6} wrap="nowrap">
+                        <Text size="xs" c="dimmed" truncate>
+                          {r.bundle_id || "—"}
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          ·
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          ID {r.app_id}
+                        </Text>
+                      </Group>
+                    </Stack>
+                    {alreadyAdded ? (
+                      <Badge
+                        color="green"
+                        variant="light"
+                        leftSection={<IconPlus size={10} />}
+                      >
+                        Added
+                      </Badge>
+                    ) : (
+                      <Button
+                        size="xs"
+                        variant="light"
+                        leftSection={<IconPlus size={12} />}
+                        loading={isPending}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePick(r);
+                        }}
+                      >
+                        Add
+                      </Button>
+                    )}
+                  </Group>
+                );
+              })}
+            </Stack>
+          )}
+        </Paper>
+
+        <Group justify="space-between">
+          <Button
+            variant="subtle"
+            size="xs"
+            leftSection={
+              showManual ? (
+                <IconChevronDown size={12} />
+              ) : (
+                <IconChevronRight size={12} />
+              )
+            }
+            onClick={() => setShowManual((v) => !v)}
+          >
+            Enter ID manually
+          </Button>
+          <Button variant="default" onClick={onClose}>
+            Done
+          </Button>
+        </Group>
+
+        {showManual && (
+          <Paper withBorder p="sm" radius="sm">
+            <Stack gap="xs">
+              <TextInput
+                label="App name"
+                size="xs"
+                value={manualName}
+                onChange={(e) => setManualName(e.currentTarget.value)}
+              />
+              <TextInput
+                label="iTunes app ID"
+                size="xs"
+                placeholder="e.g., 123456789"
+                value={manualAscId}
+                onChange={(e) => setManualAscId(e.currentTarget.value)}
+              />
+              <TextInput
+                label="Bundle ID (optional)"
+                size="xs"
+                placeholder="e.g., com.example.app"
+                value={manualBundleId}
+                onChange={(e) => setManualBundleId(e.currentTarget.value)}
+              />
+              <Group justify="flex-end">
+                <Button
+                  size="xs"
+                  onClick={handleManualAdd}
+                  loading={add.isPending}
+                  disabled={!manualName.trim() || !manualAscId.trim()}
+                >
+                  Add
+                </Button>
+              </Group>
+            </Stack>
+          </Paper>
+        )}
+      </Stack>
+    </Modal>
   );
 }
 

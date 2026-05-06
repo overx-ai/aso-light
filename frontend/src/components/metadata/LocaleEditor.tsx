@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ActionIcon,
-  Badge,
-  Button,
-  Card,
   Group,
   Loader,
   Paper,
@@ -14,7 +11,7 @@ import {
   TextInput,
   Tooltip,
 } from "@mantine/core";
-import { IconDeviceFloppy, IconLanguage, IconX } from "@tabler/icons-react";
+import { IconDeviceFloppy, IconLanguage } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
 import {
   useUpdateLocale,
@@ -27,7 +24,6 @@ import type {
   AppMetadataSnapshot,
   LocaleUpsertIn,
   MetadataKind,
-  TranslateSuggestionItem,
 } from "@/types";
 import {
   fieldsForKind,
@@ -37,6 +33,10 @@ import {
 import { localeWithCode } from "@/components/metadata/localeLabel";
 import CharLimitCounter from "@/components/metadata/CharLimitCounter";
 import KeywordCoverageBadge from "@/components/metadata/KeywordCoverageBadge";
+
+const SOURCE_LOCALE_STORAGE_KEY = "metadata-source-locale";
+const LABEL_WIDTH = 115;
+const APP_INFO_COLUMN_WIDTH = 540;
 
 interface LocaleEditorProps {
   appId: number;
@@ -73,7 +73,7 @@ function rowValue(row: AppMetadataLocalization | undefined, key: FieldKey): stri
   return raw ?? "";
 }
 
-interface FieldEditorProps {
+interface FieldRowProps {
   appId: number;
   field: FieldConfig;
   locale: string;
@@ -81,10 +81,10 @@ interface FieldEditorProps {
   draft: string;
   setDraft: (value: string) => void;
   editable: boolean;
-  allLocales: string[];
+  sourceLocale: string | null;
 }
 
-function FieldEditor({
+function FieldRow({
   appId,
   field,
   locale,
@@ -92,19 +92,19 @@ function FieldEditor({
   draft,
   setDraft,
   editable,
-  allLocales,
-}: FieldEditorProps) {
-  const [translateOpen, setTranslateOpen] = useState(false);
-  const [sourceLocale, setSourceLocale] = useState<string | null>(null);
-  const [suggestions, setSuggestions] = useState<TranslateSuggestionItem[]>([]);
+  sourceLocale,
+}: FieldRowProps) {
   const translateMutation = useTranslateMetadata(appId);
   const createMutation = useCreateLocale(appId);
   const updateMutation = useUpdateLocale(appId);
 
   const original = rowValue(row, field.key);
   const dirty = draft !== original;
+  const isSaving = updateMutation.isPending || createMutation.isPending;
+  const overLimit = field.charLimit != null && draft.length > field.charLimit;
 
   const onSave = () => {
+    if (!editable || !dirty || overLimit) return;
     const body: LocaleUpsertIn = { [field.key]: draft } as LocaleUpsertIn;
     if (row) {
       updateMutation.mutate({ kind: field.kind, locale, body });
@@ -113,15 +113,11 @@ function FieldEditor({
     }
   };
 
+  const canTranslate =
+    editable && sourceLocale != null && sourceLocale !== locale;
+
   const onTranslate = () => {
-    if (!sourceLocale) {
-      notifications.show({
-        title: "Pick a source locale",
-        message: "Choose a locale to translate from.",
-        color: "yellow",
-      });
-      return;
-    }
+    if (!canTranslate || !sourceLocale) return;
     translateMutation.mutate(
       {
         source_locale: sourceLocale,
@@ -129,141 +125,139 @@ function FieldEditor({
         fields: [field.key],
       },
       {
-        onSuccess: (out) => setSuggestions(out.items),
+        onSuccess: (out) => {
+          const item = out.items.find(
+            (s) => s.field === field.key && s.locale === locale,
+          );
+          if (!item) {
+            notifications.show({
+              title: "Nothing to translate",
+              message: `Source field is empty in ${localeWithCode(sourceLocale)}.`,
+              color: "yellow",
+              autoClose: 2500,
+            });
+            return;
+          }
+          setDraft(item.suggestion);
+        },
       },
     );
   };
 
-  const sourceOptions = useMemo(
-    () =>
-      allLocales
-        .filter((l) => l !== locale)
-        .map((l) => ({ value: l, label: localeWithCode(l) })),
-    [allLocales, locale],
+  const translateTooltip = !editable
+    ? "Field is read-only in this state"
+    : !sourceLocale
+      ? "Pick a source locale above"
+      : sourceLocale === locale
+        ? "Source equals target — switch source"
+        : `Translate from ${localeWithCode(sourceLocale)}`;
+
+  const saveTooltip = !editable
+    ? "Read-only"
+    : overLimit
+      ? "Over character limit"
+      : dirty
+        ? "Save"
+        : "No changes";
+
+  const actions = (
+    <Group gap={2} wrap="nowrap">
+      <CharLimitCounter value={draft} limit={field.charLimit} />
+      <Tooltip label={translateTooltip} withArrow openDelay={300}>
+        <ActionIcon
+          variant="subtle"
+          size="sm"
+          onClick={onTranslate}
+          disabled={!canTranslate}
+          loading={translateMutation.isPending}
+          aria-label="Translate field"
+        >
+          <IconLanguage size={14} />
+        </ActionIcon>
+      </Tooltip>
+      <Tooltip label={saveTooltip} withArrow openDelay={300}>
+        <ActionIcon
+          variant={dirty && !overLimit && editable ? "filled" : "subtle"}
+          color="blue"
+          size="sm"
+          onClick={onSave}
+          disabled={!editable || !dirty || overLimit}
+          loading={isSaving}
+          aria-label="Save field"
+        >
+          <IconDeviceFloppy size={14} />
+        </ActionIcon>
+      </Tooltip>
+    </Group>
   );
 
-  const isSaving = updateMutation.isPending || createMutation.isPending;
-  // Block save when the draft exceeds the field's char limit — the server
-  // would 422 anyway, this just gives instant feedback.
-  const overLimit =
-    field.charLimit != null && draft.length > field.charLimit;
+  if (field.multiline) {
+    return (
+      <Stack gap={4}>
+        <Group justify="space-between" align="center" gap="xs">
+          <Text fw={500} size="xs" c="dimmed">
+            {field.label}
+          </Text>
+          {actions}
+        </Group>
+        <Textarea
+          value={draft}
+          onChange={(e) => setDraft(e.currentTarget.value)}
+          autosize
+          minRows={2}
+          maxRows={10}
+          disabled={!editable}
+          placeholder={field.label}
+          size="xs"
+          aria-label={field.label}
+        />
+      </Stack>
+    );
+  }
 
   return (
-    <Card withBorder padding="sm">
-      <Stack gap="xs">
-        <Group justify="space-between" align="center">
-          <Group gap="xs">
-            <Text fw={600} size="sm">
-              {field.label}
-            </Text>
-            {!editable && (
-              <Badge size="xs" color="gray" variant="light">
-                Read-only
-              </Badge>
-            )}
-          </Group>
-          <Group gap="xs">
-            <CharLimitCounter value={draft} limit={field.charLimit} />
-            <Tooltip label="Translate from another locale" withArrow>
-              <ActionIcon
-                variant="subtle"
-                onClick={() => setTranslateOpen((v) => !v)}
-                disabled={!editable}
-              >
-                <IconLanguage size={16} />
-              </ActionIcon>
-            </Tooltip>
-          </Group>
-        </Group>
+    <Group gap="xs" wrap="nowrap" align="center">
+      <Text
+        fw={500}
+        size="xs"
+        c="dimmed"
+        style={{ width: LABEL_WIDTH, flexShrink: 0 }}
+      >
+        {field.label}
+      </Text>
+      <TextInput
+        value={draft}
+        onChange={(e) => setDraft(e.currentTarget.value)}
+        disabled={!editable}
+        placeholder={field.label}
+        size="xs"
+        aria-label={field.label}
+        style={{ flex: 1, minWidth: 0 }}
+      />
+      {actions}
+    </Group>
+  );
+}
 
-        {field.multiline ? (
-          <Textarea
-            value={draft}
-            onChange={(e) => setDraft(e.currentTarget.value)}
-            autosize
-            minRows={3}
-            maxRows={12}
-            disabled={!editable}
-            placeholder={field.label}
-          />
-        ) : (
-          <TextInput
-            value={draft}
-            onChange={(e) => setDraft(e.currentTarget.value)}
-            disabled={!editable}
-            placeholder={field.label}
-          />
-        )}
+interface SectionProps {
+  title: string;
+  rightSlot?: React.ReactNode;
+  children: React.ReactNode;
+}
 
-        {translateOpen && (
-          <Paper withBorder p="xs">
-            <Stack gap="xs">
-              <Group gap="xs">
-                <Select
-                  size="xs"
-                  placeholder="Source locale"
-                  data={sourceOptions}
-                  value={sourceLocale}
-                  onChange={setSourceLocale}
-                  searchable
-                  style={{ flex: 1 }}
-                />
-                <Button
-                  size="xs"
-                  variant="light"
-                  onClick={onTranslate}
-                  loading={translateMutation.isPending}
-                  disabled={!sourceLocale}
-                >
-                  Suggest
-                </Button>
-                <ActionIcon
-                  variant="subtle"
-                  onClick={() => {
-                    setTranslateOpen(false);
-                    setSuggestions([]);
-                  }}
-                >
-                  <IconX size={14} />
-                </ActionIcon>
-              </Group>
-              {suggestions.length > 0 && (
-                <Stack gap={4}>
-                  <Text size="xs" c="dimmed">
-                    Click a suggestion to fill the field (does not auto-save):
-                  </Text>
-                  {suggestions
-                    .filter((s) => s.field === field.key && s.locale === locale)
-                    .map((s) => (
-                      <Badge
-                        key={s.suggestion}
-                        variant="light"
-                        color={s.cached ? "gray" : "blue"}
-                        style={{ cursor: "pointer", maxWidth: "100%" }}
-                        onClick={() => setDraft(s.suggestion)}
-                      >
-                        {s.suggestion}
-                      </Badge>
-                    ))}
-                </Stack>
-              )}
-            </Stack>
-          </Paper>
-        )}
-
-        <Group justify="flex-end">
-          <Button
-            size="xs"
-            leftSection={<IconDeviceFloppy size={14} />}
-            onClick={onSave}
-            disabled={!editable || !dirty || overLimit}
-            loading={isSaving}
-          >
-            Save
-          </Button>
-        </Group>
-      </Stack>
-    </Card>
+function Section({ title, rightSlot, children }: SectionProps) {
+  return (
+    <Stack gap={6}>
+      <Group justify="space-between" align="center">
+        <Text fw={600} size="xs" c="dimmed" tt="uppercase" lts={0.4}>
+          {title}
+        </Text>
+        {rightSlot}
+      </Group>
+      <Paper withBorder p="xs">
+        <Stack gap="xs">{children}</Stack>
+      </Paper>
+    </Stack>
   );
 }
 
@@ -279,6 +273,20 @@ export default function LocaleEditor({
     () => Array.from(grouped.keys()).sort(),
     [grouped],
   );
+
+  const [sourceLocale, setSourceLocale] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem(SOURCE_LOCALE_STORAGE_KEY);
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (sourceLocale) {
+      window.localStorage.setItem(SOURCE_LOCALE_STORAGE_KEY, sourceLocale);
+    } else {
+      window.localStorage.removeItem(SOURCE_LOCALE_STORAGE_KEY);
+    }
+  }, [sourceLocale]);
 
   // Default to first available locale if none selected.
   useEffect(() => {
@@ -330,33 +338,21 @@ export default function LocaleEditor({
     [allLocales],
   );
 
-  const renderFields = (kind: MetadataKind) => {
+  const renderRows = (kind: MetadataKind) => {
     const row = kind === "app_info" ? localeGroup?.appInfo : localeGroup?.version;
-    return (
-      <Stack gap="sm">
-        <Group justify="space-between">
-          <Text fw={600} size="sm" c="dimmed" tt="uppercase">
-            {kind === "app_info" ? "App Info" : "Version"}
-          </Text>
-          {kind === "version" && coverageForLocale.length > 0 && (
-            <KeywordCoverageBadge items={coverageForLocale} />
-          )}
-        </Group>
-        {fieldsForKind(kind).map((cfg) => (
-          <FieldEditor
-            key={cfg.key}
-            appId={appId}
-            field={cfg}
-            locale={selectedLocale ?? ""}
-            row={row}
-            draft={drafts[cfg.key] ?? ""}
-            setDraft={(v) => setDrafts((d) => ({ ...d, [cfg.key]: v }))}
-            editable={editableFields.has(cfg.key)}
-            allLocales={allLocales}
-          />
-        ))}
-      </Stack>
-    );
+    return fieldsForKind(kind).map((cfg) => (
+      <FieldRow
+        key={cfg.key}
+        appId={appId}
+        field={cfg}
+        locale={selectedLocale ?? ""}
+        row={row}
+        draft={drafts[cfg.key] ?? ""}
+        setDraft={(v) => setDrafts((d) => ({ ...d, [cfg.key]: v }))}
+        editable={editableFields.has(cfg.key)}
+        sourceLocale={sourceLocale}
+      />
+    ));
   };
 
   if (allLocales.length === 0) {
@@ -368,8 +364,8 @@ export default function LocaleEditor({
   }
 
   return (
-    <Stack gap="md" mt="md">
-      <Group justify="space-between" align="flex-end">
+    <Stack gap="sm" mt="sm">
+      <Group align="flex-end" gap="sm" wrap="wrap">
         <Select
           label="Locale"
           placeholder="Pick a locale"
@@ -377,15 +373,40 @@ export default function LocaleEditor({
           value={selectedLocale}
           onChange={onSelectLocale}
           searchable
-          style={{ minWidth: 280 }}
+          size="xs"
+          style={{ minWidth: 220, flex: 1 }}
+        />
+        <Select
+          label="Translate from"
+          placeholder="Source locale"
+          data={localeOptions}
+          value={sourceLocale}
+          onChange={setSourceLocale}
+          searchable
+          clearable
+          size="xs"
+          style={{ minWidth: 220, flex: 1 }}
         />
         {coverageQuery.isLoading && <Loader size="xs" />}
       </Group>
 
       {selectedLocale && (
-        <Group align="flex-start" grow>
-          {renderFields("app_info")}
-          {renderFields("version")}
+        <Group align="flex-start" gap="sm" wrap="wrap">
+          <div style={{ width: APP_INFO_COLUMN_WIDTH, flexShrink: 0 }}>
+            <Section title="App Info">{renderRows("app_info")}</Section>
+          </div>
+          <div style={{ flex: 1, minWidth: 320 }}>
+            <Section
+              title="Version"
+              rightSlot={
+                coverageForLocale.length > 0 ? (
+                  <KeywordCoverageBadge items={coverageForLocale} />
+                ) : null
+              }
+            >
+              {renderRows("version")}
+            </Section>
+          </div>
         </Group>
       )}
     </Stack>

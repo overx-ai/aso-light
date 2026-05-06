@@ -108,6 +108,7 @@ export default function MetadataPage() {
           </Tabs.Panel>
           <Tabs.Panel value="grid">
             <MetadataGrid
+              appId={appId}
               snapshot={snapshot}
               onRowClick={(loc) => {
                 setSelectedLocale(loc);
