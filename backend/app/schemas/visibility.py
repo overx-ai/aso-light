@@ -68,3 +68,28 @@ class SovOut(BaseModel):
 
 class FullSovOut(BaseModel):
     items: list[SovOut]
+
+
+# ---- Anomalies ----
+
+
+class AnomalyOut(BaseModel):
+    kind: str  # "surge" | "drop" | "new" | "gone"
+    track_id: str
+    name: str
+    icon_url: str
+    prev_median_position: int | None = None
+    latest_position: int | None = None
+    delta: int
+
+
+class WatchAnomaliesOut(BaseModel):
+    watch_id: int
+    text: str
+    country: str
+    polls: int
+    anomalies: list[AnomalyOut]
+
+
+class AnomaliesOut(BaseModel):
+    items: list[WatchAnomaliesOut]

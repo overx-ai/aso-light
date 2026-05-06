@@ -719,6 +719,30 @@ export interface FullSovOut {
   items: SovOut[];
 }
 
+export type AnomalyKind = "surge" | "drop" | "new" | "gone";
+
+export interface AnomalyOut {
+  kind: AnomalyKind;
+  track_id: string;
+  name: string;
+  icon_url: string;
+  prev_median_position: number | null;
+  latest_position: number | null;
+  delta: number;
+}
+
+export interface WatchAnomaliesOut {
+  watch_id: number;
+  text: string;
+  country: string;
+  polls: number;
+  anomalies: AnomalyOut[];
+}
+
+export interface AnomaliesOut {
+  items: WatchAnomaliesOut[];
+}
+
 // ---- ASO Check ----
 
 export type AsoIssueSeverity = "error" | "warning" | "info";

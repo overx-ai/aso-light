@@ -3067,3 +3067,21 @@ export function useAsoCheck(appId: number) {
     staleTime: 60_000,
   });
 }
+
+export function useVisibilityAnomalies(
+  appId: number,
+  days = 14,
+  minDelta = 5,
+) {
+  return useQuery({
+    queryKey: ["visibility-anomalies", appId, days, minDelta] as const,
+    queryFn: async () => {
+      const response = await api.get<import("@/types").AnomaliesOut>(
+        `/apps/${appId}/visibility/anomalies`,
+        { params: { days, min_delta: minDelta } },
+      );
+      return response.data;
+    },
+    enabled: appId > 0,
+  });
+}

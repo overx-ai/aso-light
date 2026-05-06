@@ -30,11 +30,47 @@ import {
   useApp,
   useDeleteVisibilityWatch,
   usePollVisibilityWatch,
+  useVisibilityAnomalies,
   useVisibilitySov,
   useVisibilityWatches,
 } from "@/lib/hooks";
-import type { VisibilityWatchOut } from "@/types";
+import type { AnomalyKind, VisibilityWatchOut } from "@/types";
 import VisibilityDrawer from "@/components/visibility/VisibilityDrawer";
+
+function AnomalyBadge({
+  kind,
+  delta,
+}: {
+  kind: AnomalyKind;
+  delta: number;
+}) {
+  if (kind === "surge") {
+    return (
+      <Badge size="xs" color="green" variant="filled" w={70}>
+        ↑ {Math.abs(delta)}
+      </Badge>
+    );
+  }
+  if (kind === "drop") {
+    return (
+      <Badge size="xs" color="red" variant="filled" w={70}>
+        ↓ {Math.abs(delta)}
+      </Badge>
+    );
+  }
+  if (kind === "new") {
+    return (
+      <Badge size="xs" color="blue" variant="light" w={70}>
+        new
+      </Badge>
+    );
+  }
+  return (
+    <Badge size="xs" color="gray" variant="light" w={70}>
+      gone
+    </Badge>
+  );
+}
 
 const COUNTRY_OPTIONS = [
   { value: "us", label: "US" },
@@ -61,6 +97,7 @@ export default function VisibilityPage() {
 
   const watchesQuery = useVisibilityWatches(appId);
   const sovQuery = useVisibilitySov(appId, 30);
+  const anomaliesQuery = useVisibilityAnomalies(appId, 14, 5);
   const addMutation = useAddVisibilityWatch(appId);
   const deleteMutation = useDeleteVisibilityWatch(appId);
   const pollMutation = usePollVisibilityWatch(appId);
@@ -248,6 +285,78 @@ export default function VisibilityPage() {
             },
           ]}
         />
+
+        <Paper withBorder p="md">
+          <Group justify="space-between" mb="sm">
+            <Text size="sm" fw={600}>
+              Anomalies — last 14 days, ≥5-position swing
+            </Text>
+            {anomaliesQuery.isLoading && <Loader size="xs" />}
+          </Group>
+          {(anomaliesQuery.data?.items ?? []).every(
+            (w) => w.anomalies.length === 0,
+          ) ? (
+            <Text size="xs" c="dimmed">
+              No anomalies detected. Need 2+ snapshots per watch for
+              comparison.
+            </Text>
+          ) : (
+            <Stack gap="md">
+              {(anomaliesQuery.data?.items ?? [])
+                .filter((w) => w.anomalies.length > 0)
+                .map((w) => (
+                  <Stack key={w.watch_id} gap={4}>
+                    <Group gap="xs">
+                      <Text size="xs" fw={600}>
+                        {w.text}
+                      </Text>
+                      <Badge size="xs" variant="light" color="gray">
+                        {w.country.toUpperCase()}
+                      </Badge>
+                      <Text size="xs" c="dimmed">
+                        {w.polls} poll{w.polls === 1 ? "" : "s"}
+                      </Text>
+                    </Group>
+                    <Stack gap={2}>
+                      {w.anomalies.map((a) => (
+                        <Group
+                          key={`${a.kind}-${a.track_id}`}
+                          gap="xs"
+                          wrap="nowrap"
+                        >
+                          <AnomalyBadge kind={a.kind} delta={a.delta} />
+                          <Image
+                            src={a.icon_url}
+                            w={20}
+                            h={20}
+                            radius="sm"
+                            fallbackSrc="https://placehold.co/20?text=?"
+                          />
+                          <Text
+                            size="xs"
+                            fw={500}
+                            truncate
+                            style={{ width: 200 }}
+                          >
+                            {a.name}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            {a.prev_median_position != null
+                              ? `was #${a.prev_median_position}`
+                              : "—"}{" "}
+                            →{" "}
+                            {a.latest_position != null
+                              ? `#${a.latest_position}`
+                              : "gone"}
+                          </Text>
+                        </Group>
+                      ))}
+                    </Stack>
+                  </Stack>
+                ))}
+            </Stack>
+          )}
+        </Paper>
 
         <Paper withBorder p="md">
           <Group justify="space-between" mb="sm">

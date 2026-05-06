@@ -20,16 +20,20 @@ from app.models.visibility import (
     KeywordVisibilityWatch,
 )
 from app.schemas.visibility import (
+    AnomaliesOut,
+    AnomalyOut,
     FullSovOut,
     SnapshotListOut,
     SovEntry,
     SovOut,
     VisibilityResultOut,
     VisibilitySnapshotOut,
+    WatchAnomaliesOut,
     WatchCreate,
     WatchListOut,
     WatchOut,
 )
+from app.services.visibility.anomaly import detect_anomalies
 from app.services.visibility.poller import MAX_RESULTS_PER_SNAPSHOT, poll_watch
 
 logger = logging.getLogger(__name__)
@@ -282,6 +286,65 @@ def _compute_sov_for_watch(
     ]
     entries.sort(key=lambda e: e.appearances, reverse=True)
     return polls, entries[:SOV_MAX_ENTRIES]
+
+
+@router.get("/{app_id}/visibility/anomalies", response_model=AnomaliesOut)
+async def list_anomalies(
+    app_id: int,
+    days: int = Query(default=14, ge=1, le=180),
+    min_delta: int = Query(default=5, ge=1, le=200),
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> AnomaliesOut:
+    """For each watched (keyword, country), surface position surges/drops
+    plus tracks that newly appeared in or vanished from the latest snapshot
+    relative to a ``days``-day median.
+    """
+    user_id = int(current_user["user_id"])
+    await _get_verified_app(app_id, user_id, session)
+
+    watches_stmt = select(KeywordVisibilityWatch).where(
+        KeywordVisibilityWatch.app_id == app_id,
+    )
+    watches = (await session.execute(watches_stmt)).scalars().all()
+    if not watches:
+        return AnomaliesOut(items=[])
+
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    items: list[WatchAnomaliesOut] = []
+    for w in watches:
+        snap_stmt = (
+            select(KeywordVisibilitySnapshot)
+            .where(
+                KeywordVisibilitySnapshot.watch_id == w.id,
+                KeywordVisibilitySnapshot.polled_at >= since,
+            )
+            .order_by(desc(KeywordVisibilitySnapshot.polled_at))
+            .options(selectinload(KeywordVisibilitySnapshot.results))
+        )
+        snaps = (await session.execute(snap_stmt)).scalars().all()
+        anomalies = detect_anomalies(snaps, min_delta=min_delta)
+        items.append(
+            WatchAnomaliesOut(
+                watch_id=w.id,
+                text=w.text,
+                country=w.country,
+                polls=len(snaps),
+                anomalies=[
+                    AnomalyOut(
+                        kind=a.kind,
+                        track_id=a.track_id,
+                        name=a.name,
+                        icon_url=a.icon_url,
+                        prev_median_position=a.prev_median_position,
+                        latest_position=a.latest_position,
+                        delta=a.delta,
+                    )
+                    for a in anomalies
+                ],
+            )
+        )
+    return AnomaliesOut(items=items)
 
 
 @router.get("/{app_id}/visibility/sov", response_model=FullSovOut)
