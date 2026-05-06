@@ -76,6 +76,15 @@ import type {
   RCProduct,
   RevenueCatCredentialCreate,
   RevenueCatCredentialResponse,
+  ReviewListOut,
+  ReviewOut,
+  ReviewResponseOut,
+  DraftReplyIn,
+  DraftReplyOut,
+  TranslateReviewIn,
+  TranslateReviewOut,
+  ReplyIn,
+  ReplyTone,
 } from "@/types";
 
 // ---- Query Keys ----
@@ -134,6 +143,19 @@ export const queryKeys = {
   rcOfferings: (appId: string) => ["rc-offerings", appId] as const,
   rcPackages: (appId: string, offeringId: string) =>
     ["rc-packages", appId, offeringId] as const,
+  reviews: (
+    appId: number,
+    filters: { territory?: string; rating?: number; has_response?: boolean },
+  ) =>
+    [
+      "reviews",
+      appId,
+      filters.territory ?? null,
+      filters.rating ?? null,
+      filters.has_response ?? null,
+    ] as const,
+  review: (appId: number, reviewId: string) =>
+    ["review", appId, reviewId] as const,
 };
 
 // ---- Credential Hooks ----
@@ -2669,6 +2691,219 @@ export function useDetachProductsFromPackage() {
     onSuccess: (_d, variables) => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.rcPackages(variables.appId, variables.offeringId),
+      });
+    },
+  });
+}
+
+// ---- Reviews ----
+
+interface ReviewListFilters {
+  territory?: string;
+  rating?: number;
+  has_response?: boolean;
+}
+
+export function useReviews(appId: number, filters: ReviewListFilters = {}) {
+  return useQuery({
+    queryKey: queryKeys.reviews(appId, filters),
+    queryFn: async () => {
+      const response = await api.get<ReviewListOut>(
+        `/apps/${appId}/reviews`,
+        {
+          params: {
+            territory: filters.territory || undefined,
+            rating: filters.rating || undefined,
+            has_response:
+              typeof filters.has_response === "boolean"
+                ? filters.has_response
+                : undefined,
+            limit: 100,
+          },
+        },
+      );
+      return response.data;
+    },
+    enabled: appId > 0,
+    staleTime: 60_000,
+  });
+}
+
+export function useReview(appId: number, reviewId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.review(appId, reviewId ?? ""),
+    queryFn: async () => {
+      const response = await api.get<ReviewOut>(
+        `/apps/${appId}/reviews/${reviewId}`,
+      );
+      return response.data;
+    },
+    enabled: appId > 0 && !!reviewId,
+  });
+}
+
+function invalidateReviews(
+  queryClient: ReturnType<typeof useQueryClient>,
+  appId: number,
+): void {
+  queryClient.invalidateQueries({ queryKey: ["reviews", appId] });
+  queryClient.invalidateQueries({ queryKey: ["review", appId] });
+}
+
+export function useDraftReply(appId: number) {
+  return useMutation({
+    mutationFn: async ({
+      reviewId,
+      tone,
+    }: {
+      reviewId: string;
+      tone: ReplyTone;
+    }): Promise<DraftReplyOut> => {
+      const body: DraftReplyIn = { tone };
+      const response = await api.post<DraftReplyOut>(
+        `/apps/${appId}/reviews/${reviewId}/draft`,
+        body,
+      );
+      return response.data;
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Draft failed",
+        message: ascErrorMessage(
+          error,
+          "Could not generate a draft reply. Check ANTHROPIC_API_KEY.",
+        ),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useTranslateReview(appId: number) {
+  return useMutation({
+    mutationFn: async ({
+      reviewId,
+      target_locale,
+    }: {
+      reviewId: string;
+      target_locale: string;
+    }): Promise<TranslateReviewOut> => {
+      const body: TranslateReviewIn = { target_locale };
+      const response = await api.post<TranslateReviewOut>(
+        `/apps/${appId}/reviews/${reviewId}/translate`,
+        body,
+      );
+      return response.data;
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Translation failed",
+        message: ascErrorMessage(error, "Could not translate review."),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useCreateReply(appId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      reviewId,
+      body,
+    }: {
+      reviewId: string;
+      body: string;
+    }): Promise<ReviewResponseOut> => {
+      const payload: ReplyIn = { body };
+      const response = await api.post<ReviewResponseOut>(
+        `/apps/${appId}/reviews/${reviewId}/respond`,
+        payload,
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      invalidateReviews(queryClient, appId);
+      notifications.show({
+        title: "Reply posted",
+        message: "Your reply is live in App Store Connect.",
+        color: "green",
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Post failed",
+        message: ascErrorMessage(error, "Could not post the reply."),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useUpdateReply(appId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      reviewId,
+      responseId,
+      body,
+    }: {
+      reviewId: string;
+      responseId: string;
+      body: string;
+    }): Promise<ReviewResponseOut> => {
+      const payload: ReplyIn = { body };
+      const response = await api.patch<ReviewResponseOut>(
+        `/apps/${appId}/reviews/${reviewId}/respond/${responseId}`,
+        payload,
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      invalidateReviews(queryClient, appId);
+      notifications.show({
+        title: "Reply updated",
+        message: "Your edit is live.",
+        color: "green",
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Update failed",
+        message: ascErrorMessage(error, "Could not update the reply."),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useDeleteReply(appId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      reviewId,
+      responseId,
+    }: {
+      reviewId: string;
+      responseId: string;
+    }): Promise<void> => {
+      await api.delete(
+        `/apps/${appId}/reviews/${reviewId}/respond/${responseId}`,
+      );
+    },
+    onSuccess: () => {
+      invalidateReviews(queryClient, appId);
+      notifications.show({
+        title: "Reply removed",
+        message: "Reply deleted from App Store Connect.",
+        color: "green",
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Delete failed",
+        message: ascErrorMessage(error, "Could not delete the reply."),
+        color: "red",
       });
     },
   });

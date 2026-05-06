@@ -610,6 +610,55 @@ export interface CrossLocalizationGridOut {
   items: CrossLocalizationGridItem[];
 }
 
+// ---- Reviews ----
+
+export interface ReviewResponseOut {
+  id: string;
+  body: string;
+  last_modified_date: string | null;
+  state: string | null;
+}
+
+export interface ReviewOut {
+  id: string;
+  rating: number;
+  title: string | null;
+  body: string | null;
+  territory: string | null;
+  reviewer_nickname: string | null;
+  created_date: string | null;
+  response: ReviewResponseOut | null;
+}
+
+export interface ReviewListOut {
+  items: ReviewOut[];
+  next_cursor: string | null;
+}
+
+export type ReplyTone = "neutral" | "apologetic" | "appreciative";
+
+export interface DraftReplyIn {
+  tone: ReplyTone;
+}
+
+export interface DraftReplyOut {
+  suggestion: string;
+  locale: string;
+}
+
+export interface TranslateReviewIn {
+  target_locale: string;
+}
+
+export interface TranslateReviewOut {
+  translation: string;
+  cached: boolean;
+}
+
+export interface ReplyIn {
+  body: string;
+}
+
 export interface LocaleUpsertIn {
   name?: string | null;
   subtitle?: string | null;

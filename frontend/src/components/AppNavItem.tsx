@@ -8,6 +8,7 @@ import {
   IconFileDescription,
   IconLanguage,
   IconCash,
+  IconMessage,
 } from "@tabler/icons-react";
 import type { App } from "@/types";
 
@@ -22,6 +23,7 @@ const SUB_ROUTES = [
   { path: "availability", label: "Availability", icon: IconWorld },
   { path: "metadata", label: "Metadata", icon: IconFileDescription },
   { path: "cross-localization", label: "Cross-Loc", icon: IconLanguage },
+  { path: "reviews", label: "Reviews", icon: IconMessage },
   { path: "revenuecat", label: "RevenueCat", icon: IconCash },
 ];
 

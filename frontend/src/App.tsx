@@ -10,6 +10,7 @@ import KeywordsPage from "@/pages/KeywordsPage";
 import AvailabilityPage from "@/pages/AvailabilityPage";
 import MetadataPage from "@/pages/MetadataPage";
 import CrossLocalizationPage from "@/pages/CrossLocalizationPage";
+import ReviewsPage from "@/pages/ReviewsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import RevenueCatSettingsPage from "@/pages/RevenueCatSettingsPage";
 import RevenueCatEntitlementsPage from "@/pages/RevenueCatEntitlementsPage";
@@ -31,6 +32,7 @@ export default function App() {
             path="apps/:id/cross-localization"
             element={<CrossLocalizationPage />}
           />
+          <Route path="apps/:id/reviews" element={<ReviewsPage />} />
           <Route
             path="apps/:id/revenuecat"
             element={<Navigate to="entitlements" replace />}
