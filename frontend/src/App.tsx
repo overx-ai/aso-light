@@ -13,6 +13,7 @@ import CrossLocalizationPage from "@/pages/CrossLocalizationPage";
 import ReviewsPage from "@/pages/ReviewsPage";
 import VisibilityPage from "@/pages/VisibilityPage";
 import AsoCheckPage from "@/pages/AsoCheckPage";
+import AppClashPage from "@/pages/AppClashPage";
 import SettingsPage from "@/pages/SettingsPage";
 import RevenueCatSettingsPage from "@/pages/RevenueCatSettingsPage";
 import RevenueCatEntitlementsPage from "@/pages/RevenueCatEntitlementsPage";
@@ -37,6 +38,7 @@ export default function App() {
           <Route path="apps/:id/reviews" element={<ReviewsPage />} />
           <Route path="apps/:id/visibility" element={<VisibilityPage />} />
           <Route path="apps/:id/aso-check" element={<AsoCheckPage />} />
+          <Route path="apps/:id/clash" element={<AppClashPage />} />
           <Route
             path="apps/:id/revenuecat"
             element={<Navigate to="entitlements" replace />}

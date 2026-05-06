@@ -768,6 +768,33 @@ export interface AsoCheckOut {
   items: AsoIssueOut[];
 }
 
+// ---- App Clash ----
+
+export interface ClashRow {
+  track_id: string;
+  is_self: boolean;
+  name: string | null;
+  subtitle: string | null;
+  seller: string | null;
+  primary_genre: string | null;
+  average_rating: number | null;
+  rating_count: number | null;
+  release_date: string | null;
+  version: string | null;
+  file_size_mb: number | null;
+  price: number | null;
+  currency: string | null;
+  formatted_price: string | null;
+  icon_url: string | null;
+  bundle_id: string | null;
+  description_excerpt: string | null;
+}
+
+export interface AppClashOut {
+  country: string;
+  rows: ClashRow[];
+}
+
 export interface LocaleUpsertIn {
   name?: string | null;
   subtitle?: string | null;

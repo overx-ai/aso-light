@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import httpx
 
@@ -13,6 +14,43 @@ class ITunesSearchService:
     """Check app rankings using the iTunes Search API."""
 
     SEARCH_URL = "https://itunes.apple.com/search"
+    LOOKUP_URL = "https://itunes.apple.com/lookup"
+
+    async def lookup_apps(
+        self,
+        track_ids: list[str],
+        country: str = "us",
+    ) -> list[dict[str, Any]]:
+        """Look up rich metadata for one or more iTunes track IDs.
+
+        Returns the raw iTunes lookup payload entries (one per id found).
+        Useful keys: trackName, sellerName, primaryGenreName, averageUserRating,
+        userRatingCount, releaseDate, version, fileSizeBytes, price, currency,
+        artworkUrl100, formattedPrice, description, trackContentRating.
+        """
+        if not track_ids:
+            return []
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                response = await client.get(
+                    self.LOOKUP_URL,
+                    params={
+                        "id": ",".join(t for t in track_ids if t),
+                        "country": country,
+                        "media": "software",
+                        "entity": "software",
+                        "limit": min(len(track_ids), 200),
+                    },
+                )
+                response.raise_for_status()
+            except httpx.HTTPError:
+                logger.warning(
+                    "iTunes lookup failed for ids=%s country=%s",
+                    track_ids, country,
+                )
+                return []
+            data = response.json()
+            return list(data.get("results") or [])
 
     async def search_apps(
         self, term: str, country: str = "us", limit: int = 200,

@@ -11,6 +11,7 @@ import {
   IconMessage,
   IconChartBar,
   IconChecks,
+  IconSwords,
 } from "@tabler/icons-react";
 import type { App } from "@/types";
 
@@ -28,6 +29,7 @@ const SUB_ROUTES = [
   { path: "cross-localization", label: "Cross-Loc", icon: IconLanguage },
   { path: "reviews", label: "Reviews", icon: IconMessage },
   { path: "visibility", label: "Visibility", icon: IconChartBar },
+  { path: "clash", label: "App Clash", icon: IconSwords },
   { path: "revenuecat", label: "RevenueCat", icon: IconCash },
 ];
 

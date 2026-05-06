@@ -3085,3 +3085,20 @@ export function useVisibilityAnomalies(
     enabled: appId > 0,
   });
 }
+
+// ---- App Clash ----
+
+export function useAppClash(appId: number, country = "us") {
+  return useQuery({
+    queryKey: ["app-clash", appId, country] as const,
+    queryFn: async () => {
+      const response = await api.get<import("@/types").AppClashOut>(
+        `/apps/${appId}/clash`,
+        { params: { country } },
+      );
+      return response.data;
+    },
+    enabled: appId > 0,
+    staleTime: 5 * 60_000,
+  });
+}
