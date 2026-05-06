@@ -719,6 +719,31 @@ export interface FullSovOut {
   items: SovOut[];
 }
 
+// ---- ASO Check ----
+
+export type AsoIssueSeverity = "error" | "warning" | "info";
+
+export interface AsoIssueOut {
+  severity: AsoIssueSeverity;
+  locale: string | null;
+  field: string | null;
+  code: string;
+  message: string;
+  suggestion: string | null;
+}
+
+export interface AsoIssueSummary {
+  errors: number;
+  warnings: number;
+  infos: number;
+  locales_audited: number;
+}
+
+export interface AsoCheckOut {
+  summary: AsoIssueSummary;
+  items: AsoIssueOut[];
+}
+
 export interface LocaleUpsertIn {
   name?: string | null;
   subtitle?: string | null;

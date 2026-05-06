@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.apps import router as apps_router
+from app.api.v1.aso_check import router as aso_check_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.availability import router as availability_router
 from app.api.v1.clone import router as clone_router
@@ -31,6 +32,7 @@ router.include_router(availability_router, prefix="/apps", tags=["availability"]
 router.include_router(metadata_router, prefix="/apps", tags=["metadata"])
 router.include_router(reviews_router, prefix="/apps", tags=["reviews"])
 router.include_router(visibility_router, prefix="/apps", tags=["visibility"])
+router.include_router(aso_check_router, prefix="/apps", tags=["aso-check"])
 router.include_router(keywords_router, tags=["keywords"])
 router.include_router(metadata_keywords_router, prefix="/keywords", tags=["keywords"])
 router.include_router(territories_router, prefix="/territories", tags=["territories"])

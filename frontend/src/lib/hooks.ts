@@ -3051,3 +3051,19 @@ export function usePollVisibilityWatch(appId: number) {
     },
   });
 }
+
+// ---- ASO Check ----
+
+export function useAsoCheck(appId: number) {
+  return useQuery({
+    queryKey: ["aso-check", appId] as const,
+    queryFn: async () => {
+      const response = await api.get<import("@/types").AsoCheckOut>(
+        `/apps/${appId}/aso-check`,
+      );
+      return response.data;
+    },
+    enabled: appId > 0,
+    staleTime: 60_000,
+  });
+}
