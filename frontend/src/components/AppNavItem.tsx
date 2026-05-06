@@ -7,6 +7,7 @@ import {
   IconWorld,
   IconFileDescription,
   IconLanguage,
+  IconCash,
 } from "@tabler/icons-react";
 import type { App } from "@/types";
 
@@ -21,6 +22,7 @@ const SUB_ROUTES = [
   { path: "availability", label: "Availability", icon: IconWorld },
   { path: "metadata", label: "Metadata", icon: IconFileDescription },
   { path: "cross-localization", label: "Cross-Loc", icon: IconLanguage },
+  { path: "revenuecat", label: "RevenueCat", icon: IconCash },
 ];
 
 export default function AppNavItem({ app, onNavigate }: AppNavItemProps) {

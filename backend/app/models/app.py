@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from app.models.credential import ASCCredential
     from app.models.iap import InAppPurchase
     from app.models.keyword import KeywordTracking
+    from app.models.revenuecat_credential import RevenueCatCredential
     from app.models.subscription import SubscriptionGroup
 
 
@@ -22,6 +23,9 @@ class App(TimestampMixin, Base):
     credential_id: Mapped[int] = mapped_column(
         ForeignKey("asc_credentials.id"), index=True,
     )
+    revenuecat_credential_id: Mapped[int | None] = mapped_column(
+        ForeignKey("revenuecat_credentials.id"), index=True, nullable=True,
+    )
     asc_app_id: Mapped[str] = mapped_column(String(255))
     bundle_id: Mapped[str] = mapped_column(String(255))
     name: Mapped[str] = mapped_column(String(255))
@@ -29,6 +33,9 @@ class App(TimestampMixin, Base):
     icon_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     credential: Mapped[ASCCredential] = relationship(back_populates="apps")
+    revenuecat_credential: Mapped[RevenueCatCredential | None] = relationship(
+        foreign_keys=[revenuecat_credential_id],
+    )
     subscription_groups: Mapped[list[SubscriptionGroup]] = relationship(
         back_populates="app",
         cascade="all, delete-orphan",

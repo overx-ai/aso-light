@@ -1,4 +1,4 @@
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import Layout from "@/components/Layout";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import LoginPage from "@/pages/LoginPage";
@@ -11,6 +11,8 @@ import AvailabilityPage from "@/pages/AvailabilityPage";
 import MetadataPage from "@/pages/MetadataPage";
 import CrossLocalizationPage from "@/pages/CrossLocalizationPage";
 import SettingsPage from "@/pages/SettingsPage";
+import RevenueCatSettingsPage from "@/pages/RevenueCatSettingsPage";
+import RevenueCatEntitlementsPage from "@/pages/RevenueCatEntitlementsPage";
 
 export default function App() {
   return (
@@ -28,6 +30,18 @@ export default function App() {
           <Route
             path="apps/:id/cross-localization"
             element={<CrossLocalizationPage />}
+          />
+          <Route
+            path="apps/:id/revenuecat"
+            element={<Navigate to="entitlements" replace />}
+          />
+          <Route
+            path="apps/:id/revenuecat/settings"
+            element={<RevenueCatSettingsPage />}
+          />
+          <Route
+            path="apps/:id/revenuecat/entitlements"
+            element={<RevenueCatEntitlementsPage />}
           />
           <Route path="settings" element={<SettingsPage />} />
         </Route>

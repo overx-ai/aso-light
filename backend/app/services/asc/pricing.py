@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.services.asc.errors import ASCAPIError
+
 if TYPE_CHECKING:
     from app.services.asc.client import ASCClient
 
@@ -1302,6 +1304,118 @@ class ASCPricingService:
             for t in pages
             if t.get("type") == "territories" and t.get("id")
         ]
+
+    async def update_subscription_availability(
+        self,
+        subscription_id: str,
+        available_alpha3_codes: list[str],
+        available_in_new_territories: bool = True,
+    ) -> dict:
+        """``PATCH /v1/subscriptionAvailabilities/{id}``
+
+        Replace the territory list on a sub's availability. Used by the
+        clone-and-version-bump flow to "archive" the source sub by
+        setting the territory list to ``[]`` — Apple keeps existing
+        subscribers but stops new sign-ups, achieving the same end
+        result as a soft-archive.
+        """
+        body = {
+            "data": {
+                "type": "subscriptionAvailabilities",
+                "id": subscription_id,
+                "attributes": {
+                    "availableInNewTerritories": available_in_new_territories,
+                },
+                "relationships": {
+                    "availableTerritories": {
+                        "data": [
+                            {"type": "territories", "id": code}
+                            for code in available_alpha3_codes
+                        ],
+                    },
+                },
+            }
+        }
+        return await self.client._patch(
+            f"/subscriptionAvailabilities/{subscription_id}", json=body,
+        )
+
+    async def get_subscription_detail(self, subscription_id: str) -> dict:
+        """``GET /v1/subscriptions/{id}`` with full attributes for cloning.
+
+        Returns Apple's ``subscriptions`` resource attributes including
+        ``productId``, ``name``, ``subscriptionPeriod``, ``familySharable``,
+        ``groupLevel``, ``reviewNote``, ``state``.
+        """
+        response = await self.client._get(
+            f"/subscriptions/{subscription_id}",
+            params={
+                "fields[subscriptions]": (
+                    "productId,name,state,subscriptionPeriod,"
+                    "familySharable,groupLevel,reviewNote"
+                ),
+            },
+        )
+        return response.get("data", {})
+
+    async def create_iap(
+        self,
+        app_id: str,
+        product_id: str,
+        name: str,
+        iap_type: str,
+        review_note: str | None = None,
+        family_sharable: bool = False,
+    ) -> dict:
+        """``POST /v2/inAppPurchases`` — create a new IAP.
+
+        ``iap_type`` is one of ``CONSUMABLE``, ``NON_CONSUMABLE``,
+        ``NON_RENEWING_SUBSCRIPTION``. ``familySharable`` is only
+        meaningful for non-consumables.
+        """
+        attributes: dict[str, object] = {
+            "name": name,
+            "productId": product_id,
+            "inAppPurchaseType": iap_type,
+        }
+        if review_note is not None:
+            attributes["reviewNote"] = review_note
+        if iap_type == "NON_CONSUMABLE":
+            attributes["familyShareable"] = family_sharable
+
+        body = {
+            "data": {
+                "type": "inAppPurchases",
+                "attributes": attributes,
+                "relationships": {
+                    "app": {"data": {"type": "apps", "id": app_id}},
+                },
+            }
+        }
+        # IAP create is a v2-only endpoint
+        http = await self.client._get_client()
+        base_v2 = self.client.BASE_URL.replace("/v1", "/v2")
+        await self.client._throttle()
+        raw = await http.post(f"{base_v2}/inAppPurchases", json=body)
+        if raw.status_code >= 400:
+            response_body = raw.json() if raw.content else {"errors": []}
+            raise ASCAPIError(raw.status_code, response_body)
+        return raw.json().get("data", {})
+
+    async def get_iap_detail(self, iap_id: str) -> dict:
+        """``GET /v2/inAppPurchases/{id}`` — full IAP attributes for cloning."""
+        http = await self.client._get_client()
+        base_v2 = self.client.BASE_URL.replace("/v1", "/v2")
+        await self.client._throttle()
+        raw = await http.get(
+            f"{base_v2}/inAppPurchases/{iap_id}"
+            "?fields[inAppPurchases]=name,productId,inAppPurchaseType,"
+            "state,reviewNote,familyShareable"
+        )
+        if raw.status_code >= 400:
+            response_body = raw.json() if raw.content else {"errors": []}
+            raise ASCAPIError(raw.status_code, response_body)
+        return raw.json().get("data", {})
 
     async def update_subscription(
         self,

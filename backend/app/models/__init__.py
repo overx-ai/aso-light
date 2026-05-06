@@ -1,4 +1,5 @@
 from app.models.app import App
+from app.models.clone_operation import CloneOperation
 from app.models.competitor import CompetitorApp
 from app.models.credential import ASCCredential
 from app.models.economic_index import EconomicIndex
@@ -10,6 +11,7 @@ from app.models.metadata import (
     MetadataTranslationCache,
 )
 from app.models.preset import PricePreset
+from app.models.revenuecat_credential import RevenueCatCredential
 from app.models.subscription import Subscription, SubscriptionGroup, SubscriptionPrice
 from app.models.territory import Territory
 from app.models.user import User
@@ -19,6 +21,7 @@ __all__ = [
     "ASCCredential",
     "AppMetadataLocalization",
     "AppMetadataState",
+    "CloneOperation",
     "CompetitorApp",
     "EconomicIndex",
     "IAPPrice",
@@ -29,6 +32,7 @@ __all__ = [
     "KeywordTracking",
     "MetadataTranslationCache",
     "PricePreset",
+    "RevenueCatCredential",
     "Subscription",
     "SubscriptionGroup",
     "SubscriptionPrice",

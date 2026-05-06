@@ -24,12 +24,14 @@ import {
   IconPencil,
   IconLanguageHiragana,
   IconGift,
+  IconCopy,
 } from "@tabler/icons-react";
 import { ActionIcon, Button, Tooltip } from "@mantine/core";
 import SubscriptionGroupFormModal from "@/components/pricing/SubscriptionGroupFormModal";
 import GroupLocalizationsModal from "@/components/pricing/GroupLocalizationsModal";
 import SubscriptionFormModal from "@/components/pricing/SubscriptionFormModal";
 import IntroOffersModal from "@/components/pricing/IntroOffersModal";
+import CloneVersionBumpModal from "@/components/pricing/CloneVersionBumpModal";
 import {
   useApp,
   useSubscriptions,
@@ -129,6 +131,7 @@ function SubscriptionsTab({ appId }: { appId: string }) {
   const [groupLocsOpen, setGroupLocsOpen] = useState(false);
   const [subModalMode, setSubModalMode] = useState<"create" | "edit" | null>(null);
   const [introOffersOpen, setIntroOffersOpen] = useState(false);
+  const [cloneOpen, setCloneOpen] = useState(false);
 
   const handleToggleForce = useCallback((territoryCode: string) => {
     setForcedTerritories((prev) => {
@@ -484,6 +487,19 @@ function SubscriptionsTab({ appId }: { appId: string }) {
                   <IconGift size={16} />
                 </ActionIcon>
               </Tooltip>
+              <Tooltip
+                label="Clone & version-bump (recreate as _v2)"
+                withArrow
+              >
+                <ActionIcon
+                  variant="light"
+                  size="lg"
+                  color="orange"
+                  onClick={() => setCloneOpen(true)}
+                >
+                  <IconCopy size={16} />
+                </ActionIcon>
+              </Tooltip>
             </>
           )}
         </Group>
@@ -605,6 +621,21 @@ function SubscriptionsTab({ appId }: { appId: string }) {
         opened={introOffersOpen}
         onClose={() => setIntroOffersOpen(false)}
       />
+      <CloneVersionBumpModal
+        appId={appId}
+        target={
+          selectedSub
+            ? {
+                kind: "subscription",
+                subId: String(selectedSub.id),
+                productId: selectedSub.product_id,
+                name: selectedSub.name,
+              }
+            : null
+        }
+        opened={cloneOpen && !!selectedSub}
+        onClose={() => setCloneOpen(false)}
+      />
     </Stack>
   );
 }
@@ -631,6 +662,7 @@ function IAPsTab({ appId }: { appId: string }) {
   const [manualTerritories, setManualTerritories] = useState<Set<string>>(new Set());
   const [manualItems, setManualItems] = useState<Map<string, PricePreviewItem>>(new Map());
   const [forcedTerritories, setForcedTerritories] = useState<Set<string>>(new Set());
+  const [cloneIapOpen, setCloneIapOpen] = useState(false);
 
   const handleToggleForce = useCallback((territoryCode: string) => {
     setForcedTerritories((prev) => {
@@ -882,6 +914,16 @@ function IAPsTab({ appId }: { appId: string }) {
         </Group>
         {selectedIapId && (
           <Group gap="xs">
+            <Tooltip label="Clone & version-bump (recreate as _v2)" withArrow>
+              <ActionIcon
+                variant="light"
+                size="lg"
+                color="orange"
+                onClick={() => setCloneIapOpen(true)}
+              >
+                <IconCopy size={16} />
+              </ActionIcon>
+            </Tooltip>
             <Button
               variant="light"
               size="sm"
@@ -968,6 +1010,21 @@ function IAPsTab({ appId }: { appId: string }) {
           />
         </>
       )}
+      <CloneVersionBumpModal
+        appId={appId}
+        target={
+          selectedIap
+            ? {
+                kind: "iap",
+                iapId: String(selectedIap.id),
+                productId: selectedIap.product_id,
+                name: selectedIap.name,
+              }
+            : null
+        }
+        opened={cloneIapOpen && !!selectedIap}
+        onClose={() => setCloneIapOpen(false)}
+      />
     </Stack>
   );
 }

@@ -66,6 +66,16 @@ import type {
   TranslateOut,
   KeywordCoverageOut,
   CrossLocalizationGridOut,
+  CloneOperationOut,
+  ClonePreviewResponse,
+  CloneRequest,
+  RCConnectionTestResponse,
+  RCEntitlement,
+  RCOffering,
+  RCPackage,
+  RCProduct,
+  RevenueCatCredentialCreate,
+  RevenueCatCredentialResponse,
 } from "@/types";
 
 // ---- Query Keys ----
@@ -114,6 +124,16 @@ export const queryKeys = {
   keywordCoverage: (appId: string | number) =>
     ["keyword-coverage", appId] as const,
   crossLocalizationGrid: ["cross-localization-grid"] as const,
+  cloneOperation: (appId: string, opId: number) =>
+    ["clone-operation", appId, opId] as const,
+  cloneOperations: (appId: string) => ["clone-operations", appId] as const,
+  rcCredential: (appId: string) => ["rc-credential", appId] as const,
+  rcProducts: (appId: string) => ["rc-products", appId] as const,
+  rcApps: (appId: string) => ["rc-apps", appId] as const,
+  rcEntitlements: (appId: string) => ["rc-entitlements", appId] as const,
+  rcOfferings: (appId: string) => ["rc-offerings", appId] as const,
+  rcPackages: (appId: string, offeringId: string) =>
+    ["rc-packages", appId, offeringId] as const,
 };
 
 // ---- Credential Hooks ----
@@ -2078,5 +2098,578 @@ export function useCrossLocalizationGrid() {
       return response.data;
     },
     staleTime: Infinity,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Clone-and-version-bump
+// ---------------------------------------------------------------------------
+
+type CloneTarget =
+  | { kind: "subscription"; subId: string }
+  | { kind: "iap"; iapId: string };
+
+function cloneBasePath(appId: string, target: CloneTarget): string {
+  return target.kind === "subscription"
+    ? `/apps/${appId}/subscriptions/${target.subId}`
+    : `/apps/${appId}/iaps/${target.iapId}`;
+}
+
+export function useClonePreview(appId: string, target: CloneTarget | null) {
+  return useQuery({
+    queryKey: [
+      "clone-preview",
+      appId,
+      target?.kind ?? "",
+      target?.kind === "subscription" ? target.subId : target?.kind === "iap" ? target.iapId : "",
+    ],
+    queryFn: async (): Promise<ClonePreviewResponse> => {
+      if (!target) throw new Error("no target");
+      const response = await api.get<ClonePreviewResponse>(
+        `${cloneBasePath(appId, target)}/clone/preview`,
+      );
+      return response.data;
+    },
+    enabled: !!target,
+    staleTime: 30_000,
+  });
+}
+
+export function useCloneSubOrIAP() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+      target: CloneTarget;
+      body: CloneRequest;
+    }): Promise<CloneOperationOut> => {
+      const response = await api.post<CloneOperationOut>(
+        `${cloneBasePath(params.appId, params.target)}/clone`,
+        params.body,
+      );
+      return response.data;
+    },
+    onSuccess: (data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.subscriptions(variables.appId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.iaps(variables.appId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.cloneOperations(variables.appId),
+      });
+      const failedSteps = [
+        ...data.asc_steps,
+        ...data.revenuecat_steps,
+      ].filter((s) => s.status === "failed").length;
+      if (data.status === "done") {
+        notifications.show({
+          title: "Clone complete",
+          message: `New product ${data.target_product_id} created and RevenueCat updated.`,
+          color: "green",
+        });
+      } else if (data.status === "partial") {
+        notifications.show({
+          title: "Clone partially completed",
+          message: `${failedSteps} step(s) failed. Use Retry to re-run them.`,
+          color: "yellow",
+        });
+      } else {
+        notifications.show({
+          title: "Clone failed",
+          message: data.error_log?.[0] ?? "See operation log for details.",
+          color: "red",
+        });
+      }
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Clone failed",
+        message: ascErrorMessage(
+          error,
+          "Could not start the clone. Check ASC credentials.",
+        ),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useCloneOperation(appId: string, opId: number | null) {
+  return useQuery({
+    queryKey: queryKeys.cloneOperation(appId, opId ?? 0),
+    queryFn: async (): Promise<CloneOperationOut> => {
+      const response = await api.get<CloneOperationOut>(
+        `/apps/${appId}/clone-operations/${opId}`,
+      );
+      return response.data;
+    },
+    enabled: !!appId && opId != null,
+  });
+}
+
+export function useCloneOperations(appId: string) {
+  return useQuery({
+    queryKey: queryKeys.cloneOperations(appId),
+    queryFn: async (): Promise<CloneOperationOut[]> => {
+      const response = await api.get<CloneOperationOut[]>(
+        `/apps/${appId}/clone-operations`,
+      );
+      return response.data;
+    },
+    enabled: !!appId,
+  });
+}
+
+export function useRetryCloneOperation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+      opId: number;
+    }): Promise<CloneOperationOut> => {
+      const response = await api.post<CloneOperationOut>(
+        `/apps/${params.appId}/clone-operations/${params.opId}/retry`,
+      );
+      return response.data;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.cloneOperation(variables.appId, variables.opId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.cloneOperations(variables.appId),
+      });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// RevenueCat
+// ---------------------------------------------------------------------------
+
+export function useRevenueCatCredential(appId: string) {
+  return useQuery({
+    queryKey: queryKeys.rcCredential(appId),
+    queryFn: async (): Promise<RevenueCatCredentialResponse | null> => {
+      const response = await api.get<RevenueCatCredentialResponse | null>(
+        `/apps/${appId}/revenuecat/credential`,
+      );
+      return response.data;
+    },
+    enabled: !!appId,
+  });
+}
+
+export function useSaveRevenueCatCredential() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+      body: RevenueCatCredentialCreate;
+    }): Promise<RevenueCatCredentialResponse> => {
+      const response = await api.post<RevenueCatCredentialResponse>(
+        `/apps/${params.appId}/revenuecat/credential`,
+        params.body,
+      );
+      return response.data;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcCredential(variables.appId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.app(variables.appId),
+      });
+      notifications.show({
+        title: "RevenueCat connected",
+        message: "Saved RevenueCat credentials.",
+        color: "green",
+      });
+    },
+    onError: () => {
+      notifications.show({
+        title: "Save failed",
+        message: "Could not save RevenueCat credentials.",
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useDeleteRevenueCatCredential() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { appId: string }): Promise<void> => {
+      await api.delete(`/apps/${params.appId}/revenuecat/credential`);
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcCredential(variables.appId),
+      });
+    },
+  });
+}
+
+export function useTestRevenueCatCredential() {
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+    }): Promise<RCConnectionTestResponse> => {
+      const response = await api.post<RCConnectionTestResponse>(
+        `/apps/${params.appId}/revenuecat/credential/test`,
+      );
+      return response.data;
+    },
+  });
+}
+
+export function useRevenueCatApps(appId: string) {
+  return useQuery({
+    queryKey: queryKeys.rcApps(appId),
+    queryFn: async (): Promise<Array<{ id: string; name?: string; type?: string }>> => {
+      const response = await api.get<Array<{ id: string; name?: string; type?: string }>>(
+        `/apps/${appId}/revenuecat/apps`,
+      );
+      return response.data;
+    },
+    enabled: !!appId,
+  });
+}
+
+export function useRevenueCatProducts(
+  appId: string,
+  storeIdentifier?: string,
+) {
+  return useQuery({
+    queryKey: [...queryKeys.rcProducts(appId), storeIdentifier ?? ""],
+    queryFn: async (): Promise<RCProduct[]> => {
+      const response = await api.get<RCProduct[]>(
+        `/apps/${appId}/revenuecat/products`,
+        { params: storeIdentifier ? { store_identifier: storeIdentifier } : undefined },
+      );
+      return response.data;
+    },
+    enabled: !!appId,
+  });
+}
+
+export function useRevenueCatEntitlements(appId: string) {
+  return useQuery({
+    queryKey: queryKeys.rcEntitlements(appId),
+    queryFn: async (): Promise<RCEntitlement[]> => {
+      const response = await api.get<RCEntitlement[]>(
+        `/apps/${appId}/revenuecat/entitlements`,
+      );
+      return response.data;
+    },
+    enabled: !!appId,
+  });
+}
+
+export function useCreateRCEntitlement() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+      lookup_key: string;
+      display_name: string;
+    }) => {
+      const response = await api.post(
+        `/apps/${params.appId}/revenuecat/entitlements`,
+        {
+          lookup_key: params.lookup_key,
+          display_name: params.display_name,
+        },
+      );
+      return response.data;
+    },
+    onSuccess: (_d, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcEntitlements(variables.appId),
+      });
+    },
+  });
+}
+
+export function useUpdateRCEntitlement() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+      entitlementId: string;
+      display_name: string;
+    }) => {
+      const response = await api.patch(
+        `/apps/${params.appId}/revenuecat/entitlements/${params.entitlementId}`,
+        { display_name: params.display_name },
+      );
+      return response.data;
+    },
+    onSuccess: (_d, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcEntitlements(variables.appId),
+      });
+    },
+  });
+}
+
+export function useArchiveRCEntitlement() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { appId: string; entitlementId: string }) => {
+      const response = await api.delete(
+        `/apps/${params.appId}/revenuecat/entitlements/${params.entitlementId}`,
+      );
+      return response.data;
+    },
+    onSuccess: (_d, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcEntitlements(variables.appId),
+      });
+    },
+  });
+}
+
+export function useAttachProductsToEntitlement() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+      entitlementId: string;
+      product_ids: string[];
+    }) => {
+      const response = await api.post(
+        `/apps/${params.appId}/revenuecat/entitlements/${params.entitlementId}/attach`,
+        { product_ids: params.product_ids },
+      );
+      return response.data;
+    },
+    onSuccess: (_d, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcEntitlements(variables.appId),
+      });
+    },
+  });
+}
+
+export function useDetachProductsFromEntitlement() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+      entitlementId: string;
+      product_ids: string[];
+    }) => {
+      const response = await api.post(
+        `/apps/${params.appId}/revenuecat/entitlements/${params.entitlementId}/detach`,
+        { product_ids: params.product_ids },
+      );
+      return response.data;
+    },
+    onSuccess: (_d, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcEntitlements(variables.appId),
+      });
+    },
+  });
+}
+
+export function useRevenueCatOfferings(appId: string) {
+  return useQuery({
+    queryKey: queryKeys.rcOfferings(appId),
+    queryFn: async (): Promise<RCOffering[]> => {
+      const response = await api.get<RCOffering[]>(
+        `/apps/${appId}/revenuecat/offerings`,
+      );
+      return response.data;
+    },
+    enabled: !!appId,
+  });
+}
+
+export function useCreateRCOffering() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+      lookup_key: string;
+      display_name: string;
+      is_current?: boolean;
+      metadata?: Record<string, unknown>;
+    }) => {
+      const response = await api.post(
+        `/apps/${params.appId}/revenuecat/offerings`,
+        {
+          lookup_key: params.lookup_key,
+          display_name: params.display_name,
+          is_current: params.is_current ?? false,
+          metadata: params.metadata,
+        },
+      );
+      return response.data;
+    },
+    onSuccess: (_d, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcOfferings(variables.appId),
+      });
+    },
+  });
+}
+
+export function useUpdateRCOffering() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+      offeringId: string;
+      display_name?: string;
+      is_current?: boolean;
+      metadata?: Record<string, unknown>;
+    }) => {
+      const response = await api.patch(
+        `/apps/${params.appId}/revenuecat/offerings/${params.offeringId}`,
+        {
+          display_name: params.display_name,
+          is_current: params.is_current,
+          metadata: params.metadata,
+        },
+      );
+      return response.data;
+    },
+    onSuccess: (_d, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcOfferings(variables.appId),
+      });
+    },
+  });
+}
+
+export function useArchiveRCOffering() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { appId: string; offeringId: string }) => {
+      const response = await api.delete(
+        `/apps/${params.appId}/revenuecat/offerings/${params.offeringId}`,
+      );
+      return response.data;
+    },
+    onSuccess: (_d, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcOfferings(variables.appId),
+      });
+    },
+  });
+}
+
+export function useRevenueCatPackages(appId: string, offeringId: string) {
+  return useQuery({
+    queryKey: queryKeys.rcPackages(appId, offeringId),
+    queryFn: async (): Promise<RCPackage[]> => {
+      const response = await api.get<RCPackage[]>(
+        `/apps/${appId}/revenuecat/offerings/${offeringId}/packages`,
+      );
+      return response.data;
+    },
+    enabled: !!appId && !!offeringId,
+  });
+}
+
+export function useCreateRCPackage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+      offeringId: string;
+      lookup_key: string;
+      display_name: string;
+      position?: number;
+    }) => {
+      const response = await api.post(
+        `/apps/${params.appId}/revenuecat/offerings/${params.offeringId}/packages`,
+        {
+          lookup_key: params.lookup_key,
+          display_name: params.display_name,
+          position: params.position,
+        },
+      );
+      return response.data;
+    },
+    onSuccess: (_d, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcPackages(variables.appId, variables.offeringId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcOfferings(variables.appId),
+      });
+    },
+  });
+}
+
+export function useDeleteRCPackage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+      offeringId: string;
+      packageId: string;
+    }) => {
+      const response = await api.delete(
+        `/apps/${params.appId}/revenuecat/offerings/${params.offeringId}/packages/${params.packageId}`,
+      );
+      return response.data;
+    },
+    onSuccess: (_d, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcPackages(variables.appId, variables.offeringId),
+      });
+    },
+  });
+}
+
+export function useAttachProductsToPackage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+      offeringId: string;
+      packageId: string;
+      product_ids: string[];
+    }) => {
+      const response = await api.post(
+        `/apps/${params.appId}/revenuecat/offerings/${params.offeringId}/packages/${params.packageId}/attach`,
+        { product_ids: params.product_ids },
+      );
+      return response.data;
+    },
+    onSuccess: (_d, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcPackages(variables.appId, variables.offeringId),
+      });
+    },
+  });
+}
+
+export function useDetachProductsFromPackage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      appId: string;
+      offeringId: string;
+      packageId: string;
+      product_ids: string[];
+    }) => {
+      const response = await api.post(
+        `/apps/${params.appId}/revenuecat/offerings/${params.offeringId}/packages/${params.packageId}/detach`,
+        { product_ids: params.product_ids },
+      );
+      return response.data;
+    },
+    onSuccess: (_d, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.rcPackages(variables.appId, variables.offeringId),
+      });
+    },
   });
 }

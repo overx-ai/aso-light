@@ -621,3 +621,125 @@ export interface LocaleUpsertIn {
   support_url?: string | null;
   privacy_policy_url?: string | null;
 }
+
+// ---- Clone-and-version-bump ----
+
+export interface CloneScope {
+  localizations: boolean;
+  price_schedule: boolean;
+  intro_offers: boolean;
+  screenshot: boolean;
+  auto_archive: boolean;
+  group_availability: boolean;
+}
+
+export interface ClonePreviewResponse {
+  suggested_product_id: string;
+  source_product_id: string;
+  locale_count: number;
+  priced_territory_count: number;
+  intro_offer_count: number;
+  has_screenshot: boolean;
+  revenuecat_connected: boolean;
+  revenuecat_old_product_found: boolean;
+  revenuecat_attached_entitlements: number;
+  revenuecat_attached_packages: number;
+}
+
+export interface CloneRequest {
+  new_product_id: string;
+  new_name?: string | null;
+  scope: CloneScope;
+  swap_revenuecat: boolean;
+}
+
+export interface CloneStepStatus {
+  name: string;
+  status: "pending" | "running" | "done" | "skipped" | "failed" | "partial";
+  detail?: string | null;
+  completed?: number | null;
+  total?: number | null;
+}
+
+export interface CloneOperationOut {
+  id: number;
+  app_id: number;
+  source_kind: "subscription" | "iap";
+  source_local_id: number;
+  source_product_id: string;
+  target_product_id: string;
+  source_asc_id: string;
+  target_asc_id: string | null;
+  scope: CloneScope;
+  asc_steps: CloneStepStatus[];
+  revenuecat_steps: CloneStepStatus[];
+  status: "pending" | "partial" | "done" | "failed";
+  error_log: string[];
+  created_at: string;
+  completed_at: string | null;
+}
+
+// ---- RevenueCat ----
+
+export interface RevenueCatCredentialResponse {
+  id: number;
+  name: string;
+  project_id: string;
+  rc_app_id: string | null;
+  created_at: string;
+}
+
+export interface RevenueCatCredentialCreate {
+  name: string;
+  project_id: string;
+  rc_app_id?: string | null;
+  secret_key: string;
+}
+
+export interface RCConnectionTestResponse {
+  success: boolean;
+  message: string;
+  apps_count?: number | null;
+}
+
+export interface RCProduct {
+  id: string;
+  store_identifier: string;
+  type?: string | null;
+  display_name?: string | null;
+  app_id?: string | null;
+  is_archived?: boolean | null;
+}
+
+export interface RCEntitlement {
+  id: string;
+  lookup_key: string;
+  display_name?: string | null;
+  is_archived?: boolean | null;
+  products?: Array<{
+    id?: string;
+    store_identifier?: string;
+    display_name?: string;
+  }>;
+}
+
+export interface RCOffering {
+  id: string;
+  lookup_key: string;
+  display_name?: string | null;
+  is_current?: boolean | null;
+  is_archived?: boolean | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface RCPackage {
+  id: string;
+  lookup_key: string;
+  display_name?: string | null;
+  position?: number | null;
+  products?: Array<{
+    id?: string;
+    store_identifier?: string;
+    display_name?: string;
+  }>;
+}
