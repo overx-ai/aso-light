@@ -17,6 +17,7 @@ from app.api.v1.pricing import router as pricing_router
 from app.api.v1.revenuecat import router as revenuecat_router
 from app.api.v1.reviews import router as reviews_router
 from app.api.v1.territories import router as territories_router
+from app.api.v1.visibility import router as visibility_router
 
 router = APIRouter()
 
@@ -29,6 +30,7 @@ router.include_router(revenuecat_router, prefix="/apps", tags=["revenuecat"])
 router.include_router(availability_router, prefix="/apps", tags=["availability"])
 router.include_router(metadata_router, prefix="/apps", tags=["metadata"])
 router.include_router(reviews_router, prefix="/apps", tags=["reviews"])
+router.include_router(visibility_router, prefix="/apps", tags=["visibility"])
 router.include_router(keywords_router, tags=["keywords"])
 router.include_router(metadata_keywords_router, prefix="/keywords", tags=["keywords"])
 router.include_router(territories_router, prefix="/territories", tags=["territories"])

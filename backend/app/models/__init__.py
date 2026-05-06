@@ -15,6 +15,11 @@ from app.models.revenuecat_credential import RevenueCatCredential
 from app.models.subscription import Subscription, SubscriptionGroup, SubscriptionPrice
 from app.models.territory import Territory
 from app.models.user import User
+from app.models.visibility import (
+    KeywordVisibilityResult,
+    KeywordVisibilitySnapshot,
+    KeywordVisibilityWatch,
+)
 
 __all__ = [
     "App",
@@ -38,4 +43,7 @@ __all__ = [
     "SubscriptionPrice",
     "Territory",
     "User",
+    "KeywordVisibilityResult",
+    "KeywordVisibilitySnapshot",
+    "KeywordVisibilityWatch",
 ]

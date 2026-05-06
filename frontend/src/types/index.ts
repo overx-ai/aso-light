@@ -659,6 +659,66 @@ export interface ReplyIn {
   body: string;
 }
 
+// ---- Keyword visibility tracker ----
+
+export interface VisibilityResultOut {
+  position: number;
+  track_id: string;
+  name: string;
+  bundle_id: string;
+  icon_url: string;
+}
+
+export interface VisibilitySnapshotOut {
+  id: number;
+  polled_at: string;
+  results_count: number;
+  results: VisibilityResultOut[];
+}
+
+export interface VisibilityWatchOut {
+  id: number;
+  text: string;
+  country: string;
+  last_polled_at: string | null;
+  latest_snapshot: VisibilitySnapshotOut | null;
+}
+
+export interface VisibilityWatchListOut {
+  items: VisibilityWatchOut[];
+}
+
+export interface VisibilitySnapshotListOut {
+  items: VisibilitySnapshotOut[];
+}
+
+export interface VisibilityWatchCreate {
+  text: string;
+  country: string;
+}
+
+export interface SovEntry {
+  track_id: string;
+  name: string;
+  icon_url: string;
+  appearances: number;
+  polls: number;
+  sov_pct: number;
+}
+
+export interface SovOut {
+  watch_id: number;
+  text: string;
+  country: string;
+  polls: number;
+  days: number;
+  entries: SovEntry[];
+}
+
+export interface FullSovOut {
+  items: SovOut[];
+}
+
 export interface LocaleUpsertIn {
   name?: string | null;
   subtitle?: string | null;

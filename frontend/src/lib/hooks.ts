@@ -85,6 +85,11 @@ import type {
   TranslateReviewOut,
   ReplyIn,
   ReplyTone,
+  VisibilityWatchListOut,
+  VisibilitySnapshotOut,
+  VisibilitySnapshotListOut,
+  VisibilityWatchCreate,
+  FullSovOut,
 } from "@/types";
 
 // ---- Query Keys ----
@@ -156,6 +161,12 @@ export const queryKeys = {
     ] as const,
   review: (appId: number, reviewId: string) =>
     ["review", appId, reviewId] as const,
+  visibilityWatches: (appId: number) =>
+    ["visibility-watches", appId] as const,
+  visibilitySnapshots: (appId: number, watchId: number) =>
+    ["visibility-snapshots", appId, watchId] as const,
+  visibilitySov: (appId: number, days: number) =>
+    ["visibility-sov", appId, days] as const,
 };
 
 // ---- Credential Hooks ----
@@ -2903,6 +2914,138 @@ export function useDeleteReply(appId: number) {
       notifications.show({
         title: "Delete failed",
         message: ascErrorMessage(error, "Could not delete the reply."),
+        color: "red",
+      });
+    },
+  });
+}
+
+// ---- Keyword Visibility Tracker ----
+
+export function useVisibilityWatches(appId: number) {
+  return useQuery({
+    queryKey: queryKeys.visibilityWatches(appId),
+    queryFn: async () => {
+      const response = await api.get<VisibilityWatchListOut>(
+        `/apps/${appId}/visibility/watches`,
+      );
+      return response.data;
+    },
+    enabled: appId > 0,
+  });
+}
+
+export function useVisibilitySnapshots(
+  appId: number,
+  watchId: number,
+  days = 30,
+) {
+  return useQuery({
+    queryKey: queryKeys.visibilitySnapshots(appId, watchId),
+    queryFn: async () => {
+      const response = await api.get<VisibilitySnapshotListOut>(
+        `/apps/${appId}/visibility/watches/${watchId}/snapshots`,
+        { params: { days } },
+      );
+      return response.data;
+    },
+    enabled: appId > 0 && watchId > 0,
+  });
+}
+
+export function useVisibilitySov(appId: number, days = 30) {
+  return useQuery({
+    queryKey: queryKeys.visibilitySov(appId, days),
+    queryFn: async () => {
+      const response = await api.get<FullSovOut>(
+        `/apps/${appId}/visibility/sov`,
+        { params: { days } },
+      );
+      return response.data;
+    },
+    enabled: appId > 0,
+  });
+}
+
+function invalidateVisibility(
+  queryClient: ReturnType<typeof useQueryClient>,
+  appId: number,
+): void {
+  queryClient.invalidateQueries({
+    queryKey: queryKeys.visibilityWatches(appId),
+  });
+  queryClient.invalidateQueries({ queryKey: ["visibility-snapshots", appId] });
+  queryClient.invalidateQueries({ queryKey: ["visibility-sov", appId] });
+}
+
+export function useAddVisibilityWatch(appId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: VisibilityWatchCreate) => {
+      const response = await api.post(
+        `/apps/${appId}/visibility/watches`,
+        body,
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      invalidateVisibility(queryClient, appId);
+      notifications.show({
+        title: "Watch added",
+        message: "Tracking visibility for this keyword.",
+        color: "green",
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Could not add",
+        message: ascErrorMessage(error, "Failed to add watch."),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useDeleteVisibilityWatch(appId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (watchId: number) => {
+      await api.delete(`/apps/${appId}/visibility/watches/${watchId}`);
+    },
+    onSuccess: () => {
+      invalidateVisibility(queryClient, appId);
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Delete failed",
+        message: ascErrorMessage(error, "Could not remove watch."),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function usePollVisibilityWatch(appId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (watchId: number): Promise<VisibilitySnapshotOut> => {
+      const response = await api.post<VisibilitySnapshotOut>(
+        `/apps/${appId}/visibility/watches/${watchId}/poll`,
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      invalidateVisibility(queryClient, appId);
+      notifications.show({
+        title: "Snapshot recorded",
+        message: "iTunes search captured.",
+        color: "green",
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Poll failed",
+        message: ascErrorMessage(error, "Could not poll iTunes."),
         color: "red",
       });
     },

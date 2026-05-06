@@ -11,6 +11,7 @@ import AvailabilityPage from "@/pages/AvailabilityPage";
 import MetadataPage from "@/pages/MetadataPage";
 import CrossLocalizationPage from "@/pages/CrossLocalizationPage";
 import ReviewsPage from "@/pages/ReviewsPage";
+import VisibilityPage from "@/pages/VisibilityPage";
 import SettingsPage from "@/pages/SettingsPage";
 import RevenueCatSettingsPage from "@/pages/RevenueCatSettingsPage";
 import RevenueCatEntitlementsPage from "@/pages/RevenueCatEntitlementsPage";
@@ -33,6 +34,7 @@ export default function App() {
             element={<CrossLocalizationPage />}
           />
           <Route path="apps/:id/reviews" element={<ReviewsPage />} />
+          <Route path="apps/:id/visibility" element={<VisibilityPage />} />
           <Route
             path="apps/:id/revenuecat"
             element={<Navigate to="entitlements" replace />}
