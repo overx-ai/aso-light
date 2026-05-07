@@ -18,7 +18,10 @@ from app.services.asa.errors import ASAAPIError
 ASA_AUDIENCE: Final[str] = "https://appleid.apple.com"
 ASA_TOKEN_URL: Final[str] = "https://appleid.apple.com/auth/oauth2/token"
 ASA_OAUTH_SCOPE: Final[str] = "searchadsorg"
-CLIENT_SECRET_TTL_SECONDS: Final[int] = 30 * 60  # 30 min
+# 2 hours — outlives Apple's 1h access token so a 401-triggered refresh
+# always has a valid client_secret without needing to re-decrypt the
+# private key. Apple allows up to 180 days; we keep this conservative.
+CLIENT_SECRET_TTL_SECONDS: Final[int] = 2 * 60 * 60
 
 
 def build_client_secret(
@@ -32,7 +35,7 @@ def build_client_secret(
     """Sign an ES256 JWT used as the OAuth2 client_secret.
 
     Apple requires sub=client_id, iss=team_id, aud=appleid.apple.com,
-    short exp (≤180 days, we pick 30 min), and the kid in the header.
+    a short-ish exp (≤180 days), and the kid in the header.
     """
     iat = int(now if now is not None else time.time())
     payload = {
