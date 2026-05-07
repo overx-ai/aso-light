@@ -6,7 +6,7 @@ layer; they are not bound to a single ORM table.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -80,10 +80,10 @@ class ASACampaignOut(BaseModel):
     app_adam_id: str
     name: str
     status: str
-    supply_sources_json: list[Any] | None = None
+    supply_sources: list[Any] | None = None
     daily_budget_amount: Decimal | None = None
     daily_budget_currency: str | None = None
-    storefronts_json: list[Any] | None = None
+    storefronts: list[Any] | None = None
     archived_at: datetime | None = None
 
 
@@ -97,7 +97,7 @@ class ASAAdGroupOut(BaseModel):
     status: str
     default_bid_amount: Decimal | None = None
     default_bid_currency: str | None = None
-    age_range_json: dict[str, Any] | None = None
+    age_range: dict[str, Any] | None = None
     gender: str | None = None
     device_class: str | None = None
     archived_at: datetime | None = None
@@ -118,6 +118,9 @@ class ASAKeywordOut(BaseModel):
 
 
 class ASANegativeKeywordOut(BaseModel):
+    """`scope` is read from the model's derived property (the column was
+    dropped in favor of deriving from which FK is non-null)."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -125,8 +128,8 @@ class ASANegativeKeywordOut(BaseModel):
     ad_group_id: int | None = None
     asa_negative_keyword_id: int
     text: str
-    match_type: str
-    scope: str  # CAMPAIGN | AD_GROUP
+    match_type: Literal["BROAD", "EXACT"]
+    scope: Literal["CAMPAIGN", "AD_GROUP"]
 
 
 class ASASearchTermOut(BaseModel):
@@ -148,10 +151,10 @@ class ASAMetricRow(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    dim_kind: str  # CAMPAIGN | AD_GROUP | KEYWORD | SEARCH_TERM
+    dim_kind: Literal["CAMPAIGN", "AD_GROUP", "KEYWORD", "SEARCH_TERM"]
     dim_id: int
     app_adam_id: str
-    date: datetime
+    date: date
     storefront: str | None = None
     impressions: int = 0
     taps: int = 0
