@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,8 +51,8 @@ class ASATestResult(BaseModel):
     """Result of POST /asa/credentials/{id}/test — a no-cost auth check."""
 
     ok: bool
-    message: str
-    orgs_found: int = 0
+    orgs_visible: int = 0
+    detail: str | None = None
 
 
 # ---------- dimensions ----------
@@ -167,46 +167,35 @@ class ASAMetricRow(BaseModel):
 
 
 class ASAPerformanceReportOut(BaseModel):
-    """Aggregated paid performance over a window, grouped by `group_by`."""
+    """Aggregated paid performance over a window, at one dimension grain."""
 
-    group_by: str  # campaign | ad_group | keyword
-    start_date: datetime
-    end_date: datetime
+    grain: Literal["CAMPAIGN", "AD_GROUP", "KEYWORD"]
+    time_range: dict[str, str]  # {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}
     rows: list[ASAMetricRow]
 
 
 class ASASearchTermReportOut(BaseModel):
-    """Search-term report for an ad group or campaign."""
+    """Search-term report joined with metrics for an app's ad groups."""
 
-    ad_group_id: int | None = None
-    campaign_id: int | None = None
-    start_date: datetime
-    end_date: datetime
-    rows: list[ASAMetricRow]
+    time_range: dict[str, str]
+    rows: list[dict[str, Any]]
 
 
 class PaidOrganicJoinRow(BaseModel):
-    """One row of the keyword × storefront paid+organic join.
+    """One row joining a tracked organic keyword with its 30-day paid metrics.
 
-    `paid_*` columns come from ASAMetricDaily (KEYWORD grain).
-    `organic_*` columns come from the visibility tracker / KeywordRanking.
-    Either side may be NULL when only one source has data for the pair.
+    `term` and `organic_rank` come from `keyword_tracking`. `paid_*_30d`
+    are summed from `asa_metric_daily` over the window. Paid columns are
+    zero when the term has no matching ASA keyword (or zero traffic).
     """
 
-    keyword: str
-    match_type: str | None = None
-    storefront: str
-    # paid side
-    paid_impressions: int | None = None
-    paid_taps: int | None = None
-    paid_installs: int | None = None
-    paid_spend_amount: Decimal | None = None
-    paid_spend_currency: str | None = None
-    paid_avg_cpa: Decimal | None = None
-    paid_avg_cpt: Decimal | None = None
-    # organic side
+    term: str
     organic_rank: int | None = None
-    organic_visibility_pct: Decimal | None = None
+    paid_impressions_30d: int = 0
+    paid_taps_30d: int = 0
+    paid_installs_30d: int = 0
+    paid_spend_30d: Decimal = Decimal("0")
+    paid_spend_currency: str | None = None
 
 
 # ---------- mutations ----------
@@ -216,31 +205,33 @@ class NegativeKeywordIn(BaseModel):
     """One negative keyword in a bulk-add request."""
 
     text: str = Field(min_length=1, max_length=255)
-    match_type: str = Field(pattern="^(BROAD|EXACT)$")
+    match_type: Literal["BROAD", "EXACT"]
 
 
 class AddNegativeKeywordsRequest(BaseModel):
-    """Bulk-add negatives to either a campaign or an ad group (XOR)."""
+    """Bulk-add negatives at either CAMPAIGN or AD_GROUP scope.
 
-    campaign_id: int | None = None
-    ad_group_id: int | None = None
-    keywords: list[NegativeKeywordIn] = Field(min_length=1)
+    `scope_id` is the local row id of the campaign or ad group (not the
+    Apple-side id). The downstream handler resolves the org and Apple ids
+    from there.
+    """
+
+    scope: Literal["CAMPAIGN", "AD_GROUP"]
+    scope_id: int
+    keywords: list[NegativeKeywordIn] = Field(min_length=1, max_length=200)
 
 
 # ---------- sync ops ----------
 
 
 class ASASyncOperationOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    """Per-step result of `asa.sync` — mirrors the CloneOperation pattern."""
 
     id: int
     credential_id: int
-    user_id: int
     status: str
     full_backfill: bool
-    steps_json: list[Any] | None = None
-    error_log_json: list[Any] | None = None
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+    error_log: list[str] = Field(default_factory=list)
     started_at: datetime | None = None
     completed_at: datetime | None = None
-    created_at: datetime
-    updated_at: datetime
