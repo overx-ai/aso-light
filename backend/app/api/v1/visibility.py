@@ -15,7 +15,6 @@ from app.api.v1._deps import _get_verified_app
 from app.core.security import get_current_user
 from app.db.session import get_session
 from app.models.visibility import (
-    KeywordVisibilityResult,
     KeywordVisibilitySnapshot,
     KeywordVisibilityWatch,
 )
@@ -34,7 +33,7 @@ from app.schemas.visibility import (
     WatchOut,
 )
 from app.services.visibility.anomaly import detect_anomalies
-from app.services.visibility.poller import MAX_RESULTS_PER_SNAPSHOT, poll_watch
+from app.services.visibility.poller import poll_watch
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -77,6 +76,28 @@ async def _latest_snapshot(
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
+async def _snapshots_by_watch_in_window(
+    session: AsyncSession,
+    watch_ids: list[int],
+    since: datetime,
+) -> dict[int, list[KeywordVisibilitySnapshot]]:
+    """Batch-load snapshots (with results eager-loaded) since ``since``,
+    ordered newest-first, grouped by watch_id."""
+    stmt = (
+        select(KeywordVisibilitySnapshot)
+        .where(
+            KeywordVisibilitySnapshot.watch_id.in_(watch_ids),
+            KeywordVisibilitySnapshot.polled_at >= since,
+        )
+        .order_by(desc(KeywordVisibilitySnapshot.polled_at))
+        .options(selectinload(KeywordVisibilitySnapshot.results))
+    )
+    grouped: dict[int, list[KeywordVisibilitySnapshot]] = {wid: [] for wid in watch_ids}
+    for snap in (await session.execute(stmt)).scalars().all():
+        grouped[snap.watch_id].append(snap)
+    return grouped
+
+
 def _serialize_snapshot(
     snap: KeywordVisibilitySnapshot,
 ) -> VisibilitySnapshotOut:
@@ -106,10 +127,28 @@ async def list_watches(
         .order_by(KeywordVisibilityWatch.text)
     )
     watches = (await session.execute(stmt)).scalars().all()
+    if not watches:
+        return WatchListOut(items=[])
+
+    # Batch: fetch all snapshots for these watches in one query (with results
+    # eager-loaded), then pick the newest per watch in Python. Beats N+1.
+    watch_ids = [w.id for w in watches]
+    snaps_stmt = (
+        select(KeywordVisibilitySnapshot)
+        .where(KeywordVisibilitySnapshot.watch_id.in_(watch_ids))
+        .order_by(desc(KeywordVisibilitySnapshot.polled_at))
+        .options(selectinload(KeywordVisibilitySnapshot.results))
+    )
+    all_snaps = (await session.execute(snaps_stmt)).scalars().all()
+    latest_by_watch: dict[int, KeywordVisibilitySnapshot] = {}
+    for snap in all_snaps:
+        # Sorted desc above, so the first one we see per watch_id is the newest.
+        if snap.watch_id not in latest_by_watch:
+            latest_by_watch[snap.watch_id] = snap
 
     items: list[WatchOut] = []
     for w in watches:
-        snap = await _latest_snapshot(session, w.id)
+        snap = latest_by_watch.get(w.id)
         items.append(
             WatchOut(
                 id=w.id,
@@ -161,7 +200,6 @@ async def create_watch(
         app_id=app_id, text=text, country=country,
     )
     session.add(watch)
-    await session.flush()
     await session.commit()
 
     return WatchOut(
@@ -267,20 +305,20 @@ def _compute_sov_for_watch(
         lambda: {"appearances": 0, "name": "", "icon_url": ""},
     )
     for snap in snapshots:
-        for r in sorted(snap.results, key=lambda x: x.position)[:SOV_TOP_N]:
-            entry = counts[r.track_id]
+        for result in sorted(snap.results, key=lambda x: x.position)[:SOV_TOP_N]:
+            entry = counts[result.track_id]
             entry["appearances"] += 1
-            entry["name"] = r.name
-            entry["icon_url"] = r.icon_url
+            entry["name"] = result.name
+            entry["icon_url"] = result.icon_url
 
-    entries: list[SovEntry] = [
+    entries = [
         SovEntry(
             track_id=track_id,
             name=info["name"],
             icon_url=info["icon_url"],
             appearances=info["appearances"],
             polls=polls,
-            sov_pct=round(info["appearances"] / polls * 100, 2) if polls else 0.0,
+            sov_pct=round(info["appearances"] / polls * 100, 2),
         )
         for track_id, info in counts.items()
     ]
@@ -311,18 +349,13 @@ async def list_anomalies(
         return AnomaliesOut(items=[])
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
+    by_watch = await _snapshots_by_watch_in_window(
+        session, [w.id for w in watches], since,
+    )
+
     items: list[WatchAnomaliesOut] = []
     for w in watches:
-        snap_stmt = (
-            select(KeywordVisibilitySnapshot)
-            .where(
-                KeywordVisibilitySnapshot.watch_id == w.id,
-                KeywordVisibilitySnapshot.polled_at >= since,
-            )
-            .order_by(desc(KeywordVisibilitySnapshot.polled_at))
-            .options(selectinload(KeywordVisibilitySnapshot.results))
-        )
-        snaps = (await session.execute(snap_stmt)).scalars().all()
+        snaps = by_watch.get(w.id, [])
         anomalies = detect_anomalies(snaps, min_delta=min_delta)
         items.append(
             WatchAnomaliesOut(
@@ -365,18 +398,13 @@ async def share_of_voice(
         return FullSovOut(items=[])
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
+    by_watch = await _snapshots_by_watch_in_window(
+        session, [w.id for w in watches], since,
+    )
+
     items: list[SovOut] = []
     for w in watches:
-        snap_stmt = (
-            select(KeywordVisibilitySnapshot)
-            .where(
-                KeywordVisibilitySnapshot.watch_id == w.id,
-                KeywordVisibilitySnapshot.polled_at >= since,
-            )
-            .options(selectinload(KeywordVisibilitySnapshot.results))
-        )
-        snaps = (await session.execute(snap_stmt)).scalars().all()
-        polls, entries = _compute_sov_for_watch(snaps)
+        polls, entries = _compute_sov_for_watch(by_watch.get(w.id, []))
         items.append(
             SovOut(
                 watch_id=w.id,

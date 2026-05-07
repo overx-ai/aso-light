@@ -53,14 +53,15 @@ export default function AsoCheckPage() {
   const [locale, setLocale] = useState<string>("any");
 
   const localeOptions = useMemo(() => {
-    if (!auditQuery.data) return [{ value: "any", label: "Any locale" }];
-    const set = new Set<string>();
-    for (const i of auditQuery.data.items) {
-      if (i.locale) set.add(i.locale);
+    const base = [{ value: "any", label: "Any locale" }];
+    if (!auditQuery.data) return base;
+    const locales = new Set<string>();
+    for (const issue of auditQuery.data.items) {
+      if (issue.locale) locales.add(issue.locale);
     }
     return [
-      { value: "any", label: "Any locale" },
-      ...Array.from(set)
+      ...base,
+      ...Array.from(locales)
         .sort()
         .map((l) => ({ value: l, label: l })),
     ];

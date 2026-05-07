@@ -168,11 +168,9 @@ export default function ReviewDrawer({
   };
 
   const charsLeft = RESPONSE_BODY_MAX_LEN - reply.length;
-  const counterColor = overLimit
-    ? "red"
-    : reply.length > RESPONSE_BODY_MAX_LEN * 0.9
-      ? "yellow"
-      : "green";
+  let counterColor: "red" | "yellow" | "green" = "green";
+  if (overLimit) counterColor = "red";
+  else if (reply.length > RESPONSE_BODY_MAX_LEN * 0.9) counterColor = "yellow";
 
   return (
     <Drawer

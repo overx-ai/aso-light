@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   ActionIcon,
@@ -37,37 +37,21 @@ import {
 import type { AnomalyKind, VisibilityWatchOut } from "@/types";
 import VisibilityDrawer from "@/components/visibility/VisibilityDrawer";
 
-function AnomalyBadge({
-  kind,
-  delta,
-}: {
-  kind: AnomalyKind;
-  delta: number;
-}) {
-  if (kind === "surge") {
-    return (
-      <Badge size="xs" color="green" variant="filled" w={70}>
-        ↑ {Math.abs(delta)}
-      </Badge>
-    );
-  }
-  if (kind === "drop") {
-    return (
-      <Badge size="xs" color="red" variant="filled" w={70}>
-        ↓ {Math.abs(delta)}
-      </Badge>
-    );
-  }
-  if (kind === "new") {
-    return (
-      <Badge size="xs" color="blue" variant="light" w={70}>
-        new
-      </Badge>
-    );
-  }
+const ANOMALY_BADGE: Record<
+  AnomalyKind,
+  { color: string; variant: "filled" | "light"; label: (delta: number) => string }
+> = {
+  surge: { color: "green", variant: "filled", label: (d) => `↑ ${Math.abs(d)}` },
+  drop: { color: "red", variant: "filled", label: (d) => `↓ ${Math.abs(d)}` },
+  new: { color: "blue", variant: "light", label: () => "new" },
+  gone: { color: "gray", variant: "light", label: () => "gone" },
+};
+
+function AnomalyBadge({ kind, delta }: { kind: AnomalyKind; delta: number }) {
+  const cfg = ANOMALY_BADGE[kind];
   return (
-    <Badge size="xs" color="gray" variant="light" w={70}>
-      gone
+    <Badge size="xs" color={cfg.color} variant={cfg.variant} w={70}>
+      {cfg.label(delta)}
     </Badge>
   );
 }
@@ -107,10 +91,7 @@ export default function VisibilityPage() {
   const [selected, setSelected] = useState<VisibilityWatchOut | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const watches = useMemo(
-    () => watchesQuery.data?.items ?? [],
-    [watchesQuery.data],
-  );
+  const watches = watchesQuery.data?.items ?? [];
 
   if (!Number.isFinite(appId) || appId <= 0) {
     return (

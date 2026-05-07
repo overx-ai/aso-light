@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +32,19 @@ from app.services.reviews.draft import draft_reply
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@contextmanager
+def _asc_to_502(action: str) -> Iterator[None]:
+    """Translate any ASCAPIError raised in the block into a 502 HTTPException."""
+    try:
+        yield
+    except ASCAPIError as exc:
+        logger.warning("ASC %s failed: %s", action, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="ASC API error",
+        ) from exc
 
 
 # ASC returns alpha-3 territory codes. Map common ones to a default reply
@@ -133,7 +147,7 @@ async def list_reviews(
 
     async with await _get_asc_client_for_app(app, session) as client:
         svc = ASCReviewService(client)
-        try:
+        with _asc_to_502(f"list reviews for app {app_id}"):
             payload = await svc.list_reviews(
                 app.asc_app_id,
                 territory=territory,
@@ -141,12 +155,6 @@ async def list_reviews(
                 cursor=cursor,
                 limit=limit,
             )
-        except ASCAPIError as exc:
-            logger.warning("ASC list reviews failed for app %s: %s", app_id, exc)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="ASC API error",
-            ) from exc
 
     items_raw = payload.get("data") or []
     included = payload.get("included") or []
@@ -172,13 +180,8 @@ async def get_review(
 
     async with await _get_asc_client_for_app(app, session) as client:
         svc = ASCReviewService(client)
-        try:
+        with _asc_to_502(f"get review {review_id}"):
             payload = await svc.get_review(review_id)
-        except ASCAPIError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="ASC API error",
-            ) from exc
 
     raw = payload.get("data") or {}
     included = payload.get("included") or []
@@ -209,13 +212,8 @@ async def draft_review_reply(
 
     async with await _get_asc_client_for_app(app, session) as client:
         svc = ASCReviewService(client)
-        try:
+        with _asc_to_502(f"get review {review_id} for draft"):
             payload = await svc.get_review(review_id)
-        except ASCAPIError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="ASC API error",
-            ) from exc
 
     review = _serialize_review(payload.get("data") or {})
     if not review.body:
@@ -225,13 +223,23 @@ async def draft_review_reply(
         )
 
     locale = _territory_to_locale(review.territory)
-    suggestion = await draft_reply(
-        api_key=settings.ANTHROPIC_API_KEY,
-        review_body=review.body,
-        review_rating=review.rating,
-        target_locale=locale,
-        tone=body.tone,
-    )
+    try:
+        suggestion = await draft_reply(
+            api_key=settings.ANTHROPIC_API_KEY,
+            review_body=review.body,
+            review_rating=review.rating,
+            target_locale=locale,
+            tone=body.tone,
+        )
+    except Exception as exc:  # noqa: BLE001 — anthropic SDK raises diverse types
+        logger.warning(
+            "Anthropic draft failed for app %s review %s: %s",
+            app_id, review_id, exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="AI drafting service unavailable",
+        ) from exc
     return DraftOut(suggestion=suggestion, locale=locale)
 
 
@@ -257,13 +265,8 @@ async def translate_review(
 
     async with await _get_asc_client_for_app(app, session) as client:
         svc = ASCReviewService(client)
-        try:
+        with _asc_to_502(f"get review {review_id} for translate"):
             payload = await svc.get_review(review_id)
-        except ASCAPIError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="ASC API error",
-            ) from exc
 
     review = _serialize_review(payload.get("data") or {})
     if not review.body:
@@ -278,16 +281,27 @@ async def translate_review(
         return TranslateReviewOut(translation=review.body, cached=True)
 
     translator = AnthropicTranslator(api_key=settings.ANTHROPIC_API_KEY)
-    translation, cached = await translate_with_cache(
-        translator=translator,
-        session=session,
-        app_id=app_id,
-        text=review.body,
-        source_locale=source_locale,
-        target_locale=body.target_locale,
-        # Treat as long-form free text. Reuses the 4000-char limit bucket.
-        field_kind="description",  # type: ignore[arg-type]
-    )
+    try:
+        translation, cached = await translate_with_cache(
+            translator=translator,
+            session=session,
+            app_id=app_id,
+            text=review.body,
+            source_locale=source_locale,
+            target_locale=body.target_locale,
+            # Treat as long-form free text. Reuses the 4000-char limit bucket.
+            field_kind="description",  # type: ignore[arg-type]
+        )
+    except Exception as exc:  # noqa: BLE001 — anthropic SDK raises diverse types
+        await session.rollback()
+        logger.warning(
+            "Anthropic translate failed for app %s review %s: %s",
+            app_id, review_id, exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="AI translation service unavailable",
+        ) from exc
     await session.commit()
     return TranslateReviewOut(translation=translation, cached=cached)
 
@@ -314,14 +328,8 @@ async def create_reply(
 
     async with await _get_asc_client_for_app(app, session) as client:
         svc = ASCReviewService(client)
-        try:
+        with _asc_to_502(f"create reply for review {review_id}"):
             data = await svc.create_response(review_id, body.body)
-        except ASCAPIError as exc:
-            logger.warning("ASC create reply failed for review %s: %s", review_id, exc)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="ASC API error",
-            ) from exc
 
     attrs = data.get("attributes") or {}
     return ReviewResponseOut(
@@ -349,13 +357,8 @@ async def update_reply(
 
     async with await _get_asc_client_for_app(app, session) as client:
         svc = ASCReviewService(client)
-        try:
+        with _asc_to_502(f"update reply {response_id}"):
             data = await svc.update_response(response_id, body.body)
-        except ASCAPIError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="ASC API error",
-            ) from exc
 
     attrs = data.get("attributes") or {}
     return ReviewResponseOut(
@@ -382,10 +385,5 @@ async def delete_reply(
 
     async with await _get_asc_client_for_app(app, session) as client:
         svc = ASCReviewService(client)
-        try:
+        with _asc_to_502(f"delete reply {response_id}"):
             await svc.delete_response(response_id)
-        except ASCAPIError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="ASC API error",
-            ) from exc

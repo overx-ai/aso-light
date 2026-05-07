@@ -10,10 +10,7 @@ import {
   Tooltip,
 } from "@mantine/core";
 import { useVisibilitySnapshots } from "@/lib/hooks";
-import type {
-  VisibilityResultOut,
-  VisibilityWatchOut,
-} from "@/types";
+import type { VisibilityWatchOut } from "@/types";
 
 interface VisibilityDrawerProps {
   appId: number;
@@ -30,19 +27,16 @@ export default function VisibilityDrawer({
 }: VisibilityDrawerProps) {
   const snapshotsQuery = useVisibilitySnapshots(appId, watch?.id ?? 0, 30);
 
-  const latestResults: VisibilityResultOut[] = useMemo(
-    () => watch?.latest_snapshot?.results ?? [],
-    [watch],
-  );
+  const latestResults = watch?.latest_snapshot?.results ?? [];
 
   const positionsByTrack = useMemo(() => {
-    if (!snapshotsQuery.data) return new Map<string, number[]>();
     const map = new Map<string, number[]>();
+    if (!snapshotsQuery.data) return map;
     for (const snap of snapshotsQuery.data.items) {
-      for (const r of snap.results) {
-        const arr = map.get(r.track_id) ?? [];
-        arr.push(r.position);
-        map.set(r.track_id, arr);
+      for (const result of snap.results) {
+        const arr = map.get(result.track_id) ?? [];
+        arr.push(result.position);
+        map.set(result.track_id, arr);
       }
     }
     return map;

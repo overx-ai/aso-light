@@ -69,24 +69,24 @@ def detect_anomalies(
     history: dict[str, list[int]] = {}
     history_meta: dict[str, KeywordVisibilityResult] = {}
     for snap in prior:
-        for r in snap.results:
-            history.setdefault(r.track_id, []).append(r.position)
-            history_meta[r.track_id] = r
+        for result in snap.results:
+            history.setdefault(result.track_id, []).append(result.position)
+            history_meta[result.track_id] = result
 
-    out: list[Anomaly] = []
+    anomalies: list[Anomaly] = []
 
     # Tracks present in latest
-    for track_id, latest_r in latest_idx.items():
+    for track_id, latest_result in latest_idx.items():
         positions = history.get(track_id, [])
         if not positions:
-            out.append(
+            anomalies.append(
                 Anomaly(
                     kind="new",
                     track_id=track_id,
-                    name=latest_r.name,
-                    icon_url=latest_r.icon_url,
+                    name=latest_result.name,
+                    icon_url=latest_result.icon_url,
                     prev_median_position=None,
-                    latest_position=latest_r.position,
+                    latest_position=latest_result.position,
                     delta=0,
                 )
             )
@@ -94,29 +94,27 @@ def detect_anomalies(
         if len(positions) < history_min:
             continue
         prev_med = int(round(median(positions)))
-        delta = latest_r.position - prev_med
+        delta = latest_result.position - prev_med
         if abs(delta) >= min_delta:
-            out.append(
+            anomalies.append(
                 Anomaly(
                     kind="surge" if delta < 0 else "drop",
                     track_id=track_id,
-                    name=latest_r.name,
-                    icon_url=latest_r.icon_url,
+                    name=latest_result.name,
+                    icon_url=latest_result.icon_url,
                     prev_median_position=prev_med,
-                    latest_position=latest_r.position,
+                    latest_position=latest_result.position,
                     delta=delta,
                 )
             )
 
     # Tracks that vanished from latest
     for track_id, positions in history.items():
-        if track_id in latest_idx:
-            continue
-        if len(positions) < history_min:
+        if track_id in latest_idx or len(positions) < history_min:
             continue
         prev_med = int(round(median(positions)))
         meta = history_meta[track_id]
-        out.append(
+        anomalies.append(
             Anomaly(
                 kind="gone",
                 track_id=track_id,
@@ -129,9 +127,6 @@ def detect_anomalies(
         )
 
     # Most "interesting" anomalies first: surges/drops by |delta|, then new, then gone.
-    def sort_key(a: Anomaly) -> tuple[int, int]:
-        kind_rank = {"surge": 0, "drop": 1, "new": 2, "gone": 3}[a.kind]
-        return (kind_rank, -abs(a.delta))
-
-    out.sort(key=sort_key)
-    return out
+    _KIND_RANK = {"surge": 0, "drop": 1, "new": 2, "gone": 3}
+    anomalies.sort(key=lambda a: (_KIND_RANK[a.kind], -abs(a.delta)))
+    return anomalies

@@ -244,11 +244,9 @@ def _check_keyword_quality(
     - duplicate words already in name or subtitle (Apple already indexes those)
     """
     out: list[Issue] = []
-    by_locale_ai = {r.locale: r for r in app_info if r.kind == "app_info"}
+    by_locale_ai = {r.locale: r for r in app_info}
 
     for ver in versions:
-        if ver.kind != "version":
-            continue
         kws = _split_keywords(ver.keywords)
         if not kws:
             continue

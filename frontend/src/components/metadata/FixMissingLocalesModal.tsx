@@ -181,6 +181,12 @@ export default function FixMissingLocalesModal({
       })),
     );
 
+    const updateRow = (locale: string, patch: Partial<RowResult>) => {
+      setResults((prev) =>
+        prev.map((r) => (r.locale === locale ? { ...r, ...patch } : r)),
+      );
+    };
+
     let translateOut: TranslateOut;
     try {
       translateOut = await translateMutation.mutateAsync({
@@ -209,6 +215,24 @@ export default function FixMissingLocalesModal({
     let appliedVersion = 0;
     let failedCount = 0;
 
+    const postSide = async (
+      side: "appInfo" | "version",
+      locale: string,
+      url: string,
+      body: LocaleUpsertIn,
+    ): Promise<boolean> => {
+      updateRow(locale, { [side]: "running" });
+      try {
+        await api.post(url, body);
+        updateRow(locale, { [side]: "done" });
+        return true;
+      } catch (err) {
+        failedCount += 1;
+        updateRow(locale, { [side]: "failed", error: ascErr(err) });
+        return false;
+      }
+    };
+
     for (const locale of filteredTargets) {
       const translated = byLocale.get(locale) ?? new Map<string, string>();
 
@@ -235,78 +259,34 @@ export default function FixMissingLocalesModal({
           versionBody.support_url = sourceVersionRow.support_url;
       }
 
-      // app_info side
       if (canCreateAppInfo && Object.keys(appInfoBody).length > 0) {
-        setResults((prev) =>
-          prev.map((r) =>
-            r.locale === locale ? { ...r, appInfo: "running" } : r,
-          ),
-        );
-        try {
-          await api.post(
+        if (
+          await postSide(
+            "appInfo",
+            locale,
             `/apps/${appId}/metadata/app_info/${locale}`,
             appInfoBody,
-          );
+          )
+        ) {
           appliedAppInfo += 1;
-          setResults((prev) =>
-            prev.map((r) =>
-              r.locale === locale ? { ...r, appInfo: "done" } : r,
-            ),
-          );
-        } catch (err) {
-          failedCount += 1;
-          const msg = ascErr(err);
-          setResults((prev) =>
-            prev.map((r) =>
-              r.locale === locale
-                ? { ...r, appInfo: "failed", error: msg }
-                : r,
-            ),
-          );
         }
       } else if (Object.keys(appInfoBody).length === 0) {
-        setResults((prev) =>
-          prev.map((r) =>
-            r.locale === locale ? { ...r, appInfo: "skipped" } : r,
-          ),
-        );
+        updateRow(locale, { appInfo: "skipped" });
       }
 
-      // version side
       if (canCreateVersion && Object.keys(versionBody).length > 0) {
-        setResults((prev) =>
-          prev.map((r) =>
-            r.locale === locale ? { ...r, version: "running" } : r,
-          ),
-        );
-        try {
-          await api.post(
+        if (
+          await postSide(
+            "version",
+            locale,
             `/apps/${appId}/metadata/version/${locale}`,
             versionBody,
-          );
+          )
+        ) {
           appliedVersion += 1;
-          setResults((prev) =>
-            prev.map((r) =>
-              r.locale === locale ? { ...r, version: "done" } : r,
-            ),
-          );
-        } catch (err) {
-          failedCount += 1;
-          const msg = ascErr(err);
-          setResults((prev) =>
-            prev.map((r) =>
-              r.locale === locale
-                ? { ...r, version: "failed", error: msg }
-                : r,
-            ),
-          );
         }
       } else if (Object.keys(versionBody).length === 0) {
-        setResults((prev) =>
-          prev.map((r) =>
-            r.locale === locale ? { ...r, version: "skipped" } : r,
-          ),
-        );
+        updateRow(locale, { version: "skipped" });
       }
     }
 
@@ -325,14 +305,10 @@ export default function FixMissingLocalesModal({
     });
   };
 
+  const isTerminal = (s: SideStatus) =>
+    s === "done" || s === "failed" || s === "skipped";
   const progressDone = results.filter(
-    (r) =>
-      (r.appInfo === "done" ||
-        r.appInfo === "failed" ||
-        r.appInfo === "skipped") &&
-      (r.version === "done" ||
-        r.version === "failed" ||
-        r.version === "skipped"),
+    (r) => isTerminal(r.appInfo) && isTerminal(r.version),
   ).length;
   const progressPct = results.length
     ? Math.round((progressDone / results.length) * 100)
@@ -492,29 +468,23 @@ export default function FixMissingLocalesModal({
   );
 }
 
+const STATUS_COLOR: Record<SideStatus, string> = {
+  done: "green",
+  failed: "red",
+  running: "blue",
+  skipped: "gray",
+  pending: "gray",
+};
+
 function StatusBadge({ label, status }: { label: string; status: SideStatus }) {
-  const color =
-    status === "done"
-      ? "green"
-      : status === "failed"
-        ? "red"
-        : status === "running"
-          ? "blue"
-          : status === "skipped"
-            ? "gray"
-            : "gray";
-  const variant = status === "pending" ? "light" : "filled";
-  const icon =
-    status === "done" ? (
-      <IconCheck size={10} />
-    ) : status === "failed" ? (
-      <IconX size={10} />
-    ) : null;
+  let icon: React.ReactNode = null;
+  if (status === "done") icon = <IconCheck size={10} />;
+  else if (status === "failed") icon = <IconX size={10} />;
   return (
     <Badge
       size="xs"
-      color={color}
-      variant={variant}
+      color={STATUS_COLOR[status]}
+      variant={status === "pending" ? "light" : "filled"}
       leftSection={icon}
       style={{ minWidth: 90 }}
     >

@@ -41,15 +41,15 @@ async def poll_watch(
     session.add(snapshot)
     await session.flush()
 
-    for r in results[:MAX_RESULTS_PER_SNAPSHOT]:
+    for result in results:
         session.add(
             KeywordVisibilityResult(
                 snapshot_id=snapshot.id,
-                position=int(r.get("position") or 0),
-                track_id=str(r.get("app_id") or ""),
-                name=str(r.get("name") or ""),
-                bundle_id=str(r.get("bundle_id") or ""),
-                icon_url=str(r.get("icon_url") or ""),
+                position=int(result.get("position") or 0),
+                track_id=str(result.get("app_id") or ""),
+                name=str(result.get("name") or ""),
+                bundle_id=str(result.get("bundle_id") or ""),
+                icon_url=str(result.get("icon_url") or ""),
             )
         )
 
