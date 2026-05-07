@@ -2319,6 +2319,46 @@ async def update_subscription_localization(
 
 
 @router.delete(
+    "/{app_id}/subscriptions/{subscription_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_subscription(
+    app_id: int,
+    subscription_id: int,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Delete a subscription.
+
+    Apple permits deletion only when the sub is in DRAFT state and was
+    never submitted. Used by the clone-cleanup flow to remove accidental
+    version-bump shells with no prices and no review submission. Also
+    removes the local cache row so the next ``GET .../subscriptions``
+    sync reflects the new ASC state.
+    """
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    subscription = await _get_verified_subscription(
+        subscription_id, app.id, session,
+    )
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            await pricing_service.delete_subscription(
+                subscription.asc_subscription_id,
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.message,
+            )
+
+    await session.delete(subscription)
+    await session.flush()
+
+
+@router.delete(
     "/{app_id}/subscriptions/{subscription_id}/localizations/{localization_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )

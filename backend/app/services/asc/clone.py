@@ -13,8 +13,12 @@ in ``partial`` state and exposes a per-step retry.
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import json
 import logging
 import re
+from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
@@ -41,24 +45,30 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-_VERSION_SUFFIX_RE = re.compile(r"^(?P<base>.+?)_v(?P<n>\d+)$")
+_DOT_VERSION_SUFFIX_RE = re.compile(r"^(?P<base>.+)\.v(?P<n>\d+)$")
+_UNDERSCORE_VERSION_SUFFIX_RE = re.compile(r"^(?P<base>.+?)_v(?P<n>\d+)$")
 
 
 def next_versioned_product_id(product_id: str) -> str:
-    """Return the next ``_v{n}`` suffix for a productId.
+    """Return the next version suffix for a productId, bumping in place.
 
-    ``com.app.pro``       -> ``com.app.pro_v2``
-    ``com.app.pro_v2``    -> ``com.app.pro_v3``
-    ``com.app.pro_v9``    -> ``com.app.pro_v10``
+    Recognized suffix styles:
 
-    Suffix is always ``_v{n}`` (lowercase); we never alter the base.
+    * ``.v{n}``  -> ``.v{n+1}``     e.g. ``app.pro.v2``  -> ``app.pro.v3``
+    * ``_v{n}``  -> ``_v{n+1}``     e.g. ``app.pro_v2``  -> ``app.pro_v3``
+    * no suffix  -> ``.v2``         e.g. ``app.pro``     -> ``app.pro.v2``
+
+    Default for a fresh bump is ``.v2`` (dot-style). Pre-existing
+    ``_v{n}`` ids keep bumping as ``_v{n+1}`` so we never mix styles
+    within a single productId lineage.
     """
-    match = _VERSION_SUFFIX_RE.match(product_id)
-    if match is None:
-        return f"{product_id}_v2"
-    base = match.group("base")
-    n = int(match.group("n"))
-    return f"{base}_v{n + 1}"
+    match = _DOT_VERSION_SUFFIX_RE.match(product_id)
+    if match is not None:
+        return f"{match.group('base')}.v{int(match.group('n')) + 1}"
+    match = _UNDERSCORE_VERSION_SUFFIX_RE.match(product_id)
+    if match is not None:
+        return f"{match.group('base')}_v{int(match.group('n')) + 1}"
+    return f"{product_id}.v2"
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +87,64 @@ def _alpha2(alpha3: str) -> str | None:
     for a2, a3 in ALPHA2_TO_ALPHA3.items():
         if a3 == alpha3:
             return a2
+    return None
+
+
+def _decode_offer_id(offer_id: str) -> dict[str, Any]:
+    """Decode Apple's opaque introductory-offer ID.
+
+    Apple does NOT populate ``relationships.territory`` or
+    ``relationships.subscriptionPricePoint`` on most intro-offer
+    list responses, but encodes both into the offer's id as a
+    base64-padded JSON blob: ``{"s":sub,"d":epoch,"i":alpha2,"t":tier,"p":price}``.
+    Returns ``{}`` on any decode failure (caller decides how to react).
+    """
+    try:
+        padded = offer_id + "=" * (-len(offer_id) % 4)
+        return json.loads(base64.b64decode(padded).decode("utf-8"))
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return {}
+
+
+def _sanitize_offer_date(value: str | None) -> str | None:
+    """Return ``value`` only if it parses to today or a future date.
+
+    Apple rejects past startDate/endDate on intro offers and tells the
+    caller to pass ``null`` for "effective immediately". Source offers
+    cloned from a long-running sub usually have past dates.
+    """
+    if not value:
+        return None
+    try:
+        parsed = date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+    if parsed < date.today():
+        return None
+    return parsed.isoformat()
+
+
+async def _find_target_price_point_id(
+    pricing: ASCPricingService,
+    target_asc_sub_id: str,
+    territory_alpha3: str,
+    target_customer_price: float,
+) -> str | None:
+    """Look up the new sub's ``price_point_id`` for one (territory, price).
+
+    Apple's price-point IDs encode the *source* sub, so cloned IDs are
+    invalid on the target. We resolve the target's equivalent by listing
+    its price points filtered by territory and matching customer price.
+    Returns ``None`` when no point in the target sub lands within
+    half-a-cent of the source's customer price.
+    """
+    points = await pricing.get_price_points(
+        target_asc_sub_id, territory_code=territory_alpha3,
+    )
+    target = float(target_customer_price)
+    for p in points:
+        if abs(float(p.get("customer_price", 0)) - target) < 0.005:
+            return p.get("price_point_id")
     return None
 
 
@@ -125,7 +193,11 @@ class SubscriptionCloner:
             family_sharable = bool(attrs.get("familySharable", False))
             group_level = int(attrs.get("groupLevel", 1))
             review_note = attrs.get("reviewNote")
-            source_name = attrs.get("name") or source.name
+            # ASC requires the subscription reference name to be unique
+            # within an app, and the source sub still holds its old name
+            # at create-time. Default to the bumped productId (always
+            # globally unique) when the caller didn't override.
+            effective_name = new_name or new_product_id
             steps[-1] = _step(
                 "read_source", "done",
                 detail=(
@@ -167,7 +239,7 @@ class SubscriptionCloner:
                 created = await self.pricing.create_subscription(
                     group_id=group.asc_group_id,
                     product_id=new_product_id,
-                    name=new_name or source_name,
+                    name=effective_name,
                     period=period,
                     family_sharable=family_sharable,
                     group_level=group_level,
@@ -202,7 +274,7 @@ class SubscriptionCloner:
             new_local = Subscription(
                 group_id=group.id,
                 asc_subscription_id=new_asc_id,
-                name=new_name or source_name,
+                name=effective_name,
                 product_id=new_product_id,
             )
             self.session.add(new_local)
@@ -293,31 +365,83 @@ class SubscriptionCloner:
                 errors.append(f"localizations: {exc}")
 
         # Step 5: prices (territory -> price_point)
+        # Apple price-point IDs encode the source sub, so we re-resolve
+        # each (territory, customer_price) against the new sub's points.
+        # Idempotent: skip territories that already have a price on the
+        # target. Apple's price endpoint occasionally returns 5xx; one
+        # retry per territory clears most of those.
         if scope.get("price_schedule", True):
             res = await self.session.execute(
-                select(SubscriptionPrice).where(
-                    SubscriptionPrice.subscription_id == source.id,
-                )
+                select(SubscriptionPrice, Territory)
+                .join(Territory, Territory.id == SubscriptionPrice.territory_id)
+                .where(SubscriptionPrice.subscription_id == source.id)
             )
-            source_prices = res.scalars().all()
+            source_rows = res.all()
+            already_priced_alpha3: set[str] = set()
+            try:
+                existing = await self.pricing.get_subscription_prices(
+                    new_asc_id,
+                )
+                for ep in existing:
+                    code = ep.get("territory_code")
+                    if code:
+                        already_priced_alpha3.add(code)
+            except ASCAPIError as exc:
+                # Probe failure is non-fatal — we just won't be able to
+                # skip already-priced territories on this re-run.
+                logger.debug(
+                    "prices: failed to probe existing prices for %s: %s",
+                    new_asc_id, exc,
+                )
             steps.append(_step(
                 "prices", "running",
-                completed=0, total=len(source_prices),
+                completed=0, total=len(source_rows),
             ))
-            for sp in source_prices:
+            for sp, territory in source_rows:
                 if sp.price_point_id is None:
                     steps[-1]["completed"] += 1
                     continue
-                try:
-                    await self.pricing.create_subscription_price(
-                        subscription_id=new_asc_id,
-                        price_point_id=sp.price_point_id,
+                alpha3 = ALPHA2_TO_ALPHA3.get(territory.code)
+                if alpha3 is None:
+                    errors.append(
+                        f"prices[{territory.code}]: no alpha-3 mapping"
                     )
+                    continue
+                if alpha3 in already_priced_alpha3:
+                    steps[-1]["completed"] += 1
+                    continue
+                try:
+                    target_pp = await _find_target_price_point_id(
+                        self.pricing, new_asc_id, alpha3, sp.customer_price,
+                    )
+                    if target_pp is None:
+                        errors.append(
+                            f"prices[{territory.code}]: no price point for "
+                            f"{sp.customer_price} on target sub"
+                        )
+                        continue
+                    last_exc: ASCAPIError | None = None
+                    for attempt in range(2):
+                        try:
+                            await self.pricing.create_subscription_price(
+                                subscription_id=new_asc_id,
+                                price_point_id=target_pp,
+                            )
+                            last_exc = None
+                            break
+                        except ASCAPIError as exc:
+                            last_exc = exc
+                            if exc.status_code < 500 or attempt == 1:
+                                break
+                            await asyncio.sleep(1.0)
+                    if last_exc is not None:
+                        errors.append(
+                            f"prices[{territory.code}]: {last_exc}"
+                        )
+                        continue
                     steps[-1]["completed"] += 1
                 except ASCAPIError as exc:
-                    errors.append(
-                        f"prices[territory_id={sp.territory_id}]: {exc}"
-                    )
+                    errors.append(f"prices[{territory.code}]: {exc}")
             steps[-1]["status"] = (
                 "done"
                 if steps[-1]["completed"] == steps[-1]["total"]
@@ -325,6 +449,11 @@ class SubscriptionCloner:
             )
 
         # Step 6: intro offers
+        # Same price-point remap as Step 5. Source startDate is often
+        # in the past on long-running subs — Apple rejects past dates,
+        # so we null those out (Apple treats null as "effective now").
+        # Idempotent: skip alpha-2 territories that already have an
+        # intro offer of the same mode on the target sub.
         if scope.get("intro_offers", True):
             try:
                 offers = await (
@@ -332,6 +461,29 @@ class SubscriptionCloner:
                         source.asc_subscription_id,
                     )
                 )
+                target_offer_keys: set[tuple[str, str]] = set()
+                try:
+                    target_offers = await (
+                        self.pricing
+                        .list_subscription_introductory_offers(new_asc_id)
+                    )
+                    for to in target_offers:
+                        td = _decode_offer_id(to["resource"].get("id", ""))
+                        ta2 = td.get("i")
+                        tmode = (
+                            to["resource"].get("attributes", {})
+                            .get("offerMode")
+                        )
+                        if ta2 and tmode:
+                            target_offer_keys.add((ta2, tmode))
+                except ASCAPIError as exc:
+                    # Probe failure is non-fatal — duplicates that already
+                    # exist on the target will surface as 409 below.
+                    logger.debug(
+                        "intro_offers: failed to probe existing offers "
+                        "for %s: %s",
+                        new_asc_id, exc,
+                    )
                 steps.append(_step(
                     "intro_offers", "running",
                     completed=0, total=len(offers),
@@ -339,34 +491,82 @@ class SubscriptionCloner:
                 for entry in offers:
                     res = entry["resource"]
                     a = res.get("attributes", {})
-                    rels = res.get("relationships", {})
-                    territory_ref = rels.get("territory", {}).get("data")
-                    pp_ref = (
-                        rels.get("subscriptionPricePoint", {}).get("data")
+                    offer_mode = a.get("offerMode")
+
+                    # Apple omits relationships on most intro-offer list
+                    # responses; the id itself encodes the territory
+                    # (alpha-2) and the source customer price.
+                    decoded = _decode_offer_id(res.get("id", ""))
+                    territory_alpha2 = decoded.get("i")
+                    territory_alpha3 = (
+                        ALPHA2_TO_ALPHA3.get(territory_alpha2)
+                        if territory_alpha2 else None
                     )
-                    territory_id = (
-                        territory_ref.get("id") if territory_ref else None
-                    )
-                    price_point_id = pp_ref.get("id") if pp_ref else None
+                    try:
+                        source_price = float(decoded.get("p") or 0)
+                    except (TypeError, ValueError):
+                        source_price = 0.0
+
+                    if (
+                        territory_alpha2
+                        and (territory_alpha2, offer_mode) in target_offer_keys
+                    ):
+                        steps[-1]["completed"] += 1
+                        continue
+
+                    target_pp_id: str | None = None
+                    if offer_mode != "FREE_TRIAL":
+                        # Paid offers need a price point on the new sub.
+                        if not territory_alpha3 or source_price <= 0:
+                            errors.append(
+                                "intro_offers: missing territory or price "
+                                "on source"
+                            )
+                            continue
+                        try:
+                            target_pp_id = await _find_target_price_point_id(
+                                self.pricing,
+                                new_asc_id,
+                                territory_alpha3,
+                                source_price,
+                            )
+                        except ASCAPIError as exc:
+                            errors.append(
+                                f"intro_offers[{territory_alpha3}]: {exc}"
+                            )
+                            continue
+                        if target_pp_id is None:
+                            errors.append(
+                                f"intro_offers[{territory_alpha3}]: no price "
+                                f"point for {source_price} on target sub"
+                            )
+                            continue
+
                     try:
                         await (
                             self.pricing
                             .create_subscription_introductory_offer(
                                 subscription_id=new_asc_id,
-                                offer_mode=a.get("offerMode"),
+                                offer_mode=offer_mode,
                                 duration=a.get("duration"),
                                 number_of_periods=int(
                                     a.get("numberOfPeriods", 1),
                                 ),
-                                territory_id=territory_id,
-                                price_point_id=price_point_id,
-                                start_date=a.get("startDate"),
-                                end_date=a.get("endDate"),
+                                territory_id=territory_alpha3,
+                                price_point_id=target_pp_id,
+                                start_date=_sanitize_offer_date(
+                                    a.get("startDate"),
+                                ),
+                                end_date=_sanitize_offer_date(
+                                    a.get("endDate"),
+                                ),
                             )
                         )
                         steps[-1]["completed"] += 1
                     except ASCAPIError as exc:
-                        errors.append(f"intro_offers: {exc}")
+                        errors.append(
+                            f"intro_offers[{territory_alpha3 or '?'}]: {exc}"
+                        )
                 steps[-1]["status"] = (
                     "done"
                     if steps[-1]["completed"] == steps[-1]["total"]
@@ -379,6 +579,8 @@ class SubscriptionCloner:
                 errors.append(f"intro_offers: {exc}")
 
         # Step 7: review screenshot
+        # Apple's screenshot upload occasionally returns a generic 5xx;
+        # one retry after a short backoff usually clears it.
         if scope.get("screenshot", True):
             steps.append(_step("screenshot", "running"))
             try:
@@ -398,16 +600,34 @@ class SubscriptionCloner:
                             detail="no downloadable URL on source",
                         )
                     else:
-                        attrs = src_shot.get("attributes", {})
-                        file_name = attrs.get("fileName") or "screenshot.png"
-                        await (
-                            self.pricing
-                            .upload_subscription_review_screenshot(
-                                subscription_id=new_asc_id,
-                                file_name=file_name,
-                                file_bytes=file_bytes,
-                            )
+                        # Always derive a clean filename from the new
+                        # productId. Apple's reserve endpoint 500s on
+                        # filenames without an extension (legacy review
+                        # screenshots are sometimes stored as just
+                        # "SOURCE"), so don't trust the source's value.
+                        file_name = (
+                            f"{new_product_id.replace('.', '_')}.png"
                         )
+                        last_exc: ASCAPIError | None = None
+                        for attempt in range(2):
+                            try:
+                                await (
+                                    self.pricing
+                                    .upload_subscription_review_screenshot(
+                                        subscription_id=new_asc_id,
+                                        file_name=file_name,
+                                        file_bytes=file_bytes,
+                                    )
+                                )
+                                last_exc = None
+                                break
+                            except ASCAPIError as exc:
+                                last_exc = exc
+                                if exc.status_code < 500 or attempt == 1:
+                                    break
+                                await asyncio.sleep(2.0)
+                        if last_exc is not None:
+                            raise last_exc
                         steps[-1] = _step(
                             "screenshot", "done",
                             detail=f"{len(file_bytes)} bytes",
@@ -417,10 +637,14 @@ class SubscriptionCloner:
                 errors.append(f"screenshot: {exc}")
 
         # Step 8: archive source by removing all territories
+        # ``subscriptionAvailabilities`` does not allow PATCH — Apple only
+        # accepts CREATE / GET_INSTANCE. Posting a fresh record with an
+        # empty territory list replaces the existing availability,
+        # taking the source off sale (existing subscribers keep access).
         if scope.get("auto_archive", True):
             steps.append(_step("archive_source", "running"))
             try:
-                await self.pricing.update_subscription_availability(
+                await self.pricing.create_subscription_availability(
                     subscription_id=source.asc_subscription_id,
                     available_alpha3_codes=[],
                     available_in_new_territories=False,
@@ -484,7 +708,9 @@ class IAPCloner:
             iap_type = attrs.get("inAppPurchaseType") or source.iap_type
             review_note = attrs.get("reviewNote")
             family_sharable = bool(attrs.get("familyShareable", False))
-            source_name = attrs.get("name") or source.name
+            # ASC requires the IAP reference name unique per app — same
+            # rule as subscriptions. Default to the bumped productId.
+            effective_name = new_name or new_product_id
             steps[-1] = _step(
                 "read_source", "done",
                 detail=f"type={iap_type} familyShareable={family_sharable}",
@@ -513,7 +739,7 @@ class IAPCloner:
                 created = await self.pricing.create_iap(
                     app_id=self.app_asc_id,
                     product_id=new_product_id,
-                    name=new_name or source_name,
+                    name=effective_name,
                     iap_type=iap_type,
                     review_note=review_note,
                     family_sharable=family_sharable,
@@ -544,7 +770,7 @@ class IAPCloner:
             new_local = InAppPurchase(
                 app_id=self.app_id,
                 asc_iap_id=new_asc_id,
-                name=new_name or source_name,
+                name=effective_name,
                 product_id=new_product_id,
                 iap_type=iap_type,
             )
@@ -662,8 +888,14 @@ class IAPCloner:
                             detail="no downloadable URL on source",
                         )
                     else:
-                        attrs = src_shot.get("attributes", {})
-                        file_name = attrs.get("fileName") or "screenshot.png"
+                        # Always derive a clean filename from the new
+                        # productId. Apple's reserve endpoint 500s on
+                        # filenames without an extension (legacy review
+                        # screenshots are sometimes stored as just
+                        # "SOURCE"), so don't trust the source's value.
+                        file_name = (
+                            f"{new_product_id.replace('.', '_')}.png"
+                        )
                         await self.pricing.upload_iap_review_screenshot(
                             iap_id=new_asc_id,
                             file_name=file_name,

@@ -1454,6 +1454,15 @@ class ASCPricingService:
             f"/subscriptions/{subscription_id}", json=body
         )
 
+    async def delete_subscription(self, subscription_id: str) -> None:
+        """``DELETE /v1/subscriptions/{subscription_id}``
+
+        Apple permits deletion only when the sub is in DRAFT state and
+        has never been submitted for review. Used by the clone flow's
+        cleanup mode to remove accidental version-bump shells.
+        """
+        await self.client._delete(f"/subscriptions/{subscription_id}")
+
     # ------------------------------------------------------------------
     # Introductory Offers
     # ------------------------------------------------------------------

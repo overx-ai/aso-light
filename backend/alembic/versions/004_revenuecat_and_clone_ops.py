@@ -82,7 +82,10 @@ def upgrade() -> None:
                 sa.Column(
                     "revenuecat_credential_id",
                     sa.Integer(),
-                    sa.ForeignKey("revenuecat_credentials.id"),
+                    sa.ForeignKey(
+                        "revenuecat_credentials.id",
+                        name="fk_apps_revenuecat_credential_id",
+                    ),
                     nullable=True,
                 )
             )
