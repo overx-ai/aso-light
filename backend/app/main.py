@@ -4,6 +4,7 @@ from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from app.api import api_router
 from app.core.config import settings
@@ -25,14 +26,15 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    logger.info("Starting up: initialising database")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    async with async_session_factory() as session:
-        await seed_territories(session)
-    yield
-    logger.info("Shutting down")
-    await engine.dispose()
+    async with mcp_app.lifespan(app):
+        logger.info("Starting up: initialising database")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with async_session_factory() as session:
+            await seed_territories(session)
+        yield
+        logger.info("Shutting down")
+        await engine.dispose()
 
 
 app = FastAPI(
@@ -52,6 +54,17 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api")
+
+
+@app.api_route(
+    "/mcp",
+    methods=["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"],
+    include_in_schema=False,
+)
+async def mcp_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/mcp/", status_code=307)
+
+
 app.mount("/mcp", mcp_app)
 
 
