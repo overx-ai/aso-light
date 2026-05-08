@@ -654,7 +654,7 @@ function PersonalAccessTokensSection() {
               {`{
   "mcpServers": {
     "aso-light": {
-      "url": "http://localhost:8002/mcp",
+      "url": "http://localhost:8000/mcp",
       "headers": { "Authorization": "Bearer ${issuedToken.token}" }
     }
   }

@@ -55,7 +55,7 @@
 - Credential creation crash: async lazy-load of `credential.apps` relationship
 - Territory code mismatch: frontend defaulted to `"USA"` but DB uses `"US"`
 - ASC API `platform` field rejection on app sync
-- Vite proxy target: port 8002 → 8000
+- Vite proxy target aligned with the canonical local backend port
 - Indices refresh notification: response shape `{refreshed: {...}}` not flat object
 - Charming mode mismatch: frontend sends `.99`/`.95`, backend matched `99`/`95`
 - Duplicate territories in preview: `_unique_territories()` helper added

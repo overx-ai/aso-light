@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.data.seed import seed_territories
 from app.db.base import Base
 from app.db.session import async_session_factory, engine
+from app.mcp.server import mcp_app
 
 import app.models  # noqa: F401 — register all models with Base.metadata
 
@@ -51,6 +52,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api")
+app.mount("/mcp", mcp_app)
 
 
 @app.get("/health")

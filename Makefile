@@ -1,7 +1,9 @@
+DEV_BACKEND_PORT ?= 8000
+
 .PHONY: dev-backend dev-frontend dev db-up db-down migrate migration install-backend install-frontend install
 
 dev-backend:
-	cd backend && uv run uvicorn app.main:app --reload --port 8002
+	cd backend && uv run uvicorn app.main:app --reload --port $(DEV_BACKEND_PORT)
 
 dev-frontend:
 	cd frontend && npm run dev

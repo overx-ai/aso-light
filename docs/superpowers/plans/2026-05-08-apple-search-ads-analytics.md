@@ -3120,7 +3120,7 @@ git commit -m "feat(asa): frontend — Paid Search page, Settings cred panel, Ke
 
 - [ ] **Step 1: Boot**
 
-Run: `cd backend && uv run uvicorn app.main:app --port 8003 &` and `sleep 4 && curl -s http://127.0.0.1:8003/health`
+Run: `DEV_BACKEND_PORT=8000 make dev-backend &` and `sleep 4 && curl -s http://127.0.0.1:8000/health`
 Expected: `{"status":"ok"}`. Kill the process after.
 
 - [ ] **Step 2: Tool count**
@@ -3131,8 +3131,8 @@ Expected: `138`.
 - [ ] **Step 3: HTTP 401 probes**
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8003/api/v1/asa/credentials
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8003/api/v1/apps/1/asa/campaigns
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/v1/asa/credentials
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/v1/apps/1/asa/campaigns
 ```
 Expected: both `401`.
 

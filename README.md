@@ -38,10 +38,10 @@ See `docs/specs/007-metadata-editor-and-cross-loc.md` for the full design.
 
 ```bash
 # Backend + frontend dev servers
-make dev          # backend :8000, frontend :5173
+make dev          # backend http://localhost:8000, frontend http://localhost:5173
 
-# Or run individually
-cd backend && uv run uvicorn app.main:app --reload --port 8000
+# Or run individually using the same backend default as the Makefile
+make dev-backend  # override with DEV_BACKEND_PORT=... if needed
 cd frontend && npm install && npm run dev
 
 # PostgreSQL (optional — SQLite auto-creates for dev)
@@ -49,6 +49,40 @@ make db-up && make migrate
 
 # Generate a Fernet key for FERNET_KEY in backend/.env
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Canonical local backend URL: `http://localhost:8000` (`DEV_BACKEND_PORT=8000`)
+
+- Health: `http://localhost:8000/health`
+- OpenAPI docs: `http://localhost:8000/docs`
+- MCP endpoint: `http://localhost:8000/mcp`
+
+```bash
+# Create a local account once
+curl -X POST http://localhost:8000/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"dev-local@example.com","password":"dev-password-123","name":"Dev Local"}'
+
+# Then log in against the same local backend
+curl -X POST http://localhost:8000/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"dev-local@example.com","password":"dev-password-123"}'
+
+# Health check
+curl http://localhost:8000/health
+```
+
+```json
+{
+  "mcpServers": {
+    "aso-light": {
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer <personal-access-token>"
+      }
+    }
+  }
+}
 ```
 
 Copy `backend/.env.example` to `backend/.env` and fill in `SECRET_KEY`, `JWT_SECRET_KEY`, and `FERNET_KEY`.
