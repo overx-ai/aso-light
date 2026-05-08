@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 
 from app.api.v1.apps import router as apps_router
+from app.api.v1.asa import router as asa_router
+from app.api.v1.asa_app import router as asa_app_router
 from app.api.v1.aso_check import router as aso_check_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.availability import router as availability_router
@@ -19,13 +21,17 @@ from app.api.v1.pricing import router as pricing_router
 from app.api.v1.revenuecat import router as revenuecat_router
 from app.api.v1.reviews import router as reviews_router
 from app.api.v1.territories import router as territories_router
+from app.api.v1.tokens import router as tokens_router
 from app.api.v1.visibility import router as visibility_router
 
 router = APIRouter()
 
 router.include_router(auth_router, prefix="/auth", tags=["auth"])
+router.include_router(tokens_router, prefix="/auth/tokens", tags=["auth"])
 router.include_router(credentials_router, prefix="/credentials", tags=["credentials"])
 router.include_router(apps_router, prefix="/apps", tags=["apps"])
+router.include_router(asa_router, prefix="/asa", tags=["asa"])
+router.include_router(asa_app_router, prefix="/apps", tags=["asa"])
 router.include_router(pricing_router, prefix="/apps", tags=["pricing"])
 router.include_router(clone_router, prefix="/apps", tags=["clone"])
 router.include_router(revenuecat_router, prefix="/apps", tags=["revenuecat"])
