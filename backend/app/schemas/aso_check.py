@@ -24,6 +24,20 @@ class IssueSummary(BaseModel):
     locales_audited: int
 
 
+class PaidCoverage(BaseModel):
+    """ASA paid-keyword coverage of the app's tracked organic terms.
+
+    Populated by ``aso.aso_check`` when ASA data is present for the app.
+    ``tracked_with_paid`` lists tracked terms that have non-zero impressions
+    in ASA over the last 30 days; ``tracked_without_paid`` lists those that
+    do not, surfacing organic-only coverage gaps.
+    """
+
+    tracked_with_paid: list[str]
+    tracked_without_paid: list[str]
+
+
 class AsoCheckOut(BaseModel):
     summary: IssueSummary
     items: list[IssueOut]
+    paid_coverage: PaidCoverage | None = None

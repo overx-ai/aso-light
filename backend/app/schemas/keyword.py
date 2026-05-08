@@ -28,6 +28,21 @@ class KeywordResponse(BaseModel):
 # ---- Keyword Tracking ----
 
 
+class KeywordPaidMetrics30d(BaseModel):
+    """ASA paid metrics for one keyword over the last 30 days.
+
+    Attached to a :class:`KeywordTrackingResponse` only when the caller
+    opts in via ``with_paid=True`` and the term has a matching ASA keyword
+    with non-zero impressions.
+    """
+
+    impressions: int
+    taps: int
+    installs: int
+    spend_amount: float
+    spend_currency: str | None = None
+
+
 class KeywordTrackingResponse(BaseModel):
     id: int
     keyword: KeywordResponse
@@ -35,6 +50,7 @@ class KeywordTrackingResponse(BaseModel):
     latest_rank: int | None = None
     rank_change: int | None = None
     added_at: datetime
+    paid_metrics_30d: KeywordPaidMetrics30d | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
