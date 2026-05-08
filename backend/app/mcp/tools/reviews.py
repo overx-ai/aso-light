@@ -1,0 +1,384 @@
+"""MCP tools for customer reviews + developer responses.
+
+Mirrors ``app/api/v1/reviews.py``: list/get reviews, AI-draft a reply,
+translate a review body, and full reply CRUD against ASC.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from fastmcp.exceptions import ToolError
+
+from app.core.config import settings
+from app.mcp.context import resolve_app, resolve_asc_client, session_scope
+from app.mcp.server import mcp
+from app.schemas.review import (
+    DraftOut,
+    ReplyTone,
+    ReviewListOut,
+    ReviewOut,
+    ReviewResponseOut,
+    TranslateReviewOut,
+)
+from app.services.asc.errors import ASCAPIError
+from app.services.asc.reviews import RESPONSE_BODY_MAX_LEN, ASCReviewService
+from app.services.metadata.translate import (
+    AnthropicTranslator,
+    translate_with_cache,
+)
+from app.services.reviews.draft import draft_reply
+
+logger = logging.getLogger(__name__)
+
+
+# ASC returns alpha-3 territory codes; map to a sensible reply locale.
+_TERRITORY_TO_LOCALE: dict[str, str] = {
+    "USA": "en-US", "GBR": "en-GB", "AUS": "en-AU", "CAN": "en-CA",
+    "NZL": "en-NZ", "IRL": "en-IE",
+    "DEU": "de-DE", "AUT": "de-DE", "CHE": "de-DE",
+    "FRA": "fr-FR", "BEL": "fr-FR", "LUX": "fr-FR",
+    "ESP": "es-ES", "MEX": "es-MX", "ARG": "es-MX", "CHL": "es-MX",
+    "COL": "es-MX", "PER": "es-MX",
+    "ITA": "it-IT",
+    "JPN": "ja-JP",
+    "KOR": "ko-KR",
+    "CHN": "zh-Hans", "TWN": "zh-Hant", "HKG": "zh-Hant",
+    "RUS": "ru-RU",
+    "BRA": "pt-BR", "PRT": "pt-PT",
+    "NLD": "nl-NL",
+    "POL": "pl-PL",
+    "TUR": "tr-TR",
+    "SWE": "sv-SE", "NOR": "no-NO", "DNK": "da-DK", "FIN": "fi-FI",
+    "IDN": "id-ID", "MYS": "ms-MY", "THA": "th-TH", "VNM": "vi-VN",
+    "ARE": "ar-SA", "SAU": "ar-SA",
+    "ISR": "he-IL",
+    "IND": "hi-IN",
+    "GRC": "el-GR",
+    "CZE": "cs-CZ", "SVK": "sk-SK", "HUN": "hu-HU", "ROU": "ro-RO",
+    "UKR": "uk-UA", "BGR": "bg-BG", "HRV": "hr-HR",
+}
+
+
+def _territory_to_locale(territory: str | None) -> str:
+    if not territory:
+        return "en-US"
+    return _TERRITORY_TO_LOCALE.get(territory.upper(), "en-US")
+
+
+def _serialize_review(
+    raw: dict[str, Any], included: list[dict[str, Any]] | None = None,
+) -> ReviewOut:
+    """Convert ASC JSON:API review payload (+ included responses) → ReviewOut."""
+    attrs = raw.get("attributes") or {}
+    response: ReviewResponseOut | None = None
+
+    rel = (raw.get("relationships") or {}).get("response", {}).get("data")
+    if rel and included:
+        for inc in included:
+            if (
+                inc.get("type") == "customerReviewResponses"
+                and inc.get("id") == rel.get("id")
+            ):
+                inc_attrs = inc.get("attributes") or {}
+                response = ReviewResponseOut(
+                    id=inc.get("id", ""),
+                    body=inc_attrs.get("responseBody") or "",
+                    last_modified_date=inc_attrs.get("lastModifiedDate"),
+                    state=inc_attrs.get("state"),
+                )
+                break
+
+    return ReviewOut(
+        id=raw.get("id", ""),
+        rating=int(attrs.get("rating") or 0),
+        title=attrs.get("title"),
+        body=attrs.get("body"),
+        territory=attrs.get("territory"),
+        reviewer_nickname=attrs.get("reviewerNickname"),
+        created_date=attrs.get("createdDate"),
+        response=response,
+    )
+
+
+def _extract_cursor(payload: dict[str, Any]) -> str | None:
+    next_link = (payload.get("links") or {}).get("next")
+    if not next_link or "cursor=" not in next_link:
+        return None
+    try:
+        return next_link.split("cursor=", 1)[1].split("&", 1)[0]
+    except IndexError:
+        return None
+
+
+def _wrap_asc(action: str, exc: ASCAPIError) -> ToolError:
+    logger.warning("ASC %s failed: %s", action, exc)
+    return ToolError(f"ASC API error: {action}")
+
+
+# ---------------------------------------------------------------------------
+# List + detail
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="reviews.list")
+async def list_reviews(
+    app_id: int,
+    territory: str | None = None,
+    rating: int | None = None,
+    has_response: bool | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+) -> ReviewListOut:
+    """List customer reviews for an app, paginated.
+
+    ``territory`` is an alpha-3 ISO code (e.g. ``USA``), ``rating`` filters
+    1-5, and ``has_response`` filters the page in memory after fetching
+    (Apple's API has no native filter).
+    """
+    if rating is not None and not 1 <= rating <= 5:
+        raise ToolError("rating must be between 1 and 5")
+    if not 1 <= limit <= 200:
+        raise ToolError("limit must be between 1 and 200")
+
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        client = await resolve_asc_client(app, session)
+        async with client:
+            svc = ASCReviewService(client)
+            try:
+                payload = await svc.list_reviews(
+                    app.asc_app_id,
+                    territory=territory,
+                    rating=rating,
+                    cursor=cursor,
+                    limit=limit,
+                )
+            except ASCAPIError as exc:
+                raise _wrap_asc(f"list reviews for app {app_id}", exc) from exc
+
+    items_raw = payload.get("data") or []
+    included = payload.get("included") or []
+    items = [_serialize_review(r, included) for r in items_raw]
+
+    if has_response is True:
+        items = [r for r in items if r.response is not None]
+    elif has_response is False:
+        items = [r for r in items if r.response is None]
+
+    return ReviewListOut(items=items, next_cursor=_extract_cursor(payload))
+
+
+@mcp.tool(name="reviews.get")
+async def get_review(app_id: int, review_id: str) -> ReviewOut:
+    """Fetch a single review with its response (if any)."""
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        client = await resolve_asc_client(app, session)
+        async with client:
+            svc = ASCReviewService(client)
+            try:
+                payload = await svc.get_review(review_id)
+            except ASCAPIError as exc:
+                raise _wrap_asc(f"get review {review_id}", exc) from exc
+
+    raw = payload.get("data") or {}
+    included = payload.get("included") or []
+    return _serialize_review(raw, included)
+
+
+# ---------------------------------------------------------------------------
+# AI draft + translate (no ASC writes)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="reviews.draft_reply")
+async def draft_review_reply(
+    app_id: int,
+    review_id: str,
+    tone: ReplyTone = "neutral",
+) -> DraftOut:
+    """Generate a suggested reply to a review using Claude.
+
+    Returns the suggestion + the locale it was drafted in (derived from the
+    review's territory). Suggestion only — caller must explicitly post via
+    ``reviews.respond``.
+    """
+    if not settings.ANTHROPIC_API_KEY:
+        raise ToolError("AI drafting not configured. Set ANTHROPIC_API_KEY.")
+
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        client = await resolve_asc_client(app, session)
+        async with client:
+            svc = ASCReviewService(client)
+            try:
+                payload = await svc.get_review(review_id)
+            except ASCAPIError as exc:
+                raise _wrap_asc(f"get review {review_id} for draft", exc) from exc
+
+    review = _serialize_review(payload.get("data") or {})
+    if not review.body:
+        raise ToolError("Review has no body to reply to.")
+
+    locale = _territory_to_locale(review.territory)
+    try:
+        suggestion = await draft_reply(
+            api_key=settings.ANTHROPIC_API_KEY,
+            review_body=review.body,
+            review_rating=review.rating,
+            target_locale=locale,
+            tone=tone,
+        )
+    except Exception as exc:  # noqa: BLE001 — anthropic SDK raises diverse types
+        logger.warning(
+            "Anthropic draft failed for app %s review %s: %s",
+            app_id, review_id, exc,
+        )
+        raise ToolError("AI drafting service unavailable") from exc
+    return DraftOut(suggestion=suggestion, locale=locale)
+
+
+@mcp.tool(name="reviews.translate")
+async def translate_review(
+    app_id: int,
+    review_id: str,
+    target_locale: str,
+) -> TranslateReviewOut:
+    """Translate a review's body into ``target_locale`` using Claude.
+
+    Cached on a (app_id, source, target, text) key. Returns
+    ``cached=True`` on cache hit.
+    """
+    if not target_locale or len(target_locale) < 2:
+        raise ToolError("target_locale must be a non-empty locale code")
+    if not settings.ANTHROPIC_API_KEY:
+        raise ToolError("AI translation not configured. Set ANTHROPIC_API_KEY.")
+
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        client = await resolve_asc_client(app, session)
+        async with client:
+            svc = ASCReviewService(client)
+            try:
+                payload = await svc.get_review(review_id)
+            except ASCAPIError as exc:
+                raise _wrap_asc(
+                    f"get review {review_id} for translate", exc,
+                ) from exc
+
+        review = _serialize_review(payload.get("data") or {})
+        if not review.body:
+            raise ToolError("Review has no body to translate.")
+
+        source_locale = _territory_to_locale(review.territory)
+        if source_locale == target_locale:
+            return TranslateReviewOut(translation=review.body, cached=True)
+
+        translator = AnthropicTranslator(api_key=settings.ANTHROPIC_API_KEY)
+        try:
+            translation, cached = await translate_with_cache(
+                translator=translator,
+                session=session,
+                app_id=app_id,
+                text=review.body,
+                source_locale=source_locale,
+                target_locale=target_locale,
+                # Long-form free text — share the 4000-char description bucket.
+                field_kind="description",  # type: ignore[arg-type]
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Anthropic translate failed for app %s review %s: %s",
+                app_id, review_id, exc,
+            )
+            raise ToolError("AI translation service unavailable") from exc
+
+        return TranslateReviewOut(translation=translation, cached=cached)
+
+
+# ---------------------------------------------------------------------------
+# Reply CRUD (writes to ASC)
+# ---------------------------------------------------------------------------
+
+
+def _validate_reply_body(body: str) -> None:
+    if not body:
+        raise ToolError("body cannot be empty")
+    if len(body) > RESPONSE_BODY_MAX_LEN:
+        raise ToolError(f"body exceeds {RESPONSE_BODY_MAX_LEN}-character limit")
+
+
+@mcp.tool(name="reviews.respond")
+async def create_reply(
+    app_id: int,
+    review_id: str,
+    body: str,
+) -> ReviewResponseOut:
+    """Post a developer response to a review."""
+    _validate_reply_body(body)
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        client = await resolve_asc_client(app, session)
+        async with client:
+            svc = ASCReviewService(client)
+            try:
+                data = await svc.create_response(review_id, body)
+            except ASCAPIError as exc:
+                raise _wrap_asc(
+                    f"create reply for review {review_id}", exc,
+                ) from exc
+
+    attrs = data.get("attributes") or {}
+    return ReviewResponseOut(
+        id=data.get("id", ""),
+        body=attrs.get("responseBody") or body,
+        last_modified_date=attrs.get("lastModifiedDate"),
+        state=attrs.get("state"),
+    )
+
+
+@mcp.tool(name="reviews.update_response")
+async def update_reply(
+    app_id: int,
+    response_id: str,
+    body: str,
+) -> ReviewResponseOut:
+    """Edit an existing developer response."""
+    _validate_reply_body(body)
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        client = await resolve_asc_client(app, session)
+        async with client:
+            svc = ASCReviewService(client)
+            try:
+                data = await svc.update_response(response_id, body)
+            except ASCAPIError as exc:
+                raise _wrap_asc(f"update reply {response_id}", exc) from exc
+
+    attrs = data.get("attributes") or {}
+    return ReviewResponseOut(
+        id=data.get("id", response_id),
+        body=attrs.get("responseBody") or body,
+        last_modified_date=attrs.get("lastModifiedDate"),
+        state=attrs.get("state"),
+    )
+
+
+@mcp.tool(name="reviews.delete_response")
+async def delete_reply(
+    app_id: int,
+    response_id: str,
+) -> dict[str, str]:
+    """Delete a developer response."""
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        client = await resolve_asc_client(app, session)
+        async with client:
+            svc = ASCReviewService(client)
+            try:
+                await svc.delete_response(response_id)
+            except ASCAPIError as exc:
+                raise _wrap_asc(f"delete reply {response_id}", exc) from exc
+    return {"detail": "Response deleted"}

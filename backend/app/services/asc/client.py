@@ -9,8 +9,10 @@ from typing import TYPE_CHECKING
 
 import httpx
 import jwt
+from cryptography.fernet import InvalidToken
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
-from app.services.asc.errors import ASCAPIError, ASCRateLimitError
+from app.services.asc.errors import ASCAPIError, ASCRateLimitError, CredentialDecryptError
 
 if TYPE_CHECKING:
     from app.models.credential import ASCCredential
@@ -330,11 +332,30 @@ class ASCClient:
         """Create a client from a database credential record.
 
         Decrypts the private key stored in ``credential.private_key_encrypted``
-        using Fernet symmetric encryption.
+        using Fernet symmetric encryption and verifies the result is a parseable
+        PEM private key. Raises :class:`CredentialDecryptError` if decryption
+        fails (wrong/rotated FERNET_KEY) or the decrypted bytes are not a valid
+        PEM private key (legacy/corrupt rows). The error message is safe to show
+        to end users; it never includes ciphertext or key material.
         """
         from app.core.security import decrypt_value
 
-        private_key = decrypt_value(credential.private_key_encrypted)
+        try:
+            private_key = decrypt_value(credential.private_key_encrypted)
+        except InvalidToken as exc:
+            raise CredentialDecryptError(
+                "Stored credential cannot be decrypted (FERNET_KEY mismatch or "
+                "corrupt data). Re-upload your .p8 key."
+            ) from exc
+
+        try:
+            load_pem_private_key(private_key.encode("utf-8"), password=None)
+        except (ValueError, TypeError) as exc:
+            raise CredentialDecryptError(
+                "Stored credential is not a valid PEM private key. "
+                "Re-upload your .p8 key."
+            ) from exc
+
         return cls(
             issuer_id=credential.issuer_id,
             key_id=credential.key_id,

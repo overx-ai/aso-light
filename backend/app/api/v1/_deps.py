@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.app import App
 from app.models.credential import ASCCredential
 from app.services.asc.client import ASCClient
+from app.services.asc.errors import CredentialDecryptError
 
 
 async def _get_verified_app(
@@ -74,4 +75,10 @@ async def _get_asc_client_for_app(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Credential for app not found",
         )
-    return ASCClient.from_credential(credential)
+    try:
+        return ASCClient.from_credential(credential)
+    except CredentialDecryptError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc

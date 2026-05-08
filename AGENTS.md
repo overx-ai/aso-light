@@ -39,9 +39,9 @@ App Store Optimization SaaS — web-based alternative to aso.dev. Focuses on pri
 
 ## Workflows
 
-- **Start dev**: `make dev` (starts backend on :8002, frontend on :5173)
+- **Start dev**: `make dev` (starts backend on :8000, frontend on :5173)
 - **DB init**: `make db-up && make migrate` (PostgreSQL) or just `make dev` (SQLite auto-creates)
-- **Run backend alone**: `cd backend && uv run uvicorn app.main:app --reload --port 8002`
+- **Run backend alone**: `cd backend && uv run uvicorn app.main:app --reload --port 8000`
 - **Run frontend alone**: `cd frontend && npm run dev`
 - **Generate Fernet key**: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 
@@ -58,8 +58,6 @@ App Store Optimization SaaS — web-based alternative to aso.dev. Focuses on pri
 - **ASC rate limiter**: 150ms min interval between requests, global backoff on 429, max 6 retries
 - **Price point cache**: filesystem-based under `backend/.cache/price_points/`, not DB — per-territory JSON files
 - **Price safety limits**: ±50% — skip territory if price change exceeds this threshold in either direction (constant `SAFETY_BAND_PCT` in `backend/app/api/v1/pricing.py`)
-- **MCP server**: mounted at `/mcp` on the FastAPI app, exposes ~123 tools across all REST domains via `fastmcp`. Auth uses Personal Access Tokens (`aso_pat_…`, sha256-hashed at rest, model in `backend/app/models/personal_access_token.py`, routes under `/api/v1/auth/tokens`). Tool modules live in `backend/app/mcp/tools/` and call service classes directly (no HTTP hop). App-scope is enforced by `app.mcp.context.resolve_app` mirroring `_get_verified_app`.
-- **Product swap**: the existing clone subsystem (`POST /apps/{id}/subscriptions/{sub_id}/clone` with `auto_archive=True, swap_revenuecat=True`) IS the swap. The MCP `swap.subscription_product` / `swap.iap` tools wrap it and additionally return an `ios_checklist` tailored to whether RC is wired, whether RC swap succeeded, and which path the iOS app is on. iOS-side guidance lives in `docs/006-product-swap-ios-integration.md`.
 
 ## Project-Specific Rules
 
@@ -88,5 +86,3 @@ Do NOT execute any tools in plan mode. Wait for me to switch back to act mode be
 - [docs/003-keyword-analysis.md](docs/003-keyword-analysis.md) — Keyword analysis system
 - [docs/004-localization-management.md](docs/004-localization-management.md) — Localization management
 - [docs/005-subscription-management.md](docs/005-subscription-management.md) — Subscription / group / intro-offer write paths
-- [docs/006-product-swap-ios-integration.md](docs/006-product-swap-ios-integration.md) — Product swap (clone+archive+RC) and what the iOS app must change
-- [docs/007-mcp-integration.md](docs/007-mcp-integration.md) — MCP server, PAT lifecycle, tool reference, client config

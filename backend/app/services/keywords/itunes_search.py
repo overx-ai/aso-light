@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+class _HasIconAndAscId(Protocol):
+    """Minimal duck-type for ``backfill_icons`` — works on ORM rows or any object
+    with an ``asc_app_id`` and a writable ``icon_url`` attribute."""
+
+    asc_app_id: str
+    icon_url: str | None
 
 
 class ITunesSearchService:
@@ -51,6 +59,69 @@ class ITunesSearchService:
                 return []
             data = response.json()
             return list(data.get("results") or [])
+
+    # Fallback storefronts tried (in order) when an app isn't found in the
+    # primary country. Covers ~80% of single-region launches. Apps in pre-release
+    # / "waiting for review" never appear on iTunes Search regardless of country.
+    _ICON_FALLBACK_COUNTRIES = ("us", "gb", "de", "jp", "br", "fr", "ru", "in", "cn")
+
+    async def fetch_icon_urls(
+        self, track_ids: list[str], country: str = "us",
+    ) -> dict[str, str]:
+        """Return a ``{asc_app_id: icon_url}`` map for the given track ids.
+
+        Tries ``country`` first, then falls back through major storefronts for
+        ids that come back empty (single-region launches). Uses ``artworkUrl512``
+        when present so the dashboard card renders crisply on retina; falls back
+        through 100 → 60. Missing ids are simply omitted — callers should leave
+        the existing ``icon_url`` untouched on miss.
+        """
+        if not track_ids:
+            return {}
+
+        # dict.fromkeys preserves order while de-duplicating the primary country
+        # against the fallback list.
+        countries = list(dict.fromkeys([country, *self._ICON_FALLBACK_COUNTRIES]))
+
+        out: dict[str, str] = {}
+        remaining = [t for t in track_ids if t]
+
+        for c in countries:
+            if not remaining:
+                break
+            for r in await self.lookup_apps(remaining, country=c):
+                track_id = str(r.get("trackId", ""))
+                if not track_id or track_id in out:
+                    continue
+                url = (
+                    r.get("artworkUrl512")
+                    or r.get("artworkUrl100")
+                    or r.get("artworkUrl60")
+                )
+                if url:
+                    out[track_id] = url
+            remaining = [t for t in remaining if t not in out]
+        return out
+
+    async def backfill_icons(self, apps: list[_HasIconAndAscId]) -> int:
+        """Set ``icon_url`` on each app in ``apps`` from iTunes Search.
+
+        Mutates rows in place. Returns the number of icons actually filled
+        (apps without an ``asc_app_id`` and apps the iTunes lookup can't find
+        are silently skipped, leaving any pre-existing ``icon_url`` untouched).
+        Caller is responsible for flushing/committing the session.
+        """
+        ids = [a.asc_app_id for a in apps if a.asc_app_id]
+        if not ids:
+            return 0
+        icon_map = await self.fetch_icon_urls(ids)
+        filled = 0
+        for a in apps:
+            url = icon_map.get(a.asc_app_id)
+            if url:
+                a.icon_url = url
+                filled += 1
+        return filled
 
     async def search_apps(
         self, term: str, country: str = "us", limit: int = 200,

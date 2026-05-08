@@ -1,6 +1,7 @@
 import logging
 from typing import Any
 
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +29,33 @@ def _credential_to_response(credential: ASCCredential) -> CredentialResponse:
     )
 
 
+def _validate_p8_upload(content: bytes) -> str:
+    """Decode + parse a .p8 upload, returning the canonical PEM text.
+
+    Raises HTTPException 400 with a user-actionable message on either UTF-8
+    decode failure or PEM parse failure. Both are user-supplied-data errors;
+    keeping the messages distinct helps users tell "wrong file format" from
+    "right format, corrupt contents".
+    """
+    try:
+        private_key_text = content.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid .p8 file: must be UTF-8 PEM text",
+        ) from exc
+
+    try:
+        load_pem_private_key(private_key_text.encode("utf-8"), password=None)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid .p8 file: not a parseable PEM-encoded private key",
+        ) from exc
+
+    return private_key_text
+
+
 @router.post("", response_model=CredentialResponse, status_code=status.HTTP_201_CREATED)
 async def create_credential(
     name: str = Form(...),
@@ -37,15 +65,7 @@ async def create_credential(
     current_user: dict[str, Any] = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> CredentialResponse:
-    content = await private_key_file.read()
-    private_key_text = content.decode("utf-8").strip()
-
-    if not private_key_text.startswith("-----BEGIN PRIVATE KEY-----"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid .p8 file: must be a PEM-encoded private key",
-        )
-
+    private_key_text = _validate_p8_upload(await private_key_file.read())
     encrypted_key = encrypt_value(private_key_text)
     user_id = int(current_user["user_id"])
 
@@ -125,11 +145,11 @@ async def test_credential(
             detail="Not authorized to access this credential",
         )
 
-    try:
-        from app.services.asc.client import ASCClient
-        from app.services.asc.apps import ASCAppsService
-        from app.services.asc.errors import ASCAPIError
+    from app.services.asc.client import ASCClient
+    from app.services.asc.apps import ASCAppsService
+    from app.services.asc.errors import ASCAPIError, CredentialDecryptError
 
+    try:
         async with ASCClient.from_credential(credential) as client:
             apps_service = ASCAppsService(client)
             apps_data = await apps_service.list_apps()
@@ -138,6 +158,14 @@ async def test_credential(
                 message=f"Connected successfully. Found {len(apps_data)} app(s).",
                 apps_count=len(apps_data),
             )
+    except CredentialDecryptError as exc:
+        # Corrupt or legacy row — surface the actionable "re-upload" message
+        # instead of the generic "check your credentials".
+        logger.warning("Credential decrypt failed for id=%s: %s", credential_id, exc)
+        return CredentialTestResponse(
+            success=False,
+            message=str(exc),
+        )
     except ASCAPIError as exc:
         logger.warning("ASC API error testing credential id=%s: %s", credential_id, exc.message)
         return CredentialTestResponse(

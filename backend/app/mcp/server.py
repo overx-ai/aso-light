@@ -22,6 +22,7 @@ mcp: FastMCP = FastMCP(
 
 # Importing the tool modules registers tools, resources, and prompts on `mcp`.
 from app.mcp.tools import (  # noqa: E402, F401
+    account,
     apps,
     asa,
     aso,
