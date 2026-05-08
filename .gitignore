@@ -23,3 +23,11 @@ Thumbs.db
 
 # Cache
 backend/.cache/
+
+# Local dev databases
+*.db
+
+# Tooling scratch / cache dirs
+.hero/
+.playwright-mcp/
+frontend/.claude/

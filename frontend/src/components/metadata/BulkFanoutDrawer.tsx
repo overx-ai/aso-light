@@ -34,6 +34,7 @@ import {
   type FieldKey,
 } from "@/components/metadata/fieldConfig";
 import { localeWithCode } from "@/components/metadata/localeLabel";
+import MetadataValueDiff from "@/components/metadata/MetadataValueDiff";
 
 interface BulkFanoutDrawerProps {
   appId: number;
@@ -288,12 +289,11 @@ export default function BulkFanoutDrawer({
                       accessor: "diff",
                       title: "Current → New",
                       render: (r) => (
-                        <Stack gap={2}>
-                          <Text size="xs" c="dimmed">
-                            {r.current_value ?? <em>empty</em>}
-                          </Text>
-                          <Text size="xs">{r.new_value ?? ""}</Text>
-                        </Stack>
+                        <MetadataValueDiff
+                          before={r.current_value}
+                          after={r.new_value}
+                          multiline={fieldCfg.multiline}
+                        />
                       ),
                     },
                     {

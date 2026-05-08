@@ -247,6 +247,83 @@ async def sync_metadata(
 
 
 # ------------------------------------------------------------------
+# Bulk fan-out
+# ------------------------------------------------------------------
+
+
+@router.post(
+    "/{app_id}/metadata/bulk/preview",
+    response_model=BulkPreviewOut,
+)
+async def bulk_preview(
+    app_id: int,
+    body: BulkPreviewIn,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> BulkPreviewOut:
+    """Compute a per-locale diff for a bulk fan-out. No ASC writes."""
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+
+    # The bulk service does not need an ASC client for preview, but the
+    # constructor takes one — pass a service backed by a short-lived client.
+    async with await _get_asc_client_for_app(app, session) as client:
+        bulk = BulkMetadataService(ASCMetadataService(client), session)
+        try:
+            items = await bulk.preview(
+                app, body.field, body.value, body.target_locales,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+            ) from exc
+    return BulkPreviewOut(items=items)
+
+
+@router.post(
+    "/{app_id}/metadata/bulk/apply",
+    response_model=BulkApplyOut,
+)
+async def bulk_apply(
+    app_id: int,
+    body: BulkApplyIn,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> BulkApplyOut:
+    """Replay a bulk plan against ASC and persist the snapshot deltas."""
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        bulk = BulkMetadataService(ASCMetadataService(client), session)
+        try:
+            results: list[BulkApplyResult] = await bulk.apply(
+                app, body.field, body.value, body.target_locales,
+                force=body.force,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+            ) from exc
+        except MetadataNotEditableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(exc),
+            ) from exc
+
+    await session.commit()
+
+    applied = sum(1 for r in results if r.status == "applied")
+    skipped = sum(1 for r in results if r.status == "skipped")
+    failed = sum(1 for r in results if r.status == "failed")
+    return BulkApplyOut(
+        applied=applied,
+        skipped=skipped,
+        failed=failed,
+        results=results,
+    )
+
+
+# ------------------------------------------------------------------
 # Single-locale CRUD
 # ------------------------------------------------------------------
 
@@ -475,83 +552,6 @@ async def delete_locale(
 
     await session.delete(row)
     await session.commit()
-
-
-# ------------------------------------------------------------------
-# Bulk fan-out
-# ------------------------------------------------------------------
-
-
-@router.post(
-    "/{app_id}/metadata/bulk/preview",
-    response_model=BulkPreviewOut,
-)
-async def bulk_preview(
-    app_id: int,
-    body: BulkPreviewIn,
-    current_user: dict[str, Any] = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> BulkPreviewOut:
-    """Compute a per-locale diff for a bulk fan-out. No ASC writes."""
-    user_id = int(current_user["user_id"])
-    app = await _get_verified_app(app_id, user_id, session)
-
-    # The bulk service does not need an ASC client for preview, but the
-    # constructor takes one — pass a service backed by a short-lived client.
-    async with await _get_asc_client_for_app(app, session) as client:
-        bulk = BulkMetadataService(ASCMetadataService(client), session)
-        try:
-            items = await bulk.preview(
-                app, body.field, body.value, body.target_locales,
-            )
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
-            ) from exc
-    return BulkPreviewOut(items=items)
-
-
-@router.post(
-    "/{app_id}/metadata/bulk/apply",
-    response_model=BulkApplyOut,
-)
-async def bulk_apply(
-    app_id: int,
-    body: BulkApplyIn,
-    current_user: dict[str, Any] = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> BulkApplyOut:
-    """Replay a bulk plan against ASC and persist the snapshot deltas."""
-    user_id = int(current_user["user_id"])
-    app = await _get_verified_app(app_id, user_id, session)
-
-    async with await _get_asc_client_for_app(app, session) as client:
-        bulk = BulkMetadataService(ASCMetadataService(client), session)
-        try:
-            results: list[BulkApplyResult] = await bulk.apply(
-                app, body.field, body.value, body.target_locales,
-                force=body.force,
-            )
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
-            ) from exc
-        except MetadataNotEditableError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT, detail=str(exc),
-            ) from exc
-
-    await session.commit()
-
-    applied = sum(1 for r in results if r.status == "applied")
-    skipped = sum(1 for r in results if r.status == "skipped")
-    failed = sum(1 for r in results if r.status == "failed")
-    return BulkApplyOut(
-        applied=applied,
-        skipped=skipped,
-        failed=failed,
-        results=results,
-    )
 
 
 # ------------------------------------------------------------------

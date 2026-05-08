@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -8,6 +11,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from app.core.config import settings
+
+PAT_PREFIX = "aso_pat_"
 
 bearer_scheme = HTTPBearer()
 
@@ -105,3 +110,23 @@ async def get_current_user(
             detail="Token missing subject",
         )
     return {"user_id": user_id, **payload}
+
+
+# ---------------------------------------------------------------------------
+# Personal Access Tokens (long-lived bearer tokens for headless/MCP clients)
+# ---------------------------------------------------------------------------
+
+
+def generate_pat() -> tuple[str, str]:
+    """Mint a new PAT. Returns (plaintext, hash)."""
+    raw = secrets.token_urlsafe(32)
+    plaintext = f"{PAT_PREFIX}{raw}"
+    return plaintext, hash_pat(plaintext)
+
+
+def hash_pat(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def pats_equal(a: str, b: str) -> bool:
+    return hmac.compare_digest(a, b)

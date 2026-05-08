@@ -16,6 +16,7 @@
 | [004 - Localization Management](004-localization-management.md) | Subscription/IAP display names & descriptions, bulk sync, JSON import |
 | [005 - Subscription Management](005-subscription-management.md) | Create / update groups, subscriptions, group localizations, introductory offers (CRUD via UI; submit-for-review manual) |
 | [006 - Metadata Editor + Cross-Loc](006-metadata-editor.md) | Per-locale app metadata CRUD, bulk fan-out, Claude AI translation, color-coded keyword coverage, cross-localization grid |
+| [008 - Refresher ASC Metadata Recommendations](008-refresher-asc-metadata-recommendations.md) | Draft promotional text and subtitle variants for Refresher across 5 locales |
 
 ## Specs
 
@@ -67,4 +68,4 @@
 | Metadata components | `frontend/src/components/metadata/*` |
 
 ---
-*Last updated: 2026-05-05*
+*Last updated: 2026-05-09*

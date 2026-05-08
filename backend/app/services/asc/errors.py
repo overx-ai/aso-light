@@ -1,6 +1,15 @@
 """Custom exceptions for App Store Connect API interactions."""
 
 
+class CredentialDecryptError(Exception):
+    """The stored .p8 cannot be decrypted or is not a valid PEM private key.
+
+    Distinct from a transport / API error: indicates the data at rest is
+    corrupt or was encrypted with a different key. Callers should map this
+    to a 400-class response telling the user to re-upload their .p8.
+    """
+
+
 class ASCAPIError(Exception):
     """Error returned from the App Store Connect API."""
 
