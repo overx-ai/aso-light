@@ -16,6 +16,7 @@ import {
   Badge,
   ActionIcon,
   Image,
+  Switch,
 } from "@mantine/core";
 import { useDisclosure, useDebouncedValue } from "@mantine/hooks";
 import {
@@ -45,6 +46,7 @@ import {
   useRemoveCompetitor,
   useCompetitorKeywords,
   useKeywordCoverage,
+  usePaidOrganicJoin,
 } from "@/lib/hooks";
 import RankHistoryChart from "@/components/keywords/RankHistoryChart";
 import CrossLocalizationMatrix from "@/components/keywords/CrossLocalizationMatrix";
@@ -67,6 +69,41 @@ function TrackedKeywordsTab({ appId }: { appId: string }) {
   const refreshMutation = useRefreshKeywordRankings();
   const [addModalOpened, addModalHandlers] = useDisclosure(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  // ---- Paid metrics toggle (persists per-app to localStorage) ----
+  const paidStorageKey = `paid_toggle_${appId}`;
+  const [withPaid, setWithPaid] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(paidStorageKey) === "1";
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(paidStorageKey, withPaid ? "1" : "0");
+  }, [withPaid, paidStorageKey]);
+
+  const paidJoin = usePaidOrganicJoin(withPaid ? Number(appId) : 0, 30);
+  const paidByTerm = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        impressions: number;
+        taps: number;
+        installs: number;
+        spend: string;
+        currency: string | null;
+      }
+    >();
+    for (const row of paidJoin.data ?? []) {
+      map.set(row.term.toLowerCase(), {
+        impressions: row.paid_impressions_30d,
+        taps: row.paid_taps_30d,
+        installs: row.paid_installs_30d,
+        spend: row.paid_spend_30d,
+        currency: row.paid_spend_currency,
+      });
+    }
+    return map;
+  }, [paidJoin.data]);
 
   // keyword (lowercased) -> [(locale, placement)] across all locales/fields
   const coverageByKeyword = useMemo(() => {
@@ -125,6 +162,12 @@ function TrackedKeywordsTab({ appId }: { appId: string }) {
             {trackings?.length ?? 0} tracked keyword(s)
           </Text>
           <Group gap="xs">
+            <Switch
+              size="sm"
+              label="Show paid metrics"
+              checked={withPaid}
+              onChange={(e) => setWithPaid(e.currentTarget.checked)}
+            />
             <Button
               size="xs"
               variant="light"
@@ -254,6 +297,98 @@ function TrackedKeywordsTab({ appId }: { appId: string }) {
                   />
                 ),
               },
+              ...(withPaid
+                ? [
+                    {
+                      accessor: "paid_impressions",
+                      title: "Imp 30d",
+                      width: 90,
+                      textAlign: "right" as const,
+                      render: (row: KeywordTrackingResponse) => {
+                        const m = paidByTerm.get(
+                          row.keyword.text.toLowerCase(),
+                        );
+                        return m && m.impressions > 0 ? (
+                          <Text size="sm">
+                            {m.impressions.toLocaleString()}
+                          </Text>
+                        ) : (
+                          <Text size="sm" c="dimmed">
+                            --
+                          </Text>
+                        );
+                      },
+                    },
+                    {
+                      accessor: "paid_taps",
+                      title: "Taps 30d",
+                      width: 90,
+                      textAlign: "right" as const,
+                      render: (row: KeywordTrackingResponse) => {
+                        const m = paidByTerm.get(
+                          row.keyword.text.toLowerCase(),
+                        );
+                        return m && m.taps > 0 ? (
+                          <Text size="sm">{m.taps.toLocaleString()}</Text>
+                        ) : (
+                          <Text size="sm" c="dimmed">
+                            --
+                          </Text>
+                        );
+                      },
+                    },
+                    {
+                      accessor: "paid_installs",
+                      title: "Inst 30d",
+                      width: 90,
+                      textAlign: "right" as const,
+                      render: (row: KeywordTrackingResponse) => {
+                        const m = paidByTerm.get(
+                          row.keyword.text.toLowerCase(),
+                        );
+                        return m && m.installs > 0 ? (
+                          <Text size="sm">
+                            {m.installs.toLocaleString()}
+                          </Text>
+                        ) : (
+                          <Text size="sm" c="dimmed">
+                            --
+                          </Text>
+                        );
+                      },
+                    },
+                    {
+                      accessor: "paid_spend",
+                      title: "Spend 30d",
+                      width: 130,
+                      textAlign: "right" as const,
+                      render: (row: KeywordTrackingResponse) => {
+                        const m = paidByTerm.get(
+                          row.keyword.text.toLowerCase(),
+                        );
+                        if (!m || parseFloat(m.spend) === 0) {
+                          return (
+                            <Text size="sm" c="dimmed">
+                              --
+                            </Text>
+                          );
+                        }
+                        return (
+                          <Group gap={4} justify="flex-end" wrap="nowrap">
+                            <Text size="sm">
+                              {parseFloat(m.spend).toFixed(2)}
+                            </Text>
+                            {m.currency && (
+                              <Badge size="xs" variant="light" color="gray">
+                                {m.currency}
+                              </Badge>
+                            )}
+                          </Group>
+                        );
+                      },
+                    },
+                  ]
+                : []),
               {
                 accessor: "actions",
                 title: "",

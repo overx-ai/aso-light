@@ -3102,3 +3102,595 @@ export function useAppClash(appId: number, country = "us") {
     staleTime: 5 * 60_000,
   });
 }
+
+// ---- Personal Access Tokens (MCP auth) ----
+
+export type PATListItem = {
+  id: number;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+};
+
+export type PATCreateResponse = PATListItem & { token: string };
+
+const patKey = ["personal-access-tokens"] as const;
+
+export function usePersonalAccessTokens() {
+  return useQuery({
+    queryKey: patKey,
+    queryFn: async () => {
+      const response = await api.get<PATListItem[]>("/auth/tokens");
+      return response.data;
+    },
+  });
+}
+
+export function useCreatePersonalAccessToken() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (name: string) => {
+      const response = await api.post<PATCreateResponse>("/auth/tokens", {
+        name,
+      });
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: patKey });
+    },
+    onError: () => {
+      notifications.show({
+        title: "Failed to issue token",
+        message: "Could not create the personal access token.",
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useRevokePersonalAccessToken() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      await api.delete(`/auth/tokens/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: patKey });
+      notifications.show({
+        title: "Token revoked",
+        message: "The token can no longer authenticate.",
+        color: "green",
+      });
+    },
+    onError: () => {
+      notifications.show({
+        title: "Revoke failed",
+        message: "Could not revoke the token.",
+        color: "red",
+      });
+    },
+  });
+}
+
+// ============================================================================
+// Apple Search Ads (ASA)
+// ============================================================================
+
+export type ASACredentialOut = {
+  id: number;
+  name: string;
+  key_id: string;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ASATestResult = {
+  ok: boolean;
+  orgs_visible: number;
+  detail: string | null;
+};
+
+export type ASAOrgOut = {
+  id: number;
+  credential_id: number;
+  asa_org_id: number;
+  name: string;
+  currency: string;
+  timezone: string;
+  role: string | null;
+};
+
+export type ASACampaignOut = {
+  id: number;
+  org_id: number;
+  asa_campaign_id: number;
+  app_id: number | null;
+  app_adam_id: string;
+  name: string;
+  status: string;
+  supply_sources: unknown[] | null;
+  daily_budget_amount: string | null;
+  daily_budget_currency: string | null;
+  storefronts: unknown[] | null;
+  archived_at: string | null;
+};
+
+export type ASAAdGroupOut = {
+  id: number;
+  campaign_id: number;
+  asa_ad_group_id: number;
+  name: string;
+  status: string;
+  default_bid_amount: string | null;
+  default_bid_currency: string | null;
+  age_range: Record<string, unknown> | null;
+  gender: string | null;
+  device_class: string | null;
+  archived_at: string | null;
+};
+
+export type ASAKeywordOut = {
+  id: number;
+  ad_group_id: number;
+  asa_keyword_id: number;
+  text: string;
+  match_type: "BROAD" | "EXACT";
+  bid_amount: string | null;
+  bid_currency: string | null;
+  status: string;
+  archived_at: string | null;
+};
+
+export type ASANegativeKeywordOut = {
+  id: number;
+  campaign_id: number | null;
+  ad_group_id: number | null;
+  asa_negative_keyword_id: number;
+  text: string;
+  match_type: "BROAD" | "EXACT";
+  scope: "CAMPAIGN" | "AD_GROUP";
+};
+
+export type PaidOrganicJoinRow = {
+  term: string;
+  organic_rank: number | null;
+  paid_impressions_30d: number;
+  paid_taps_30d: number;
+  paid_installs_30d: number;
+  paid_spend_30d: string;
+  paid_spend_currency: string | null;
+};
+
+export type ASAPerformanceReportRow = {
+  dim_kind: "CAMPAIGN" | "AD_GROUP" | "KEYWORD" | "SEARCH_TERM";
+  dim_id: number;
+  app_adam_id: string;
+  date: string;
+  storefront: string | null;
+  impressions: number;
+  taps: number;
+  installs: number;
+  new_downloads: number;
+  redownloads: number;
+  spend_amount: string;
+  spend_currency: string;
+  avg_cpa_amount: string | null;
+  avg_cpt_amount: string | null;
+  ttr: string | null;
+  conversion_rate: string | null;
+};
+
+export type ASAPerformanceReportOut = {
+  grain: "CAMPAIGN" | "AD_GROUP" | "KEYWORD";
+  time_range: { start: string; end: string };
+  rows: ASAPerformanceReportRow[];
+};
+
+export type ASASearchTermReportRow = {
+  search_term_id: number;
+  text: string;
+  match_type: string;
+  ad_group_id: number;
+  impressions: number;
+  taps: number;
+  installs: number;
+  spend: number;
+  spend_currency: string | null;
+};
+
+export type ASASearchTermReportOut = {
+  time_range: { start: string; end: string };
+  rows: ASASearchTermReportRow[];
+};
+
+export type ASASyncOperationOut = {
+  id: number;
+  credential_id: number;
+  status: string;
+  full_backfill: boolean;
+  steps: Record<string, unknown>[];
+  error_log: string[];
+  started_at: string | null;
+  completed_at: string | null;
+};
+
+export type ASAOrganicCandidate = {
+  text: string;
+  taps: number;
+  installs: number;
+};
+
+export type ASANegativeCandidate = {
+  search_term_id: number;
+  text: string;
+  ad_group_id: number;
+  spend: number;
+  taps: number;
+  installs: number;
+  conversion_rate: number;
+};
+
+const asaCredKey = ["asa", "credentials"] as const;
+const asaOrgsKey = (cid: number) => ["asa", "orgs", cid] as const;
+const asaCampaignsKey = (appId: number, status?: string) =>
+  ["asa", "campaigns", appId, status ?? null] as const;
+const asaAdGroupsKey = (appId: number, cid: number) =>
+  ["asa", "ad-groups", appId, cid] as const;
+const asaAdGroupKeywordsKey = (appId: number, agid: number) =>
+  ["asa", "ad-group-keywords", appId, agid] as const;
+const asaNegKey = (
+  appId: number,
+  scope: "CAMPAIGN" | "AD_GROUP",
+  scopeId: number,
+) => ["asa", "negatives", appId, scope, scopeId] as const;
+const asaPaidJoinKey = (appId: number, days: number) =>
+  ["asa", "paid-organic-join", appId, days] as const;
+const asaSearchTermsKey = (
+  appId: number,
+  days: number,
+  agid?: number,
+  minImp?: number,
+) =>
+  ["asa", "search-terms", appId, days, agid ?? null, minImp ?? null] as const;
+const asaPerfKey = (
+  appId: number,
+  grain: string,
+  days: number,
+  storefront?: string,
+) => ["asa", "performance", appId, grain, days, storefront ?? null] as const;
+const asaOrganicCandidatesKey = (
+  appId: number,
+  days: number,
+  minTaps: number,
+) => ["asa", "organic-candidates", appId, days, minTaps] as const;
+const asaNegativeCandidatesKey = (
+  appId: number,
+  days: number,
+  minSpend: number,
+  maxConv: number,
+) =>
+  [
+    "asa",
+    "negative-candidates",
+    appId,
+    days,
+    minSpend,
+    maxConv,
+  ] as const;
+
+export function useASACredentials() {
+  return useQuery({
+    queryKey: asaCredKey,
+    queryFn: async () =>
+      (await api.get<ASACredentialOut[]>("/asa/credentials")).data,
+  });
+}
+
+export function useCreateASACredential() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: {
+      name: string;
+      client_id: string;
+      team_id: string;
+      key_id: string;
+      private_key_pem: string;
+    }) => (await api.post<ASACredentialOut>("/asa/credentials", body)).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: asaCredKey });
+      notifications.show({
+        title: "ASA credential added",
+        message: "Validated against Apple. Run a sync to populate data.",
+        color: "green",
+      });
+    },
+    onError: (err: unknown) => {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail ?? "Could not add the credential.";
+      notifications.show({
+        title: "ASA credential rejected",
+        message: detail,
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useDeleteASACredential() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      await api.delete(`/asa/credentials/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: asaCredKey });
+    },
+  });
+}
+
+export function useTestASACredential() {
+  return useMutation({
+    mutationFn: async (id: number) =>
+      (await api.post<ASATestResult>(`/asa/credentials/${id}/test`)).data,
+  });
+}
+
+export function useASASync() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { credential_id: number; full?: boolean }) =>
+      (
+        await api.post<ASASyncOperationOut>(
+          `/asa/credentials/${vars.credential_id}/sync`,
+          null,
+          { params: { full: vars.full ?? false } },
+        )
+      ).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["asa"] });
+      notifications.show({
+        title: "ASA sync complete",
+        message: "Data refreshed.",
+        color: "green",
+      });
+    },
+    onError: () =>
+      notifications.show({
+        title: "ASA sync failed",
+        message: "Check the credential and try again.",
+        color: "red",
+      }),
+  });
+}
+
+export function useASAOrgs(credentialId: number) {
+  return useQuery({
+    queryKey: asaOrgsKey(credentialId),
+    queryFn: async () =>
+      (await api.get<ASAOrgOut[]>(`/asa/credentials/${credentialId}/orgs`))
+        .data,
+    enabled: credentialId > 0,
+  });
+}
+
+export function useASACampaigns(appId: number, status?: string) {
+  return useQuery({
+    queryKey: asaCampaignsKey(appId, status),
+    queryFn: async () =>
+      (
+        await api.get<ASACampaignOut[]>(`/apps/${appId}/asa/campaigns`, {
+          params: status ? { status } : undefined,
+        })
+      ).data,
+    enabled: appId > 0,
+  });
+}
+
+export function useASAAdGroups(appId: number, campaignId: number) {
+  return useQuery({
+    queryKey: asaAdGroupsKey(appId, campaignId),
+    queryFn: async () =>
+      (
+        await api.get<ASAAdGroupOut[]>(
+          `/apps/${appId}/asa/campaigns/${campaignId}/ad-groups`,
+        )
+      ).data,
+    enabled: appId > 0 && campaignId > 0,
+  });
+}
+
+export function useASAAdGroupKeywords(appId: number, adGroupId: number) {
+  return useQuery({
+    queryKey: asaAdGroupKeywordsKey(appId, adGroupId),
+    queryFn: async () =>
+      (
+        await api.get<ASAKeywordOut[]>(
+          `/apps/${appId}/asa/ad-groups/${adGroupId}/keywords`,
+        )
+      ).data,
+    enabled: appId > 0 && adGroupId > 0,
+  });
+}
+
+export function useASANegativeKeywords(
+  appId: number,
+  scope: "CAMPAIGN" | "AD_GROUP" | null,
+  scopeId: number | null,
+) {
+  return useQuery({
+    queryKey: asaNegKey(appId, scope ?? "CAMPAIGN", scopeId ?? 0),
+    queryFn: async () =>
+      (
+        await api.get<ASANegativeKeywordOut[]>(
+          `/apps/${appId}/asa/negative-keywords`,
+          {
+            params:
+              scope === "CAMPAIGN"
+                ? { campaign_id: scopeId }
+                : { ad_group_id: scopeId },
+          },
+        )
+      ).data,
+    enabled: appId > 0 && scope !== null && (scopeId ?? 0) > 0,
+  });
+}
+
+export function useAddNegativeKeywords() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: {
+      app_id: number;
+      body: {
+        scope: "CAMPAIGN" | "AD_GROUP";
+        scope_id: number;
+        keywords: { text: string; match_type: "BROAD" | "EXACT" }[];
+      };
+    }) =>
+      (
+        await api.post<ASANegativeKeywordOut[]>(
+          `/apps/${vars.app_id}/asa/negative-keywords`,
+          vars.body,
+        )
+      ).data,
+    onSuccess: (_d, v) => {
+      queryClient.invalidateQueries({
+        queryKey: ["asa", "negatives", v.app_id],
+      });
+      notifications.show({
+        title: "Negatives added",
+        message: `${v.body.keywords.length} negative${v.body.keywords.length === 1 ? "" : "s"} added.`,
+        color: "green",
+      });
+    },
+    onError: (err: unknown) => {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail ?? "Could not add negatives.";
+      notifications.show({
+        title: "Failed to add negatives",
+        message: detail,
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useRemoveNegativeKeyword() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { app_id: number; negative_id: number }) => {
+      await api.delete(
+        `/apps/${vars.app_id}/asa/negative-keywords/${vars.negative_id}`,
+      );
+    },
+    onSuccess: (_d, v) => {
+      queryClient.invalidateQueries({
+        queryKey: ["asa", "negatives", v.app_id],
+      });
+    },
+  });
+}
+
+export function usePaidOrganicJoin(appId: number, days = 30) {
+  return useQuery({
+    queryKey: asaPaidJoinKey(appId, days),
+    queryFn: async () =>
+      (
+        await api.get<PaidOrganicJoinRow[]>(
+          `/apps/${appId}/asa/keywords/paid-organic-join`,
+          { params: { days } },
+        )
+      ).data,
+    enabled: appId > 0,
+  });
+}
+
+export function useASASearchTermReport(
+  appId: number,
+  days = 30,
+  adGroupId?: number,
+  minImpressions?: number,
+) {
+  return useQuery({
+    queryKey: asaSearchTermsKey(appId, days, adGroupId, minImpressions),
+    queryFn: async () =>
+      (
+        await api.get<ASASearchTermReportOut>(
+          `/apps/${appId}/asa/search-terms`,
+          {
+            params: {
+              days,
+              ad_group_id: adGroupId,
+              min_impressions: minImpressions,
+            },
+          },
+        )
+      ).data,
+    enabled: appId > 0,
+  });
+}
+
+export function useASAPerformanceReport(
+  appId: number,
+  grain: "CAMPAIGN" | "AD_GROUP" | "KEYWORD",
+  days = 30,
+  storefront?: string,
+) {
+  return useQuery({
+    queryKey: asaPerfKey(appId, grain, days, storefront),
+    queryFn: async () =>
+      (
+        await api.get<ASAPerformanceReportOut>(
+          `/apps/${appId}/asa/performance`,
+          { params: { grain, days, storefront } },
+        )
+      ).data,
+    enabled: appId > 0,
+  });
+}
+
+export function useASAOrganicCandidates(
+  appId: number,
+  days = 30,
+  minTaps = 20,
+) {
+  return useQuery({
+    queryKey: asaOrganicCandidatesKey(appId, days, minTaps),
+    queryFn: async () =>
+      (
+        await api.get<ASAOrganicCandidate[]>(
+          `/apps/${appId}/asa/insights/organic-candidates`,
+          { params: { days, min_taps: minTaps } },
+        )
+      ).data,
+    enabled: appId > 0,
+  });
+}
+
+export function useASANegativeCandidates(
+  appId: number,
+  days = 30,
+  minSpend = 10,
+  maxConvRate = 0.005,
+) {
+  return useQuery({
+    queryKey: asaNegativeCandidatesKey(appId, days, minSpend, maxConvRate),
+    queryFn: async () =>
+      (
+        await api.get<ASANegativeCandidate[]>(
+          `/apps/${appId}/asa/insights/negative-candidates`,
+          {
+            params: {
+              days,
+              min_spend: minSpend,
+              max_conv_rate: maxConvRate,
+            },
+          },
+        )
+      ).data,
+    enabled: appId > 0,
+  });
+}

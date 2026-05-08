@@ -17,10 +17,16 @@ import { DataTable } from "mantine-datatable";
 import {
   IconAlertCircle,
   IconAlertTriangle,
+  IconCash,
   IconChecks,
   IconInfoCircle,
 } from "@tabler/icons-react";
-import { useApp, useAsoCheck } from "@/lib/hooks";
+import {
+  useApp,
+  useASACredentials,
+  useAsoCheck,
+  usePaidOrganicJoin,
+} from "@/lib/hooks";
 import type { AsoIssueOut, AsoIssueSeverity } from "@/types";
 
 const SEV_COLOR: Record<AsoIssueSeverity, string> = {
@@ -40,6 +46,72 @@ function SevBadge({ severity }: { severity: AsoIssueSeverity }) {
     <Badge size="xs" color={SEV_COLOR[severity]} variant="light">
       {SEV_LABEL[severity]}
     </Badge>
+  );
+}
+
+function PaidCoverageSection({ appId }: { appId: number }) {
+  const creds = useASACredentials();
+  const join = usePaidOrganicJoin(appId, 30);
+
+  // Hide entirely if ASA isn't connected AND there's no paid signal at all.
+  const credsLoaded = !creds.isLoading;
+  const hasCreds = (creds.data ?? []).length > 0;
+  const rows = join.data ?? [];
+  const anyPaid = rows.some((r) => r.paid_impressions_30d > 0);
+
+  if (credsLoaded && !hasCreds && !anyPaid) return null;
+  if (join.isLoading) return null;
+
+  const tracked = rows;
+  const withPaid = tracked.filter((r) => r.paid_impressions_30d > 0);
+  const withoutPaid = tracked.filter((r) => r.paid_impressions_30d === 0);
+
+  return (
+    <Paper withBorder p="md" radius="md">
+      <Group gap="xs" mb="xs">
+        <IconCash size={18} color="var(--mantine-color-blue-6)" />
+        <Text fw={600} size="sm">
+          ASA Paid Coverage
+        </Text>
+      </Group>
+      <Group gap="md" wrap="wrap" mb="sm">
+        <Badge variant="light" color="green" size="sm">
+          {withPaid.length} tracked terms with paid bids
+        </Badge>
+        <Badge variant="light" color="yellow" size="sm">
+          {withoutPaid.length} tracked terms without paid coverage
+        </Badge>
+      </Group>
+
+      {withoutPaid.length === 0 ? (
+        <Text size="sm" c="dimmed">
+          Every tracked keyword is also covered by an ASA bid. Nice.
+        </Text>
+      ) : (
+        <Stack gap="xs">
+          <Text size="xs" c="dimmed">
+            Consider bidding on these tracked terms in Apple Search Ads:
+          </Text>
+          <Group gap="xs" wrap="wrap">
+            {withoutPaid.slice(0, 30).map((r) => (
+              <Badge key={r.term} variant="outline" color="yellow" size="sm">
+                {r.term}
+                {r.organic_rank !== null && (
+                  <Text component="span" ml={4} size="xs" c="dimmed">
+                    #{r.organic_rank}
+                  </Text>
+                )}
+              </Badge>
+            ))}
+            {withoutPaid.length > 30 && (
+              <Text size="xs" c="dimmed">
+                +{withoutPaid.length - 30} more
+              </Text>
+            )}
+          </Group>
+        </Stack>
+      )}
+    </Paper>
   );
 }
 
@@ -140,6 +212,8 @@ export default function AsoCheckPage() {
               </Text>
             </Paper>
           </Group>
+
+          <PaidCoverageSection appId={appId} />
 
           <Paper withBorder p="xs">
             <Group gap="md" wrap="wrap" align="flex-end">
