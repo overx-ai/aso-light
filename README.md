@@ -40,9 +40,9 @@ See `docs/specs/007-metadata-editor-and-cross-loc.md` for the full design.
 # Backend + frontend dev servers
 make dev          # backend http://localhost:8000, frontend http://localhost:5173
 
-# Or run individually using the same backend default as the Makefile
-make dev-backend  # override with DEV_BACKEND_PORT=... if needed
-cd frontend && npm install && npm run dev
+# Or run individually using the same startup targets exposed by the Makefile
+make dev-backend   # override with DEV_BACKEND_PORT=... if needed
+make dev-frontend
 
 # PostgreSQL (optional — SQLite auto-creates for dev)
 make db-up && make migrate

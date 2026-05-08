@@ -3145,7 +3145,7 @@ Expected: all previously-passing tests + new ASA tests pass. No regressions.
 
 - [ ] Run: `cd frontend && npx tsc --noEmit`
 Expected: clean.
-- [ ] Run: `cd frontend && npm run dev` and visit `/settings` and `/apps/<id>/paid-search` — confirm pages render. Smoke-only; full ASA UI testing requires a real ASA org.
+- [ ] Run: `make dev-frontend` and visit `/settings` and `/apps/<id>/paid-search` — confirm pages render. Smoke-only; full ASA UI testing requires a real ASA org.
 
 ### Task 7.4: live-org checklist (manual)
 

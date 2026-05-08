@@ -42,7 +42,7 @@ App Store Optimization SaaS — web-based alternative to aso.dev. Focuses on pri
 - **Start dev**: `make dev` (starts backend on `http://localhost:8000`, frontend on `http://localhost:5173`)
 - **DB init**: `make db-up && make migrate` (PostgreSQL) or just `make dev` (SQLite auto-creates)
 - **Run backend alone**: `make dev-backend` (defaults to `DEV_BACKEND_PORT=8000`)
-- **Run frontend alone**: `cd frontend && npm run dev`
+- **Run frontend alone**: `make dev-frontend`
 - **Generate Fernet key**: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 
 ## Architecture Decisions
