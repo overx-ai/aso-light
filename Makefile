@@ -1,5 +1,7 @@
 .PHONY: dev-backend dev-frontend dev db-up db-down migrate migration install-backend install-frontend install
 
+# Canonical local backend dev port. Keep this aligned with README, Vite proxy,
+# helper scripts, and MCP/operator docs.
 dev-backend:
 	cd backend && uv run uvicorn app.main:app --reload --port 8000
 

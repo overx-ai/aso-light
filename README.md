@@ -55,6 +55,10 @@ Copy `backend/.env.example` to `backend/.env` and fill in `SECRET_KEY`, `JWT_SEC
 
 ## Local Dev URLs
 
+Canonical backend base URL for local development is `http://localhost:8000`.
+Keep startup commands, proxy settings, curl examples, and MCP client configs
+aligned to that URL.
+
 - Frontend: `http://localhost:5173`
 - Backend API docs: `http://localhost:8000/docs`
 - Health check: `http://localhost:8000/health`
