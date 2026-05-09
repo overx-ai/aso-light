@@ -46,13 +46,16 @@ it into your MCP client config immediately.
 ### Issuing one via curl
 
 ```bash
+# 0. Optional smoke check: backend is up on the canonical local dev URL
+curl -s http://localhost:8000/health
+
 # 1. Login (existing JWT flow) to get a short-lived access token
-curl -s -X POST http://localhost:8002/api/v1/auth/login \
+curl -s -X POST http://localhost:8000/api/v1/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"you@example.com","password":"..."}' | jq -r .access_token
 
 # 2. Issue a PAT
-curl -s -X POST http://localhost:8002/api/v1/auth/tokens \
+curl -s -X POST http://localhost:8000/api/v1/auth/tokens \
   -H "Authorization: Bearer <ACCESS_TOKEN>" \
   -H 'Content-Type: application/json' \
   -d '{"name":"claude-desktop"}' | jq
@@ -74,7 +77,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "aso-light": {
-      "url": "http://localhost:8002/mcp/",
+      "url": "http://localhost:8000/mcp/",
       "headers": {
         "Authorization": "Bearer aso_pat_xxxxxxxxxxxxxxxxxxxxxx"
       }
@@ -228,7 +231,7 @@ and review responses.
 (`GET /api/v1/auth/tokens`). Confirm the `Authorization: Bearer aso_pat_...`
 header is being sent — some clients lowercase or strip headers.
 
-**Tool list is empty in the client.** Confirm `http://localhost:8002/mcp/`
+**Tool list is empty in the client.** Confirm `http://localhost:8000/mcp/`
 returns 401 on `GET` (auth-required, mount works). 404 means the mount didn't
 register; 200 with no body usually means a stale Vite/CORS proxy in front.
 

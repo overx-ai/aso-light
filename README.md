@@ -53,6 +53,13 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 Copy `backend/.env.example` to `backend/.env` and fill in `SECRET_KEY`, `JWT_SECRET_KEY`, and `FERNET_KEY`.
 
+## Local Dev URLs
+
+- Frontend: `http://localhost:5173`
+- Backend API docs: `http://localhost:8000/docs`
+- Health check: `http://localhost:8000/health`
+- MCP endpoint: `http://localhost:8000/mcp/`
+
 ## Project Structure
 
 ```

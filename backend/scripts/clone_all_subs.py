@@ -110,7 +110,7 @@ def _orphan_pids(all_pids: set[str]) -> set[str]:
     return orphans
 
 
-DEFAULT_BASE_URL = "http://localhost:8002"
+DEFAULT_BASE_URL = "http://localhost:8000"
 
 
 # ---------------------------------------------------------------------------

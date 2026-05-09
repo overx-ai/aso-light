@@ -17,6 +17,7 @@ from sqlalchemy import select
 from app.core.security import hash_pat
 from app.db.session import async_session_factory
 from app.models.personal_access_token import PersonalAccessToken
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +29,18 @@ class PATTokenVerifier(TokenVerifier):
         token_hash = hash_pat(token)
         async with async_session_factory() as session:
             res = await session.execute(
-                select(PersonalAccessToken).where(
+                select(PersonalAccessToken, User.is_active).join(
+                    User,
+                    User.id == PersonalAccessToken.user_id,
+                ).where(
                     PersonalAccessToken.token_hash == token_hash,
                 )
             )
-            pat = res.scalar_one_or_none()
-            if pat is None or pat.revoked_at is not None:
+            row = res.one_or_none()
+            if row is None:
+                return None
+            pat, is_active = row
+            if pat.revoked_at is not None or not is_active:
                 return None
 
             # Best-effort touch — never fail auth on a write hiccup.

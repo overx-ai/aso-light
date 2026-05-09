@@ -1,7 +1,7 @@
 .PHONY: dev-backend dev-frontend dev db-up db-down migrate migration install-backend install-frontend install
 
 dev-backend:
-	cd backend && uv run uvicorn app.main:app --reload --port 8002
+	cd backend && uv run uvicorn app.main:app --reload --port 8000
 
 dev-frontend:
 	cd frontend && npm run dev
