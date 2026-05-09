@@ -10,9 +10,8 @@ Creates three tables backing the keyword visibility tracker (spec 009):
 * ``keyword_visibility_snapshots`` — one row per poll.
 * ``keyword_visibility_results`` — top-N iTunes results inside each snapshot.
 
-Idempotent: the dev workflow calls ``Base.metadata.create_all`` at startup
-so the tables may already exist. We only ``create_table`` / ``drop_table``
-when needed.
+Idempotent: legacy databases may already have these tables, so we only
+``create_table`` / ``drop_table`` when needed.
 """
 from typing import Sequence, Union
 

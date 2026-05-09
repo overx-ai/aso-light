@@ -13,8 +13,8 @@ Backs the version-bump clone flow + RevenueCat integration:
 * ``apps.revenuecat_credential_id`` — optional FK linking an app to its
   RC credential.
 
-Idempotent (matches 001-003): tolerates partial pre-existing state since
-``Base.metadata.create_all`` runs at startup in the dev SQLite path.
+Idempotent (matches 001-003): tolerates partial pre-existing state from
+legacy databases that predate migration-first startup.
 """
 from typing import Sequence, Union
 

@@ -1,6 +1,6 @@
 import logging
-from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,12 +8,9 @@ from fastapi.responses import RedirectResponse
 
 from app.api import api_router
 from app.core.config import settings
-from app.data.seed import seed_territories
-from app.db.base import Base
-from app.db.session import async_session_factory, engine
+from app.db.bootstrap import bootstrap_database
+from app.db.session import engine
 from app.mcp import mcp_app
-
-import app.models  # noqa: F401 — register all models with Base.metadata
 
 # App-level loggers default to INFO so logger.info() lines (apply payload,
 # intro-offer results, etc.) show up in the dev log without bumping each
@@ -28,11 +25,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Compose with the FastMCP lifespan (required for MCP session management).
     async with mcp_app.lifespan(app):
-        logger.info("Starting up: initialising database")
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        async with async_session_factory() as session:
-            await seed_territories(session)
+        logger.info("Starting up: applying migrations and seeding territories")
+        await bootstrap_database()
         yield
         logger.info("Shutting down")
         await engine.dispose()

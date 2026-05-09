@@ -12,9 +12,9 @@ Creates three new tables backing the Metadata Editor + AI translation feature:
   + which fields are mutable right now.
 * ``metadata_translation_cache`` — caches Claude translations to bound spend.
 
-Idempotent (matches the pattern of 001/002): the dev workflow calls
-``Base.metadata.create_all`` at app startup, so any of these tables may
-already exist. We only ``create_table`` / ``drop_table`` when needed.
+Idempotent (matches the pattern of 001/002): legacy databases may already have
+some of these tables, so we only ``create_table`` / ``drop_table`` when
+needed.
 """
 from typing import Sequence, Union
 
