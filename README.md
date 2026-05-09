@@ -44,7 +44,7 @@ make dev          # backend :8000, frontend :5173
 cd backend && uv run uvicorn app.main:app --reload --port 8000
 cd frontend && npm install && npm run dev
 
-# PostgreSQL (optional — SQLite auto-creates for dev)
+# Apply migrations manually (optional preflight for any database)
 make db-up && make migrate
 
 # Generate a Fernet key for FERNET_KEY in backend/.env
@@ -52,6 +52,10 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 ```
 
 Copy `backend/.env.example` to `backend/.env` and fill in `SECRET_KEY`, `JWT_SECRET_KEY`, and `FERNET_KEY`.
+
+Backend startup is migration-first in every environment: it runs Alembic
+`upgrade head` before seeding territories. `make migrate` remains available
+when you want an explicit preflight step before starting the app.
 
 ## Project Structure
 

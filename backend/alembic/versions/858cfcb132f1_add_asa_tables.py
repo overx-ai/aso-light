@@ -16,9 +16,8 @@ Creates the nine tables backing the Apple Search Ads vertical (spec 009 ASA):
 * ``asa_metric_daily`` — polymorphic daily fact table (dim_kind/dim_id).
 * ``asa_sync_operations`` — operations log for entity + report syncs.
 
-Idempotent: the dev workflow calls ``Base.metadata.create_all`` at startup
-so the tables may already exist. We only ``create_table`` / ``drop_table``
-when needed.
+Idempotent: legacy databases may already have these tables, so we only
+``create_table`` / ``drop_table`` when needed.
 """
 from typing import Sequence, Union
 

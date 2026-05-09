@@ -7,7 +7,6 @@
 | T-006 | Apple Search Ads API integration (keyword popularity) | Keywords | pending | high | Requires Apple Search Ads account |
 | T-007 | Background scheduler for index + ranking refresh | Backend | pending | medium | APScheduler or asyncio tasks |
 | T-009 | Code split frontend bundle (1.1MB) | Frontend | pending | low | Dynamic imports for route chunks |
-| T-010 | Alembic migrations (replace create_all in dev) | Backend | pending | medium | Needed before prod deploy |
 | T-024 | Fix pre-existing pytest-asyncio markers | Backend | pending | low | `test_preview_endpoint.py`, `test_preview_pricing.py` — surfaced during Phase 5 quality gate |
 
 ## Completed
@@ -37,6 +36,7 @@
 | T-021 | App availability management page | Full-stack | 2026-04-30 | Per-territory availability editor |
 | T-022 | Subscription management (groups + subs + group locs + intro offers) | Full-stack | 2026-05-01 | Spec 006; submit-for-review remains manual |
 | T-023 | Metadata Editor + Cross-Loc + AI translation (Phase 5) | Full-stack | 2026-05-05 | Spec 007; 17 sub-tasks; `AnthropicTranslator` (Haiku 4.5); cap 500/app/30d; suggestion-only |
+| T-010 | Alembic migrations (replace create_all in dev) | Backend | 2026-05-09 | Startup now upgrades via Alembic before seeding territories |
 
 ## Backlog
 

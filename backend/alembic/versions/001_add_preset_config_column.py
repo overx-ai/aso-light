@@ -4,11 +4,9 @@ Revision ID: 001_preset_config
 Revises:
 Create Date: 2026-04-26
 
-This is the first migration. The dev workflow currently bootstraps the schema
-via ``Base.metadata.create_all`` on app startup, so the ``price_presets.config``
-column may already exist by the time anyone runs ``alembic upgrade head``.
-The migration is therefore written idempotently — it inspects the live schema
-and only adds (or drops) the column when needed.
+This is the first migration. It remains idempotent so databases that were
+bootstrapped before the migration-first startup switch can still converge on
+the Alembic history safely.
 """
 from typing import Sequence, Union
 
@@ -17,7 +15,7 @@ from alembic import op
 
 
 revision: str = "001_preset_config"
-down_revision: Union[str, None] = None
+down_revision: Union[str, None] = "000_base_schema"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
