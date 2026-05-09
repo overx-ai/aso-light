@@ -1,15 +1,23 @@
+import hashlib
+import hmac
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import bcrypt
-from cryptography.fernet import Fernet
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from app.core.config import settings
 
+try:
+    import bcrypt
+except ModuleNotFoundError:  # pragma: no cover - exercised in lean local envs
+    bcrypt = None
+
 bearer_scheme = HTTPBearer()
+PBKDF2_PREFIX = "pbkdf2_sha256"
+PBKDF2_ROUNDS = 600_000
 
 
 # ---------------------------------------------------------------------------
@@ -18,10 +26,37 @@ bearer_scheme = HTTPBearer()
 
 
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    if bcrypt is not None:
+        return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        PBKDF2_ROUNDS,
+    ).hex()
+    return f"{PBKDF2_PREFIX}${PBKDF2_ROUNDS}${salt}${digest}"
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    if hashed_password.startswith(f"{PBKDF2_PREFIX}$"):
+        try:
+            _, rounds, salt, digest = hashed_password.split("$", 3)
+        except ValueError:
+            return False
+
+        candidate = hashlib.pbkdf2_hmac(
+            "sha256",
+            plain_password.encode("utf-8"),
+            salt.encode("utf-8"),
+            int(rounds),
+        ).hex()
+        return hmac.compare_digest(candidate, digest)
+
+    if bcrypt is None:
+        return False
+
     return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
 
 
@@ -65,7 +100,9 @@ def decode_token(token: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _get_fernet() -> Fernet:
+def _get_fernet():
+    from cryptography.fernet import Fernet
+
     if not settings.FERNET_KEY:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

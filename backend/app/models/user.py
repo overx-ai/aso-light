@@ -9,6 +9,7 @@ from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.credential import ASCCredential
+    from app.models.personal_access_token import PersonalAccessToken
     from app.models.preset import PricePreset
 
 
@@ -27,6 +28,11 @@ class User(TimestampMixin, Base):
         lazy="selectin",
     )
     price_presets: Mapped[list[PricePreset]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    personal_access_tokens: Mapped[list[PersonalAccessToken]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
         lazy="selectin",

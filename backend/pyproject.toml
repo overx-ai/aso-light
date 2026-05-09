@@ -5,6 +5,7 @@ description = "ASO (App Store Optimization) SaaS tool"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]",
+    "fastmcp>=2.0",
     "uvicorn",
     "sqlalchemy[asyncio]>=2.0",
     "alembic",

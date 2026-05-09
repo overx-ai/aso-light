@@ -21,24 +21,7 @@ mcp: FastMCP = FastMCP(
 
 
 # Importing the tool modules registers tools, resources, and prompts on `mcp`.
-from app.mcp.tools import (  # noqa: E402, F401
-    apps,
-    asa,
-    aso,
-    availability,
-    clash,
-    indices,
-    keywords,
-    metadata,
-    pricing,
-    presets,
-    reviews,
-    revenuecat,
-    swap,
-    territories,
-    visibility,
-)
-from app.mcp import resources, prompts  # noqa: E402, F401
+from app.mcp.tools import asa, aso, keywords  # noqa: E402, F401
 
 
 # Mount path is "/mcp" in main.py, so the FastMCP app lives at "/" within itself.
