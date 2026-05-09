@@ -466,36 +466,6 @@ iap_prices = sa.Table(
     sa.UniqueConstraint("iap_id", "territory_id", name="uq_iap_price_iap_territory"),
 )
 
-personal_access_tokens = sa.Table(
-    "personal_access_tokens",
-    metadata,
-    sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-    sa.Column(
-        "user_id",
-        sa.Integer(),
-        sa.ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    ),
-    sa.Column("name", sa.String(length=120), nullable=False),
-    sa.Column("token_hash", sa.String(length=64), nullable=False, unique=True, index=True),
-    sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=True),
-    sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
-    sa.Column(
-        "created_at",
-        sa.DateTime(timezone=True),
-        server_default=sa.func.now(),
-        nullable=False,
-    ),
-    sa.Column(
-        "updated_at",
-        sa.DateTime(timezone=True),
-        server_default=sa.func.now(),
-        nullable=False,
-    ),
-)
-
-
 def upgrade() -> None:
     metadata.create_all(op.get_bind(), checkfirst=True)
 

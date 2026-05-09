@@ -37,8 +37,18 @@ async def bootstrap_database(
     database_url: str | None = None,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
-    await run_migrations(database_url=database_url)
+    if (database_url is None) != (session_factory is None):
+        raise ValueError(
+            "bootstrap_database overrides require both database_url and session_factory",
+        )
 
-    target_session_factory = session_factory or async_session_factory
+    target_database_url = database_url or settings.DATABASE_URL
+    await run_migrations(database_url=target_database_url)
+
+    if session_factory is None:
+        target_session_factory = async_session_factory
+    else:
+        target_session_factory = session_factory
+
     async with target_session_factory() as session:
         await seed_territories(session)
