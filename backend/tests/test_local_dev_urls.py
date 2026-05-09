@@ -1,7 +1,20 @@
+import asyncio
 from importlib import import_module
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+
+async def _set_user_active(email: str, *, is_active: bool) -> None:
+    from app.db.session import async_session_factory
+    from app.models.user import User
+
+    async with async_session_factory() as session:
+        result = await session.execute(select(User).where(User.email == email))
+        user = result.scalar_one()
+        user.is_active = is_active
+        await session.commit()
 
 
 def test_local_dev_health_login_and_mcp_flow():
@@ -48,8 +61,21 @@ def test_local_dev_health_login_and_mcp_flow():
         assert redirect.status_code == 307
         assert redirect.headers["location"] == "/mcp/"
 
+        mcp_headers = {
+            "Authorization": f"Bearer {pat_token}",
+            "Accept": "text/event-stream",
+        }
         protected = client.get(
             "/mcp/",
-            headers={"Authorization": f"Bearer {pat_token}"},
+            headers=mcp_headers,
         )
-        assert protected.status_code != 401
+        assert protected.status_code == 400
+        assert "Missing session ID" in protected.text
+
+        asyncio.run(_set_user_active(email, is_active=False))
+
+        deactivated = client.get(
+            "/mcp/",
+            headers=mcp_headers,
+        )
+        assert deactivated.status_code == 401

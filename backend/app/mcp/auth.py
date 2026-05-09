@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.db.session import async_session_factory
 from app.mcp.context import set_user_id
 from app.models.personal_access_token import PersonalAccessToken
+from app.models.user import User
 
 
 def _hash_token(token: str) -> str:
@@ -21,9 +22,12 @@ class PATTokenVerifier(TokenVerifier):
 
         async with async_session_factory() as session:
             result = await session.execute(
-                select(PersonalAccessToken).where(
+                select(PersonalAccessToken)
+                .join(PersonalAccessToken.user)
+                .where(
                     PersonalAccessToken.token_hash == token_hash,
                     PersonalAccessToken.revoked_at.is_(None),
+                    User.is_active.is_(True),
                 )
             )
             row = result.scalar_one_or_none()
