@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 import unittest
 
@@ -78,6 +79,40 @@ class LocalDevConfigTest(unittest.TestCase):
         self.assertIn('"/mcp"', main_py)
         self.assertIn('RedirectResponse(url="/mcp/", status_code=307)', main_py)
         self.assertIn('app.mount("/mcp", mcp_app)', main_py)
+
+
+def test_app_lifespan_wraps_mcp_lifespan() -> None:
+    tree = ast.parse(read_repo_file("backend/app/main.py"))
+    lifespan = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "lifespan"
+    )
+
+    wrapped_mcp_lifespan = False
+    for async_with in (node for node in ast.walk(lifespan) if isinstance(node, ast.AsyncWith)):
+        for item in async_with.items:
+            context_expr = item.context_expr
+            if not isinstance(context_expr, ast.Call):
+                continue
+            if not isinstance(context_expr.func, ast.Attribute):
+                continue
+            if context_expr.func.attr != "lifespan":
+                continue
+            if not isinstance(context_expr.func.value, ast.Name):
+                continue
+            if context_expr.func.value.id != "mcp_app":
+                continue
+            if len(context_expr.args) != 1:
+                continue
+            if not isinstance(context_expr.args[0], ast.Name):
+                continue
+            if context_expr.args[0].id != "app":
+                continue
+            wrapped_mcp_lifespan = True
+            break
+
+    assert wrapped_mcp_lifespan
 
 
 if __name__ == "__main__":
