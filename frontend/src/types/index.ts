@@ -746,6 +746,8 @@ export interface AnomaliesOut {
 // ---- ASO Check ----
 
 export type AsoIssueSeverity = "error" | "warning" | "info";
+export type AsoRecommendationCategory = "pricing";
+export type AsoRecommendationPriority = "high" | "medium" | "low";
 
 export interface AsoIssueOut {
   severity: AsoIssueSeverity;
@@ -763,9 +765,21 @@ export interface AsoIssueSummary {
   locales_audited: number;
 }
 
+export interface AsoRecommendationOut {
+  id: string;
+  category: AsoRecommendationCategory;
+  priority: AsoRecommendationPriority;
+  title: string;
+  body: string;
+  facts: string[];
+  cta_label: string | null;
+  cta_path: string | null;
+}
+
 export interface AsoCheckOut {
   summary: AsoIssueSummary;
   items: AsoIssueOut[];
+  recommendations: AsoRecommendationOut[];
 }
 
 // ---- App Clash ----

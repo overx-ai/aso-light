@@ -1,14 +1,16 @@
 import { useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import {
   Alert,
   Badge,
+  Button,
   Container,
   Group,
   Loader,
   Paper,
   SegmentedControl,
   Select,
+  SimpleGrid,
   Stack,
   Text,
   Title,
@@ -17,8 +19,10 @@ import { DataTable } from "mantine-datatable";
 import {
   IconAlertCircle,
   IconAlertTriangle,
+  IconArrowRight,
   IconCash,
   IconChecks,
+  IconCoin,
   IconInfoCircle,
 } from "@tabler/icons-react";
 import {
@@ -27,7 +31,12 @@ import {
   useAsoCheck,
   usePaidOrganicJoin,
 } from "@/lib/hooks";
-import type { AsoIssueOut, AsoIssueSeverity } from "@/types";
+import type {
+  AsoIssueOut,
+  AsoIssueSeverity,
+  AsoRecommendationOut,
+  AsoRecommendationPriority,
+} from "@/types";
 
 const SEV_COLOR: Record<AsoIssueSeverity, string> = {
   error: "red",
@@ -41,11 +50,107 @@ const SEV_LABEL: Record<AsoIssueSeverity, string> = {
   info: "Info",
 };
 
+const REC_PRIORITY_COLOR: Record<AsoRecommendationPriority, string> = {
+  high: "red",
+  medium: "yellow",
+  low: "blue",
+};
+
+const REC_PRIORITY_LABEL: Record<AsoRecommendationPriority, string> = {
+  high: "High priority",
+  medium: "Medium priority",
+  low: "Low priority",
+};
+
 function SevBadge({ severity }: { severity: AsoIssueSeverity }) {
   return (
     <Badge size="xs" color={SEV_COLOR[severity]} variant="light">
       {SEV_LABEL[severity]}
     </Badge>
+  );
+}
+
+function GrowthRecommendationsSection({
+  recommendations,
+}: {
+  recommendations: AsoRecommendationOut[];
+}) {
+  const pricingRecommendations = recommendations.filter(
+    (item) => item.category === "pricing",
+  );
+
+  if (pricingRecommendations.length === 0) {
+    return null;
+  }
+
+  return (
+    <Stack gap="sm">
+      <div>
+        <Group gap="xs" mb={4}>
+          <IconCoin size={18} color="var(--mantine-color-green-6)" />
+          <Text fw={600} size="sm">
+            Pricing Opportunities
+          </Text>
+        </Group>
+        <Text size="xs" c="dimmed">
+          Signals derived from cached storefront prices and territory economics.
+        </Text>
+      </div>
+
+      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
+        {pricingRecommendations.map((item) => (
+          <Paper key={item.id} withBorder p="md" radius="md">
+            <Stack gap="sm">
+              <Group justify="space-between" align="flex-start" wrap="wrap">
+                <Badge variant="light" color="green" size="sm">
+                  Pricing
+                </Badge>
+                <Badge
+                  variant="outline"
+                  color={REC_PRIORITY_COLOR[item.priority]}
+                  size="sm"
+                >
+                  {REC_PRIORITY_LABEL[item.priority]}
+                </Badge>
+              </Group>
+
+              <div>
+                <Text fw={600} size="sm">
+                  {item.title}
+                </Text>
+                <Text size="sm" mt={6}>
+                  {item.body}
+                </Text>
+              </div>
+
+              {item.facts.length > 0 ? (
+                <Stack gap={4}>
+                  {item.facts.map((fact) => (
+                    <Text key={fact} size="xs" c="dimmed">
+                      {fact}
+                    </Text>
+                  ))}
+                </Stack>
+              ) : null}
+
+              {item.cta_path && item.cta_label ? (
+                <Group justify="flex-start">
+                  <Button
+                    component={Link}
+                    to={item.cta_path}
+                    size="xs"
+                    variant="light"
+                    rightSection={<IconArrowRight size={14} />}
+                  >
+                    {item.cta_label}
+                  </Button>
+                </Group>
+              ) : null}
+            </Stack>
+          </Paper>
+        ))}
+      </SimpleGrid>
+    </Stack>
   );
 }
 
@@ -159,6 +264,7 @@ export default function AsoCheckPage() {
   }
 
   const summary = auditQuery.data?.summary;
+  const recommendations = auditQuery.data?.recommendations ?? [];
 
   return (
     <Container size="xl">
@@ -168,9 +274,8 @@ export default function AsoCheckPage() {
           <Title order={2}>{app?.name ?? "App"} — ASO Check</Title>
         </Group>
         <Text c="dimmed" size="sm" mt={4}>
-          Listing audit across every synced locale: empty fields, char-limit
-          warnings, duplicate keywords, malformed URLs, and tracked keywords
-          you forgot to place.
+          Listing audit across every synced locale, plus pricing opportunities
+          derived from your cached storefront data.
         </Text>
       </div>
 
@@ -212,6 +317,8 @@ export default function AsoCheckPage() {
               </Text>
             </Paper>
           </Group>
+
+          <GrowthRecommendationsSection recommendations={recommendations} />
 
           <PaidCoverageSection appId={appId} />
 

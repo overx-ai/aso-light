@@ -12,10 +12,23 @@ from sqlalchemy.orm import selectinload
 from app.api.v1._deps import _get_verified_app
 from app.core.security import get_current_user
 from app.db.session import get_session
+from app.models.app import App
+from app.models.iap import InAppPurchase
 from app.models.keyword import KeywordTracking
 from app.models.metadata import AppMetadataLocalization
-from app.schemas.aso_check import AsoCheckOut, IssueOut, IssueSummary
+from app.models.subscription import Subscription, SubscriptionGroup
+from app.models.territory import Territory
+from app.schemas.aso_check import (
+    AsoCheckOut,
+    IssueOut,
+    IssueSummary,
+    RecommendationOut,
+)
 from app.services.aso_check.audit import audit
+from app.services.aso_check.pricing import (
+    build_pricing_recommendations,
+    build_pricing_snapshots,
+)
 from app.services.metadata.coloring import classify_keyword
 
 logger = logging.getLogger(__name__)
@@ -28,10 +41,11 @@ async def run_aso_check(
     current_user: dict[str, Any] = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> AsoCheckOut:
-    """Audit a synced metadata snapshot + tracked keywords for issues.
+    """Audit metadata and emit app-growth recommendations.
 
-    Pure read — no writes. Re-run anytime; the rules live in
-    ``services/aso_check/audit.py`` so they're easy to extend.
+    Pure read — no writes. Re-run anytime; the metadata rules live in
+    ``services/aso_check/audit.py`` and pricing heuristics live in
+    ``services/aso_check/pricing.py``.
     """
     user_id = int(current_user["user_id"])
     await _get_verified_app(app_id, user_id, session)
@@ -90,6 +104,31 @@ async def run_aso_check(
         locales_audited=len({r.locale for r in rows}),
     )
 
+    app_result = await session.execute(
+        select(App)
+        .options(
+            selectinload(App.subscription_groups)
+            .selectinload(SubscriptionGroup.subscriptions)
+            .selectinload(Subscription.prices),
+            selectinload(App.iaps).selectinload(InAppPurchase.prices),
+        )
+        .where(App.id == app_id)
+    )
+    app_record = app_result.scalar_one()
+
+    territories_result = await session.execute(select(Territory))
+    territories = territories_result.scalars().all()
+    territory_by_id = {territory.id: territory for territory in territories}
+
+    pricing_recommendations = build_pricing_recommendations(
+        build_pricing_snapshots(
+            app_id=app_id,
+            subscription_groups=app_record.subscription_groups,
+            iaps=app_record.iaps,
+            territory_by_id=territory_by_id,
+        )
+    )
+
     return AsoCheckOut(
         summary=summary,
         items=[
@@ -102,5 +141,18 @@ async def run_aso_check(
                 suggestion=i.suggestion,
             )
             for i in issues
+        ],
+        recommendations=[
+            RecommendationOut(
+                id=item.id,
+                category=item.category,
+                priority=item.priority,
+                title=item.title,
+                body=item.body,
+                facts=item.facts,
+                cta_label=item.cta_label,
+                cta_path=item.cta_path,
+            )
+            for item in pricing_recommendations
         ],
     )
