@@ -139,10 +139,14 @@ return types are self-describing.
 **Optimize keywords for a locale**
 1. `aso.aso_check(app_id)` → see metadata gaps
 2. `metadata.get_snapshot(app_id)` → read current title/subtitle/keywords
-3. `keywords.list_for_app(app_id)` → see currently tracked keywords
+3. `keywords.list_for_app(app_id)` or `keyword_intel.list_for_app(app_id)` → see currently tracked keywords
 4. `keywords.search` / `keywords.suggestions` → find new candidates
 5. `clash.run(app_id)` → compare against competitors
 6. Propose edits, then `metadata.update_locale(...)` after user approval
+
+To refresh the cached keyword-intel table from MCP, use
+`keywords.refresh_rankings(app_id)` or the parity alias
+`keyword_intel.refresh(app_id)`.
 
 **Bulk price update**
 1. `pricing.export_prices(app_id)` → CSV/Excel of current prices
