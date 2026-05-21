@@ -7,7 +7,6 @@ translate a review body, and full reply CRUD against ASC.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from fastmcp.exceptions import ToolError
 
@@ -28,88 +27,14 @@ from app.services.metadata.translate import (
     AnthropicTranslator,
     translate_with_cache,
 )
-from app.services.reviews.draft import draft_reply
+from app.services.reviews.common import (
+    extract_cursor,
+    serialize_review,
+    territory_to_locale,
+)
+from app.services.reviews.draft import default_tone_for_theme, draft_reply
 
 logger = logging.getLogger(__name__)
-
-
-# ASC returns alpha-3 territory codes; map to a sensible reply locale.
-_TERRITORY_TO_LOCALE: dict[str, str] = {
-    "USA": "en-US", "GBR": "en-GB", "AUS": "en-AU", "CAN": "en-CA",
-    "NZL": "en-NZ", "IRL": "en-IE",
-    "DEU": "de-DE", "AUT": "de-DE", "CHE": "de-DE",
-    "FRA": "fr-FR", "BEL": "fr-FR", "LUX": "fr-FR",
-    "ESP": "es-ES", "MEX": "es-MX", "ARG": "es-MX", "CHL": "es-MX",
-    "COL": "es-MX", "PER": "es-MX",
-    "ITA": "it-IT",
-    "JPN": "ja-JP",
-    "KOR": "ko-KR",
-    "CHN": "zh-Hans", "TWN": "zh-Hant", "HKG": "zh-Hant",
-    "RUS": "ru-RU",
-    "BRA": "pt-BR", "PRT": "pt-PT",
-    "NLD": "nl-NL",
-    "POL": "pl-PL",
-    "TUR": "tr-TR",
-    "SWE": "sv-SE", "NOR": "no-NO", "DNK": "da-DK", "FIN": "fi-FI",
-    "IDN": "id-ID", "MYS": "ms-MY", "THA": "th-TH", "VNM": "vi-VN",
-    "ARE": "ar-SA", "SAU": "ar-SA",
-    "ISR": "he-IL",
-    "IND": "hi-IN",
-    "GRC": "el-GR",
-    "CZE": "cs-CZ", "SVK": "sk-SK", "HUN": "hu-HU", "ROU": "ro-RO",
-    "UKR": "uk-UA", "BGR": "bg-BG", "HRV": "hr-HR",
-}
-
-
-def _territory_to_locale(territory: str | None) -> str:
-    if not territory:
-        return "en-US"
-    return _TERRITORY_TO_LOCALE.get(territory.upper(), "en-US")
-
-
-def _serialize_review(
-    raw: dict[str, Any], included: list[dict[str, Any]] | None = None,
-) -> ReviewOut:
-    """Convert ASC JSON:API review payload (+ included responses) → ReviewOut."""
-    attrs = raw.get("attributes") or {}
-    response: ReviewResponseOut | None = None
-
-    rel = (raw.get("relationships") or {}).get("response", {}).get("data")
-    if rel and included:
-        for inc in included:
-            if (
-                inc.get("type") == "customerReviewResponses"
-                and inc.get("id") == rel.get("id")
-            ):
-                inc_attrs = inc.get("attributes") or {}
-                response = ReviewResponseOut(
-                    id=inc.get("id", ""),
-                    body=inc_attrs.get("responseBody") or "",
-                    last_modified_date=inc_attrs.get("lastModifiedDate"),
-                    state=inc_attrs.get("state"),
-                )
-                break
-
-    return ReviewOut(
-        id=raw.get("id", ""),
-        rating=int(attrs.get("rating") or 0),
-        title=attrs.get("title"),
-        body=attrs.get("body"),
-        territory=attrs.get("territory"),
-        reviewer_nickname=attrs.get("reviewerNickname"),
-        created_date=attrs.get("createdDate"),
-        response=response,
-    )
-
-
-def _extract_cursor(payload: dict[str, Any]) -> str | None:
-    next_link = (payload.get("links") or {}).get("next")
-    if not next_link or "cursor=" not in next_link:
-        return None
-    try:
-        return next_link.split("cursor=", 1)[1].split("&", 1)[0]
-    except IndexError:
-        return None
 
 
 def _wrap_asc(action: str, exc: ASCAPIError) -> ToolError:
@@ -160,14 +85,14 @@ async def list_reviews(
 
     items_raw = payload.get("data") or []
     included = payload.get("included") or []
-    items = [_serialize_review(r, included) for r in items_raw]
+    items = [serialize_review(r, included) for r in items_raw]
 
     if has_response is True:
         items = [r for r in items if r.response is not None]
     elif has_response is False:
         items = [r for r in items if r.response is None]
 
-    return ReviewListOut(items=items, next_cursor=_extract_cursor(payload))
+    return ReviewListOut(items=items, next_cursor=extract_cursor(payload))
 
 
 @mcp.tool(name="reviews.get")
@@ -185,7 +110,7 @@ async def get_review(app_id: int, review_id: str) -> ReviewOut:
 
     raw = payload.get("data") or {}
     included = payload.get("included") or []
-    return _serialize_review(raw, included)
+    return serialize_review(raw, included)
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +122,7 @@ async def get_review(app_id: int, review_id: str) -> ReviewOut:
 async def draft_review_reply(
     app_id: int,
     review_id: str,
-    tone: ReplyTone = "neutral",
+    tone: ReplyTone | None = None,
 ) -> DraftOut:
     """Generate a suggested reply to a review using Claude.
 
@@ -218,18 +143,21 @@ async def draft_review_reply(
             except ASCAPIError as exc:
                 raise _wrap_asc(f"get review {review_id} for draft", exc) from exc
 
-    review = _serialize_review(payload.get("data") or {})
+    review = serialize_review(payload.get("data") or {})
     if not review.body:
         raise ToolError("Review has no body to reply to.")
 
-    locale = _territory_to_locale(review.territory)
+    locale = territory_to_locale(review.territory)
+    resolved_tone = tone or default_tone_for_theme(review.theme)
     try:
         suggestion = await draft_reply(
             api_key=settings.ANTHROPIC_API_KEY,
+            review_title=review.title,
             review_body=review.body,
             review_rating=review.rating,
             target_locale=locale,
-            tone=tone,
+            tone=resolved_tone,
+            theme=review.theme,
         )
     except Exception as exc:  # noqa: BLE001 — anthropic SDK raises diverse types
         logger.warning(
@@ -237,7 +165,12 @@ async def draft_review_reply(
             app_id, review_id, exc,
         )
         raise ToolError("AI drafting service unavailable") from exc
-    return DraftOut(suggestion=suggestion, locale=locale)
+    return DraftOut(
+        suggestion=suggestion,
+        locale=locale,
+        theme=review.theme,
+        tone=resolved_tone,
+    )
 
 
 @mcp.tool(name="reviews.translate")
@@ -268,11 +201,11 @@ async def translate_review(
                     f"get review {review_id} for translate", exc,
                 ) from exc
 
-        review = _serialize_review(payload.get("data") or {})
+        review = serialize_review(payload.get("data") or {})
         if not review.body:
             raise ToolError("Review has no body to translate.")
 
-        source_locale = _territory_to_locale(review.territory)
+        source_locale = territory_to_locale(review.territory)
         if source_locale == target_locale:
             return TranslateReviewOut(translation=review.body, cached=True)
 

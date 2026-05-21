@@ -32,7 +32,7 @@ import {
   useTranslateReview,
   useUpdateReply,
 } from "@/lib/hooks";
-import type { ReplyTone } from "@/types";
+import type { ReplyTone, ReviewTheme } from "@/types";
 
 const RESPONSE_BODY_MAX_LEN = 5970;
 const SOURCE_LOCALE_STORAGE_KEY = "metadata-source-locale";
@@ -68,6 +68,33 @@ const TONE_OPTIONS: { value: ReplyTone; label: string }[] = [
   { value: "appreciative", label: "Appreciative" },
 ];
 
+const THEME_LABELS: Record<ReviewTheme, string> = {
+  bug_report: "Bug report",
+  feature_request: "Feature request",
+  praise: "Praise",
+  billing_issue: "Billing issue",
+  support_request: "Support request",
+  other: "General feedback",
+};
+
+const THEME_COLORS: Record<ReviewTheme, string> = {
+  bug_report: "red",
+  feature_request: "blue",
+  praise: "green",
+  billing_issue: "orange",
+  support_request: "cyan",
+  other: "gray",
+};
+
+const DEFAULT_TONE_BY_THEME: Record<ReviewTheme, ReplyTone> = {
+  bug_report: "apologetic",
+  feature_request: "appreciative",
+  praise: "appreciative",
+  billing_issue: "apologetic",
+  support_request: "neutral",
+  other: "neutral",
+};
+
 export default function ReviewDrawer({
   appId,
   reviewId,
@@ -88,6 +115,7 @@ export default function ReviewDrawer({
 
   const review = reviewQuery.data;
   const existingResponse = review?.response ?? null;
+  const reviewTheme = review?.theme ?? "other";
 
   const targetLocale = useMemo(() => {
     if (typeof window === "undefined") return "en-US";
@@ -101,6 +129,11 @@ export default function ReviewDrawer({
     setTranslation(null);
     setTranslationCached(false);
   }, [opened, reviewId, existingResponse?.body]);
+
+  useEffect(() => {
+    if (!opened) return;
+    setTone(DEFAULT_TONE_BY_THEME[reviewTheme]);
+  }, [opened, reviewId, reviewTheme]);
 
   if (!review && reviewQuery.isLoading) {
     return (
@@ -138,7 +171,10 @@ export default function ReviewDrawer({
     draftMutation.mutate(
       { reviewId: review.id, tone },
       {
-        onSuccess: (out) => setReply(out.suggestion),
+        onSuccess: (out) => {
+          setReply(out.suggestion);
+          setTone(out.tone);
+        },
       },
     );
   };
@@ -191,6 +227,9 @@ export default function ReviewDrawer({
               {review.reviewer_nickname}
             </Text>
           )}
+          <Badge size="sm" variant="light" color={THEME_COLORS[reviewTheme]}>
+            {THEME_LABELS[reviewTheme]}
+          </Badge>
         </Group>
       }
     >
@@ -275,6 +314,7 @@ export default function ReviewDrawer({
               size="xs"
               style={{ flex: 1 }}
               label="Tone"
+              description={`Defaulted from ${THEME_LABELS[reviewTheme].toLowerCase()}`}
             />
             <Tooltip label="Suggest reply (Claude)" withArrow>
               <Button
