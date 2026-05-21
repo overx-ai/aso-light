@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   Alert,
@@ -18,7 +18,9 @@ import {
   IconStarFilled,
   IconSwords,
 } from "@tabler/icons-react";
-import { useApp, useAppClash } from "@/lib/hooks";
+import KeywordIntelBadge from "@/components/keywords/KeywordIntelBadge";
+import { summarizeKeywordIntelForTrack } from "@/components/keywords/keywordIntel";
+import { useApp, useAppClash, useVisibilitySov, useVisibilityWatches } from "@/lib/hooks";
 import type { ClashRow } from "@/types";
 
 const COUNTRY_OPTIONS = [
@@ -77,7 +79,13 @@ function ClashCell({
   );
 }
 
-function ClashCard({ row }: { row: ClashRow }) {
+function ClashCard({
+  row,
+  intel,
+}: {
+  row: ClashRow;
+  intel: React.ReactNode;
+}) {
   return (
     <Paper
       withBorder
@@ -136,6 +144,7 @@ function ClashCard({ row }: { row: ClashRow }) {
           <ClashCell label="Size">
             {row.file_size_mb != null ? `${row.file_size_mb} MB` : "—"}
           </ClashCell>
+          <ClashCell label="Keyword intel">{intel}</ClashCell>
         </Group>
 
         {row.description_excerpt && (
@@ -154,6 +163,8 @@ export default function AppClashPage() {
   const { data: app } = useApp(id ?? "");
   const [country, setCountry] = useState("us");
   const clashQuery = useAppClash(appId, country);
+  const visibilityWatches = useVisibilityWatches(appId);
+  const visibilitySov = useVisibilitySov(appId, 30);
 
   if (!Number.isFinite(appId) || appId <= 0) {
     return (
@@ -166,6 +177,27 @@ export default function AppClashPage() {
   }
 
   const rows = clashQuery.data?.rows ?? [];
+  const intelLoading =
+    visibilityWatches.isLoading || visibilitySov.isLoading;
+  const intelUnavailable =
+    visibilityWatches.isError || visibilitySov.isError;
+  const intelByTrackId = useMemo(() => {
+    const summaries = new Map<string, ReturnType<typeof summarizeKeywordIntelForTrack>>();
+
+    for (const row of rows) {
+      summaries.set(
+        row.track_id,
+        summarizeKeywordIntelForTrack({
+          country,
+          trackId: row.track_id,
+          watches: visibilityWatches.data?.items ?? [],
+          sovItems: visibilitySov.data?.items ?? [],
+        }),
+      );
+    }
+
+    return summaries;
+  }, [country, rows, visibilitySov.data?.items, visibilityWatches.data?.items]);
 
   return (
     <Container size="xl">
@@ -212,7 +244,17 @@ export default function AppClashPage() {
         ) : (
           <Stack gap="sm">
             {rows.map((r) => (
-              <ClashCard key={r.track_id} row={r} />
+              <ClashCard
+                key={r.track_id}
+                row={r}
+                intel={
+                  <KeywordIntelBadge
+                    loading={intelLoading}
+                    unavailable={intelUnavailable}
+                    summary={intelByTrackId.get(r.track_id) ?? null}
+                  />
+                }
+              />
             ))}
           </Stack>
         )}

@@ -47,9 +47,13 @@ import {
   useCompetitorKeywords,
   useKeywordCoverage,
   usePaidOrganicJoin,
+  useVisibilitySov,
+  useVisibilityWatches,
 } from "@/lib/hooks";
 import RankHistoryChart from "@/components/keywords/RankHistoryChart";
 import CrossLocalizationMatrix from "@/components/keywords/CrossLocalizationMatrix";
+import KeywordIntelBadge from "@/components/keywords/KeywordIntelBadge";
+import { summarizeKeywordIntelForKeyword } from "@/components/keywords/keywordIntel";
 import KeywordCoverageDots from "@/components/metadata/KeywordCoverageDots";
 import type {
   KeywordTrackingResponse,
@@ -62,8 +66,11 @@ import type {
 // ---- Tracked Keywords Tab ----
 
 function TrackedKeywordsTab({ appId }: { appId: string }) {
+  const appQuery = useApp(appId);
   const { data: trackings, isLoading } = useTrackedKeywords(appId);
   const coverage = useKeywordCoverage(Number(appId));
+  const visibilityWatches = useVisibilityWatches(Number(appId));
+  const visibilitySov = useVisibilitySov(Number(appId), 30);
   const addKeywordMutation = useAddKeyword();
   const removeKeywordMutation = useRemoveKeyword();
   const refreshMutation = useRefreshKeywordRankings();
@@ -104,6 +111,43 @@ function TrackedKeywordsTab({ appId }: { appId: string }) {
     }
     return map;
   }, [paidJoin.data]);
+
+  const intelLoading =
+    appQuery.isLoading || visibilityWatches.isLoading || visibilitySov.isLoading;
+  const intelUnavailable =
+    visibilityWatches.isError ||
+    visibilitySov.isError ||
+    (!appQuery.isLoading && !appQuery.data?.asc_app_id);
+  const intelByKeyword = useMemo(() => {
+    const targetTrackId = appQuery.data?.asc_app_id;
+    const summaries = new Map<string, ReturnType<typeof summarizeKeywordIntelForKeyword>>();
+
+    if (!targetTrackId) {
+      return summaries;
+    }
+
+    for (const row of trackings ?? []) {
+      const key = row.keyword.text.trim().toLowerCase();
+      if (!summaries.has(key)) {
+        summaries.set(
+          key,
+          summarizeKeywordIntelForKeyword({
+            keywordText: row.keyword.text,
+            trackId: targetTrackId,
+            watches: visibilityWatches.data?.items ?? [],
+            sovItems: visibilitySov.data?.items ?? [],
+          }),
+        );
+      }
+    }
+
+    return summaries;
+  }, [
+    appQuery.data?.asc_app_id,
+    trackings,
+    visibilitySov.data?.items,
+    visibilityWatches.data?.items,
+  ]);
 
   // keyword (lowercased) -> [(locale, placement)] across all locales/fields
   const coverageByKeyword = useMemo(() => {
@@ -293,6 +337,21 @@ function TrackedKeywordsTab({ appId }: { appId: string }) {
                     placements={
                       coverageByKeyword.get(row.keyword.text.toLowerCase()) ??
                       []
+                    }
+                  />
+                ),
+              },
+              {
+                accessor: "intel",
+                title: "Intel",
+                width: 140,
+                render: (row: KeywordTrackingResponse) => (
+                  <KeywordIntelBadge
+                    loading={intelLoading}
+                    unavailable={intelUnavailable}
+                    summary={
+                      intelByKeyword.get(row.keyword.text.trim().toLowerCase()) ??
+                      null
                     }
                   />
                 ),
