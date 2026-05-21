@@ -51,6 +51,8 @@
 - PricePointCache concurrency reduced from 5 to 2 (avoids rate limit hits)
 
 ### Fixed
+- Local dev backend URL drift: `Makefile`, Vite proxy, MCP setup docs, Settings PAT snippet, and helper scripts now all use `http://localhost:8000`
+- Personal access token hardening: added an Alembic revision for `personal_access_tokens`, MCP PAT auth now rejects deactivated users, and PAT names are trimmed before validation/storage
 - Login redirect loop: 307 slash redirect stripped Authorization header → 401 → token cleared
 - Credential creation crash: async lazy-load of `credential.apps` relationship
 - Territory code mismatch: frontend defaulted to `"USA"` but DB uses `"US"`

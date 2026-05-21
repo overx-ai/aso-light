@@ -40,6 +40,9 @@ See `docs/specs/007-metadata-editor-and-cross-loc.md` for the full design.
 # Backend + frontend dev servers
 make dev          # backend :8000, frontend :5173
 
+# Verify the backend is up
+curl -s http://localhost:8000/health
+
 # Or run individually
 cd backend && uv run uvicorn app.main:app --reload --port 8000
 cd frontend && npm install && npm run dev

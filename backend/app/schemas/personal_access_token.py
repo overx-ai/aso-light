@@ -1,10 +1,14 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, StringConstraints
 
 
 class PATCreateRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
+    name: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=120),
+    ]
 
 
 class PATCreateResponse(BaseModel):
