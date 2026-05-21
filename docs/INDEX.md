@@ -68,4 +68,4 @@
 | Metadata components | `frontend/src/components/metadata/*` |
 
 ---
-*Last updated: 2026-05-09*
+*Last updated: 2026-05-21*

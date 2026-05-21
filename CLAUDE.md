@@ -39,9 +39,9 @@ App Store Optimization SaaS — web-based alternative to aso.dev. Focuses on pri
 
 ## Workflows
 
-- **Start dev**: `make dev` (starts backend on :8002, frontend on :5173)
+- **Start dev**: `make dev` (starts backend on :8000, frontend on :5173)
 - **DB init**: `make db-up && make migrate` (PostgreSQL) or just `make dev` (SQLite auto-creates)
-- **Run backend alone**: `cd backend && uv run uvicorn app.main:app --reload --port 8002`
+- **Run backend alone**: `cd backend && uv run uvicorn app.main:app --reload --port 8000`
 - **Run frontend alone**: `cd frontend && npm run dev`
 - **Generate Fernet key**: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 

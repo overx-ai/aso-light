@@ -53,6 +53,24 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 Copy `backend/.env.example` to `backend/.env` and fill in `SECRET_KEY`, `JWT_SECRET_KEY`, and `FERNET_KEY`.
 
+## Local Dev URLs
+
+```bash
+# API health check
+curl -s http://localhost:8000/health
+
+# Login to get a short-lived access token
+curl -s -X POST http://localhost:8000/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com","password":"..."}'
+
+# MCP endpoint mount check (401 without a PAT is expected)
+curl -i http://localhost:8000/mcp/
+```
+
+The frontend dev server runs at `http://localhost:5173` and proxies `/api` to
+`http://localhost:8000`.
+
 ## Project Structure
 
 ```

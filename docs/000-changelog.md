@@ -52,6 +52,7 @@
 
 ### Fixed
 - Login redirect loop: 307 slash redirect stripped Authorization header → 401 → token cleared
+- Local dev backend URL drift: Makefile, Vite proxy, MCP docs, PAT UI snippet, and helper scripts now all use `http://localhost:8000`
 - Credential creation crash: async lazy-load of `credential.apps` relationship
 - Territory code mismatch: frontend defaulted to `"USA"` but DB uses `"US"`
 - ASC API `platform` field rejection on app sync
