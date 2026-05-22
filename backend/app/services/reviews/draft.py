@@ -10,13 +10,10 @@ guidelines for review replies.
 """
 from __future__ import annotations
 
-from typing import Literal
-
 from anthropic import AsyncAnthropic
 
 from app.services.asc.reviews import RESPONSE_BODY_MAX_LEN
-
-ReplyTone = Literal["neutral", "apologetic", "appreciative"]
+from app.services.reviews.templates import ReplyTone, select_reply_template
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
 
@@ -36,7 +33,12 @@ _TONE_GUIDANCE: dict[ReplyTone, str] = {
 }
 
 
-def _build_system_prompt(tone: ReplyTone, target_locale: str) -> str:
+def _build_system_prompt(
+    *,
+    tone: ReplyTone,
+    target_locale: str,
+    template_guidance: str,
+) -> str:
     base = (
         "You are a customer support specialist replying to an App Store "
         f"review on behalf of the developer. Write the reply in {target_locale}. "
@@ -46,7 +48,7 @@ def _build_system_prompt(tone: ReplyTone, target_locale: str) -> str:
         "a bug, suggest contacting the in-app support channel for follow-up. "
         "Output ONLY the reply text — no quotes, no preface, no signature."
     )
-    return f"{base}\n{_TONE_GUIDANCE[tone]}"
+    return f"{base}\n{template_guidance}\n{_TONE_GUIDANCE[tone]}"
 
 
 def _user_message(review_body: str, review_rating: int) -> str:
@@ -63,7 +65,7 @@ async def draft_reply(
     review_body: str,
     review_rating: int,
     target_locale: str,
-    tone: ReplyTone = "neutral",
+    tone: ReplyTone | None = None,
     model: str = DEFAULT_MODEL,
 ) -> str:
     """Generate a draft reply via Claude. Returns the reply text only.
@@ -71,11 +73,21 @@ async def draft_reply(
     The caller is responsible for trimming to ``RESPONSE_BODY_MAX_LEN`` if
     needed (we soft-trim here as a safety net).
     """
+    reply_template = select_reply_template(
+        review_body=review_body,
+        review_rating=review_rating,
+    )
+    effective_tone = tone or reply_template.default_tone
+
     client = AsyncAnthropic(api_key=api_key)
     response = await client.messages.create(
         model=model,
         max_tokens=1024,
-        system=_build_system_prompt(tone, target_locale),
+        system=_build_system_prompt(
+            tone=effective_tone,
+            target_locale=target_locale,
+            template_guidance=reply_template.guidance,
+        ),
         messages=[
             {
                 "role": "user",

@@ -32,7 +32,7 @@ import {
   useTranslateReview,
   useUpdateReply,
 } from "@/lib/hooks";
-import type { ReplyTone } from "@/types";
+import type { ReplyTone, ReviewTheme } from "@/types";
 
 const RESPONSE_BODY_MAX_LEN = 5970;
 const SOURCE_LOCALE_STORAGE_KEY = "metadata-source-locale";
@@ -68,6 +68,15 @@ const TONE_OPTIONS: { value: ReplyTone; label: string }[] = [
   { value: "appreciative", label: "Appreciative" },
 ];
 
+const TEMPLATE_BADGE_COLORS: Record<ReviewTheme, string> = {
+  bug_report: "red",
+  feature_request: "blue",
+  billing: "orange",
+  praise: "green",
+  complaint: "yellow",
+  other: "gray",
+};
+
 export default function ReviewDrawer({
   appId,
   reviewId,
@@ -88,6 +97,7 @@ export default function ReviewDrawer({
 
   const review = reviewQuery.data;
   const existingResponse = review?.response ?? null;
+  const replyTemplate = review?.reply_template ?? null;
 
   const targetLocale = useMemo(() => {
     if (typeof window === "undefined") return "en-US";
@@ -96,11 +106,12 @@ export default function ReviewDrawer({
 
   // Reset draft & translation when switching reviews / reopening
   useEffect(() => {
-    if (!opened) return;
+    if (!opened || !review) return;
+    setTone(review.reply_template.tone);
     setReply(existingResponse?.body ?? "");
     setTranslation(null);
     setTranslationCached(false);
-  }, [opened, reviewId, existingResponse?.body]);
+  }, [opened, reviewId, existingResponse?.body, review?.reply_template.tone]);
 
   if (!review && reviewQuery.isLoading) {
     return (
@@ -260,12 +271,30 @@ export default function ReviewDrawer({
             <Text size="xs" fw={600} c="dimmed" tt="uppercase">
               Reply
             </Text>
-            {existingResponse && (
-              <Badge size="xs" color="green" variant="light">
-                Already replied
-              </Badge>
-            )}
+            <Group gap="xs">
+              {replyTemplate && (
+                <Badge
+                  size="xs"
+                  color={TEMPLATE_BADGE_COLORS[replyTemplate.theme]}
+                  variant="light"
+                >
+                  {replyTemplate.label}
+                </Badge>
+              )}
+              {existingResponse && (
+                <Badge size="xs" color="green" variant="light">
+                  Already replied
+                </Badge>
+              )}
+            </Group>
           </Group>
+
+          {replyTemplate && (
+            <Text size="xs" c="dimmed">
+              Suggest starts from the {replyTemplate.label.toLowerCase()} template.
+              You can edit the draft before posting.
+            </Text>
+          )}
 
           <Group gap="xs">
             <Select

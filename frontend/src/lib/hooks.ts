@@ -2768,9 +2768,9 @@ export function useDraftReply(appId: number) {
       tone,
     }: {
       reviewId: string;
-      tone: ReplyTone;
+      tone?: ReplyTone | null;
     }): Promise<DraftReplyOut> => {
-      const body: DraftReplyIn = { tone };
+      const body: DraftReplyIn = tone ? { tone } : {};
       const response = await api.post<DraftReplyOut>(
         `/apps/${appId}/reviews/${reviewId}/draft`,
         body,

@@ -15,6 +15,7 @@ from app.db.session import get_session
 from app.schemas.review import (
     DraftIn,
     DraftOut,
+    ReplyTemplateOut,
     ReplyIn,
     ReviewListOut,
     ReviewOut,
@@ -29,6 +30,7 @@ from app.services.metadata.translate import (
     translate_with_cache,
 )
 from app.services.reviews.draft import draft_reply
+from app.services.reviews.templates import select_reply_template
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -85,6 +87,7 @@ def _territory_to_locale(territory: str | None) -> str:
 def _serialize_review(raw: dict[str, Any], included: list[dict[str, Any]] | None = None) -> ReviewOut:
     """Convert ASC JSON:API review payload + included responses → ReviewOut."""
     attrs = raw.get("attributes") or {}
+    rating = int(attrs.get("rating") or 0)
     response: ReviewResponseOut | None = None
 
     rel = (raw.get("relationships") or {}).get("response", {}).get("data")
@@ -100,15 +103,25 @@ def _serialize_review(raw: dict[str, Any], included: list[dict[str, Any]] | None
                 )
                 break
 
+    reply_template = select_reply_template(
+        review_body=attrs.get("body"),
+        review_rating=rating,
+    )
+
     return ReviewOut(
         id=raw.get("id", ""),
-        rating=int(attrs.get("rating") or 0),
+        rating=rating,
         title=attrs.get("title"),
         body=attrs.get("body"),
         territory=attrs.get("territory"),
         reviewer_nickname=attrs.get("reviewerNickname"),
         created_date=attrs.get("createdDate"),
         response=response,
+        reply_template=ReplyTemplateOut(
+            theme=reply_template.theme,
+            label=reply_template.label,
+            tone=reply_template.default_tone,
+        ),
     )
 
 

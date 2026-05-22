@@ -16,6 +16,7 @@ from app.mcp.context import resolve_app, resolve_asc_client, session_scope
 from app.mcp.server import mcp
 from app.schemas.review import (
     DraftOut,
+    ReplyTemplateOut,
     ReplyTone,
     ReviewListOut,
     ReviewOut,
@@ -29,6 +30,7 @@ from app.services.metadata.translate import (
     translate_with_cache,
 )
 from app.services.reviews.draft import draft_reply
+from app.services.reviews.templates import select_reply_template
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,7 @@ def _serialize_review(
 ) -> ReviewOut:
     """Convert ASC JSON:API review payload (+ included responses) → ReviewOut."""
     attrs = raw.get("attributes") or {}
+    rating = int(attrs.get("rating") or 0)
     response: ReviewResponseOut | None = None
 
     rel = (raw.get("relationships") or {}).get("response", {}).get("data")
@@ -90,15 +93,25 @@ def _serialize_review(
                 )
                 break
 
+    reply_template = select_reply_template(
+        review_body=attrs.get("body"),
+        review_rating=rating,
+    )
+
     return ReviewOut(
         id=raw.get("id", ""),
-        rating=int(attrs.get("rating") or 0),
+        rating=rating,
         title=attrs.get("title"),
         body=attrs.get("body"),
         territory=attrs.get("territory"),
         reviewer_nickname=attrs.get("reviewerNickname"),
         created_date=attrs.get("createdDate"),
         response=response,
+        reply_template=ReplyTemplateOut(
+            theme=reply_template.theme,
+            label=reply_template.label,
+            tone=reply_template.default_tone,
+        ),
     )
 
 
@@ -197,13 +210,14 @@ async def get_review(app_id: int, review_id: str) -> ReviewOut:
 async def draft_review_reply(
     app_id: int,
     review_id: str,
-    tone: ReplyTone = "neutral",
+    tone: ReplyTone | None = None,
 ) -> DraftOut:
     """Generate a suggested reply to a review using Claude.
 
     Returns the suggestion + the locale it was drafted in (derived from the
     review's territory). Suggestion only — caller must explicitly post via
-    ``reviews.respond``.
+    ``reviews.respond``. When ``tone`` is omitted, the theme-based default
+    template tone is used.
     """
     if not settings.ANTHROPIC_API_KEY:
         raise ToolError("AI drafting not configured. Set ANTHROPIC_API_KEY.")
