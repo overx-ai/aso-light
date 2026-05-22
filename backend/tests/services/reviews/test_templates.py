@@ -42,6 +42,16 @@ def test_billing_reviews_use_billing_template() -> None:
     assert "billing or subscription concern" in template.guidance.lower()
 
 
+def test_billing_language_overrides_generic_feature_request_phrases() -> None:
+    template = select_reply_template(
+        review_body="Would be nice if I could cancel my subscription in the app.",
+        review_rating=1,
+    )
+
+    assert template.theme == "billing"
+    assert template.default_tone == "apologetic"
+
+
 def test_positive_reviews_use_praise_template() -> None:
     template = select_reply_template(
         review_body="Love this app. It has been amazing for my daily routine.",
@@ -69,6 +79,8 @@ def test_low_rating_without_specific_keywords_uses_complaint_template() -> None:
     [
         ("No issues so far, works great", 5, "praise"),
         ("Badge support would be nice", 3, "feature_request"),
+        ("Please add a yearly subscription option", 3, "feature_request"),
+        ("Please add support for one-time purchase", 3, "feature_request"),
         ("The recharge flow is confusing", 2, "complaint"),
     ],
 )

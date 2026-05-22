@@ -78,6 +78,18 @@ _BILLING_KEYWORDS = (
     "cancelled",
 )
 
+_BILLING_FEATURE_REQUEST_NOUNS = (
+    "subscription",
+    "purchase",
+    "purchased",
+)
+
+_BILLING_CONCERN_KEYWORDS = tuple(
+    keyword
+    for keyword in _BILLING_KEYWORDS
+    if keyword not in _BILLING_FEATURE_REQUEST_NOUNS
+)
+
 _PRAISE_KEYWORDS = (
     "love",
     "amazing",
@@ -186,10 +198,12 @@ def classify_review_theme(review_body: str | None, review_rating: int) -> Review
 
     if _contains_any(text, _BUG_KEYWORDS):
         return "bug_report"
+    if _contains_any(text, _FEATURE_REQUEST_KEYWORDS) and not _contains_any(
+        text, _BILLING_CONCERN_KEYWORDS
+    ):
+        return "feature_request"
     if _contains_any(text, _BILLING_KEYWORDS):
         return "billing"
-    if _contains_any(text, _FEATURE_REQUEST_KEYWORDS):
-        return "feature_request"
     if review_rating >= 4 and (_contains_any(text, _PRAISE_KEYWORDS) or review_rating == 5):
         return "praise"
     if review_rating <= 2 or _contains_any(text, _COMPLAINT_KEYWORDS):
