@@ -52,6 +52,36 @@ def test_billing_language_overrides_generic_feature_request_phrases() -> None:
     assert template.default_tone == "apologetic"
 
 
+def test_praise_language_does_not_trigger_feature_request_template() -> None:
+    template = select_reply_template(
+        review_body="Love it. Would love to keep using this every day.",
+        review_rating=5,
+    )
+
+    assert template.theme == "praise"
+    assert template.default_tone == "appreciative"
+
+
+def test_cannot_do_something_anymore_maps_to_bug_report() -> None:
+    template = select_reply_template(
+        review_body="Can't add a workout anymore after the latest update.",
+        review_rating=1,
+    )
+
+    assert template.theme == "bug_report"
+    assert template.default_tone == "apologetic"
+
+
+def test_positive_subscription_praise_avoids_billing_template() -> None:
+    template = select_reply_template(
+        review_body="The subscription is absolutely worth it. Amazing app.",
+        review_rating=5,
+    )
+
+    assert template.theme == "praise"
+    assert template.default_tone == "appreciative"
+
+
 def test_positive_reviews_use_praise_template() -> None:
     template = select_reply_template(
         review_body="Love this app. It has been amazing for my daily routine.",
@@ -72,6 +102,16 @@ def test_low_rating_without_specific_keywords_uses_complaint_template() -> None:
     assert template.theme == "complaint"
     assert template.default_tone == "apologetic"
     assert "acknowledge the frustration" in template.guidance.lower()
+
+
+def test_plain_issue_word_does_not_force_bug_template() -> None:
+    template = select_reply_template(
+        review_body="My only issue is there's no dark mode yet.",
+        review_rating=3,
+    )
+
+    assert template.theme == "other"
+    assert template.default_tone == "neutral"
 
 
 @pytest.mark.parametrize(

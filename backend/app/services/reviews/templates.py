@@ -35,7 +35,6 @@ _BUG_KEYWORDS = (
     "freezes",
     "stuck",
     "error",
-    "issue",
     "not working",
     "doesn't work",
     "does not work",
@@ -46,19 +45,28 @@ _BUG_KEYWORDS = (
     "fails to",
 )
 
+_BUG_REGEX_PATTERNS = (
+    r"\b(?:can't|cant|cannot|unable to|fails to)\s+(?:\w+\s+){0,4}anymore\b",
+)
+
 _FEATURE_REQUEST_KEYWORDS = (
     "feature request",
     "please add",
-    "would love",
     "would be nice",
     "wish it had",
     "wish you had",
     "could you add",
     "add support",
-    "add a",
-    "add an",
     "need a way to",
     "it would be nice",
+)
+
+_FEATURE_REQUEST_REGEX_PATTERNS = (
+    r"\bwould love to see\b",
+    r"\bwould love (?:a|an)\b",
+    r"\bwould love it if\b",
+    r"\bwish there (?:was|were)\b",
+    r"\b(?:can|could) you add\b",
 )
 
 _BILLING_KEYWORDS = (
@@ -193,22 +201,40 @@ def _contains_any(text: str, phrases: tuple[str, ...]) -> bool:
     return any(_compile_phrase_pattern(phrase).search(text) for phrase in phrases)
 
 
+@lru_cache(maxsize=None)
+def _compile_regex_pattern(pattern: str) -> re.Pattern[str]:
+    return re.compile(pattern)
+
+
+def _matches_any_pattern(text: str, patterns: tuple[str, ...]) -> bool:
+    return any(_compile_regex_pattern(pattern).search(text) for pattern in patterns)
+
+
 def classify_review_theme(review_body: str | None, review_rating: int) -> ReviewTheme:
     text = _normalize_text(review_body)
+    has_bug_signal = _contains_any(text, _BUG_KEYWORDS) or _matches_any_pattern(
+        text, _BUG_REGEX_PATTERNS
+    )
+    has_feature_request_signal = _contains_any(
+        text, _FEATURE_REQUEST_KEYWORDS
+    ) or _matches_any_pattern(text, _FEATURE_REQUEST_REGEX_PATTERNS)
+    has_billing_concern = _contains_any(text, _BILLING_CONCERN_KEYWORDS)
+    has_billing_topic = _contains_any(text, _BILLING_FEATURE_REQUEST_NOUNS)
+    has_praise_signal = _contains_any(text, _PRAISE_KEYWORDS)
 
-    if _contains_any(text, _BUG_KEYWORDS):
+    if has_bug_signal:
         return "bug_report"
-    if _contains_any(text, _FEATURE_REQUEST_KEYWORDS) and not _contains_any(
-        text, _BILLING_CONCERN_KEYWORDS
-    ):
+    if has_feature_request_signal and not has_billing_concern:
         return "feature_request"
-    if _contains_any(text, _BILLING_KEYWORDS):
+    if has_billing_concern or (
+        has_billing_topic and not (review_rating >= 4 and has_praise_signal)
+    ):
         return "billing"
-    if review_rating >= 4 and (_contains_any(text, _PRAISE_KEYWORDS) or review_rating == 5):
+    if review_rating >= 4 and (has_praise_signal or review_rating == 5):
         return "praise"
     if review_rating <= 2 or _contains_any(text, _COMPLAINT_KEYWORDS):
         return "complaint"
-    if _contains_any(text, _PRAISE_KEYWORDS):
+    if has_praise_signal:
         return "praise"
     return "other"
 
