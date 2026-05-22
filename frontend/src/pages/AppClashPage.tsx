@@ -169,6 +169,9 @@ export default function AppClashPage() {
   }
 
   const rows = clashQuery.data?.rows ?? [];
+  const trackedKeywordCount = trackedKeywords.data?.length ?? 0;
+  const showTrackedKeywordIntel =
+    trackedKeywords.isError || trackedKeywordCount > 0;
 
   return (
     <Container size="xl">
@@ -185,7 +188,7 @@ export default function AppClashPage() {
       </div>
 
       <Stack gap="sm">
-        {(trackedKeywords.data?.length ?? 0) > 0 && (
+        {showTrackedKeywordIntel && (
           <Paper withBorder p="xs">
             <Stack gap="xs">
               <Group justify="space-between" gap="xs">
@@ -193,15 +196,23 @@ export default function AppClashPage() {
                   Tracked keyword intel
                 </Text>
                 <Text size="xs" c="dimmed">
-                  {trackedKeywords.data?.length ?? 0} keyword
-                  {(trackedKeywords.data?.length ?? 0) === 1 ? "" : "s"}
+                  {trackedKeywords.isError
+                    ? "Unavailable"
+                    : `${trackedKeywordCount} keyword${trackedKeywordCount === 1 ? "" : "s"}`}
                 </Text>
               </Group>
-              <Group gap="xs">
-                {(trackedKeywords.data ?? []).map((tracking) => (
-                  <TrackedKeywordIntel key={tracking.id} tracking={tracking} />
-                ))}
-              </Group>
+              {trackedKeywords.isError ? (
+                <Alert color="yellow" icon={<IconAlertCircle size={16} />}>
+                  Tracked keyword intel is temporarily unavailable. Try again
+                  in a moment.
+                </Alert>
+              ) : (
+                <Group gap="xs">
+                  {(trackedKeywords.data ?? []).map((tracking) => (
+                    <TrackedKeywordIntel key={tracking.id} tracking={tracking} />
+                  ))}
+                </Group>
+              )}
             </Stack>
           </Paper>
         )}
