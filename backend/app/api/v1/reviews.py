@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,6 +20,7 @@ from app.schemas.review import (
     ReviewListOut,
     ReviewOut,
     ReviewResponseOut,
+    ReviewTrendOut,
     TranslateReviewIn,
     TranslateReviewOut,
 )
@@ -29,9 +31,11 @@ from app.services.metadata.translate import (
     translate_with_cache,
 )
 from app.services.reviews.draft import draft_reply
+from app.services.reviews.trends import build_review_trend
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_MAX_TREND_PAGES = 10
 
 
 @contextmanager
@@ -123,6 +127,63 @@ def _extract_cursor(payload: dict[str, Any]) -> str | None:
         return None
 
 
+def _parse_created_date(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+async def _load_reviews_for_trend(
+    svc: ASCReviewService,
+    asc_app_id: str,
+    *,
+    territory: str | None,
+    cutoff_day: date,
+) -> tuple[list[ReviewOut], bool]:
+    """Fetch recent review pages until the window is covered or we hit a cap."""
+    reviews: list[ReviewOut] = []
+    cursor: str | None = None
+    page_count = 0
+
+    while page_count < _MAX_TREND_PAGES:
+        payload = await svc.list_reviews(
+            asc_app_id,
+            territory=territory,
+            cursor=cursor,
+            limit=200,
+        )
+        page_count += 1
+
+        items_raw = payload.get("data") or []
+        included = payload.get("included") or []
+        page_items = [_serialize_review(item, included) for item in items_raw]
+
+        oldest_seen: datetime | None = None
+        for review in page_items:
+            created_at = _parse_created_date(review.created_date)
+            if created_at is None:
+                continue
+            if oldest_seen is None or created_at < oldest_seen:
+                oldest_seen = created_at
+            if created_at.date() >= cutoff_day:
+                reviews.append(review)
+
+        cursor = _extract_cursor(payload)
+        if not cursor:
+            return reviews, False
+        if oldest_seen is not None and oldest_seen.date() < cutoff_day:
+            return reviews, False
+
+    return reviews, cursor is not None
+
+
 # ----------------------------------------------------------------------
 # List + detail
 # ----------------------------------------------------------------------
@@ -166,6 +227,39 @@ async def list_reviews(
         items = [r for r in items if r.response is None]
 
     return ReviewListOut(items=items, next_cursor=_extract_cursor(payload))
+
+
+@router.get("/{app_id}/reviews/trends", response_model=ReviewTrendOut)
+async def get_review_trends(
+    app_id: int,
+    territory: str | None = Query(default=None, description="Alpha-3 ISO code, e.g. USA"),
+    days: int = Query(default=30, ge=7, le=180),
+    low_rating_max: int = Query(default=2, ge=1, le=4),
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ReviewTrendOut:
+    """Aggregate recent reviews into a day-by-day trend window."""
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    cutoff_day = (datetime.now(UTC) - timedelta(days=days - 1)).date()
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        svc = ASCReviewService(client)
+        with _asc_to_502(f"list review trends for app {app_id}"):
+            reviews, partial = await _load_reviews_for_trend(
+                svc,
+                app.asc_app_id,
+                territory=territory,
+                cutoff_day=cutoff_day,
+            )
+
+    return build_review_trend(
+        reviews,
+        days=days,
+        low_rating_max=low_rating_max,
+        territory=territory,
+        partial=partial,
+    )
 
 
 @router.get("/{app_id}/reviews/{review_id}", response_model=ReviewOut)

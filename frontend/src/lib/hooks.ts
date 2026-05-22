@@ -78,6 +78,7 @@ import type {
   RevenueCatCredentialResponse,
   ReviewListOut,
   ReviewOut,
+  ReviewTrendOut,
   ReviewResponseOut,
   DraftReplyIn,
   DraftReplyOut,
@@ -161,6 +162,19 @@ export const queryKeys = {
     ] as const,
   review: (appId: number, reviewId: string) =>
     ["review", appId, reviewId] as const,
+  reviewTrend: (
+    appId: number,
+    days: number,
+    territory?: string,
+    lowRatingMax?: number,
+  ) =>
+    [
+      "review-trend",
+      appId,
+      days,
+      territory ?? null,
+      lowRatingMax ?? 2,
+    ] as const,
   visibilityWatches: (appId: number) =>
     ["visibility-watches", appId] as const,
   visibilitySnapshots: (appId: number, watchId: number) =>
@@ -2750,6 +2764,39 @@ export function useReview(appId: number, reviewId: string | null) {
       return response.data;
     },
     enabled: appId > 0 && !!reviewId,
+  });
+}
+
+export function useReviewTrend(
+  appId: number,
+  filters: {
+    territory?: string;
+    days: number;
+    low_rating_max?: number;
+  },
+) {
+  return useQuery({
+    queryKey: queryKeys.reviewTrend(
+      appId,
+      filters.days,
+      filters.territory,
+      filters.low_rating_max,
+    ),
+    queryFn: async () => {
+      const response = await api.get<ReviewTrendOut>(
+        `/apps/${appId}/reviews/trends`,
+        {
+          params: {
+            territory: filters.territory || undefined,
+            days: filters.days,
+            low_rating_max: filters.low_rating_max ?? 2,
+          },
+        },
+      );
+      return response.data;
+    },
+    enabled: appId > 0 && filters.days > 0,
+    staleTime: 300_000,
   });
 }
 

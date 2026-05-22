@@ -20,9 +20,10 @@ import {
   IconMessage,
   IconStarFilled,
 } from "@tabler/icons-react";
-import { useApp, useReviews } from "@/lib/hooks";
+import { useApp, useReviews, useReviewTrend } from "@/lib/hooks";
 import type { ReviewOut } from "@/types";
 import ReviewDrawer from "@/components/reviews/ReviewDrawer";
+import ReviewTrendDashboard from "@/components/reviews/ReviewTrendDashboard";
 
 const RATING_OPTIONS = [
   { value: "any", label: "Any" },
@@ -61,6 +62,7 @@ export default function ReviewsPage() {
   const [territory, setTerritory] = useState<string>("any");
   const [rating, setRating] = useState<string>("any");
   const [needsReply, setNeedsReply] = useState(false);
+  const [trendDays, setTrendDays] = useState("30");
   const [selected, setSelected] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -74,6 +76,11 @@ export default function ReviewsPage() {
   );
 
   const reviewsQuery = useReviews(appId, filters);
+  const trendQuery = useReviewTrend(appId, {
+    territory: territory === "any" ? undefined : territory,
+    days: Number(trendDays),
+    low_rating_max: 2,
+  });
 
   if (!Number.isFinite(appId) || appId <= 0) {
     return (
@@ -95,14 +102,14 @@ export default function ReviewsPage() {
           <Title order={2}>{app?.name ?? "App"} — Reviews</Title>
         </Group>
         <Text c="dimmed" size="sm" mt={4}>
-          Read, AI-draft, translate, and post replies — straight to App Store
-          Connect.
+          Spot rating regressions, then read, AI-draft, translate, and post
+          replies straight to App Store Connect.
         </Text>
       </div>
 
       <Stack gap="sm">
         <Paper withBorder p="xs">
-          <Group gap="md" wrap="wrap">
+          <Group gap="md" wrap="wrap" align="flex-end">
             <Select
               label="Country"
               data={TERRITORY_OPTIONS}
@@ -111,6 +118,24 @@ export default function ReviewsPage() {
               size="xs"
               style={{ minWidth: 160 }}
             />
+            <Text c="dimmed" size="xs" mt="xl">
+              Trend follows the country filter.
+            </Text>
+          </Group>
+        </Paper>
+
+        <ReviewTrendDashboard
+          trend={trendQuery.data ?? null}
+          days={trendDays}
+          isLoading={trendQuery.isLoading}
+          errorMessage={
+            trendQuery.error instanceof Error ? trendQuery.error.message : null
+          }
+          onDaysChange={setTrendDays}
+        />
+
+        <Paper withBorder p="xs">
+          <Group gap="md" wrap="wrap" align="flex-end">
             <Select
               label="Rating"
               data={RATING_OPTIONS}
