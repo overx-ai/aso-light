@@ -35,7 +35,6 @@ from app.services.reviews.trends import build_review_trend
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-_MAX_TREND_PAGES = 10
 
 
 @contextmanager
@@ -147,19 +146,18 @@ async def _load_reviews_for_trend(
     territory: str | None,
     cutoff_day: date,
 ) -> tuple[list[ReviewOut], bool]:
-    """Fetch recent review pages until the window is covered or we hit a cap."""
+    """Fetch recent review pages until the selected window is fully covered."""
     reviews: list[ReviewOut] = []
     cursor: str | None = None
-    page_count = 0
+    seen_cursors: set[str] = set()
 
-    while page_count < _MAX_TREND_PAGES:
+    while True:
         payload = await svc.list_reviews(
             asc_app_id,
             territory=territory,
             cursor=cursor,
             limit=200,
         )
-        page_count += 1
 
         items_raw = payload.get("data") or []
         included = payload.get("included") or []
@@ -175,13 +173,21 @@ async def _load_reviews_for_trend(
             if created_at.date() >= cutoff_day:
                 reviews.append(review)
 
-        cursor = _extract_cursor(payload)
-        if not cursor:
+        next_cursor = _extract_cursor(payload)
+        if not next_cursor:
             return reviews, False
         if oldest_seen is not None and oldest_seen.date() < cutoff_day:
             return reviews, False
+        if next_cursor in seen_cursors:
+            logger.warning(
+                "ASC review trend pagination loop detected for app %s with cursor %s",
+                asc_app_id,
+                next_cursor,
+            )
+            return reviews, True
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
 
-    return reviews, cursor is not None
 
 
 # ----------------------------------------------------------------------

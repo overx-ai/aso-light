@@ -2800,12 +2800,21 @@ export function useReviewTrend(
   });
 }
 
+export function reviewInvalidationKeys(appId: number) {
+  return [
+    ["reviews", appId] as const,
+    ["review", appId] as const,
+    ["review-trend", appId] as const,
+  ];
+}
+
 function invalidateReviews(
   queryClient: ReturnType<typeof useQueryClient>,
   appId: number,
 ): void {
-  queryClient.invalidateQueries({ queryKey: ["reviews", appId] });
-  queryClient.invalidateQueries({ queryKey: ["review", appId] });
+  for (const queryKey of reviewInvalidationKeys(appId)) {
+    queryClient.invalidateQueries({ queryKey });
+  }
 }
 
 export function useDraftReply(appId: number) {
