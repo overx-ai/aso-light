@@ -72,6 +72,16 @@ def test_cannot_do_something_anymore_maps_to_bug_report() -> None:
     assert template.default_tone == "apologetic"
 
 
+def test_unable_to_save_still_maps_to_bug_report() -> None:
+    template = select_reply_template(
+        review_body="Unable to save my workout after the latest update.",
+        review_rating=1,
+    )
+
+    assert template.theme == "bug_report"
+    assert template.default_tone == "apologetic"
+
+
 def test_positive_subscription_praise_avoids_billing_template() -> None:
     template = select_reply_template(
         review_body="The subscription is absolutely worth it. Amazing app.",
@@ -112,6 +122,46 @@ def test_plain_issue_word_does_not_force_bug_template() -> None:
 
     assert template.theme == "other"
     assert template.default_tone == "neutral"
+
+
+def test_subscription_cancellation_complaint_prefers_billing_over_bug_report() -> None:
+    template = select_reply_template(
+        review_body="Unable to cancel my subscription.",
+        review_rating=1,
+    )
+
+    assert template.theme == "billing"
+    assert template.default_tone == "apologetic"
+
+
+def test_pricing_clarity_feedback_does_not_use_bug_template() -> None:
+    template = select_reply_template(
+        review_body="Fails to explain pricing clearly.",
+        review_rating=2,
+    )
+
+    assert template.theme == "complaint"
+    assert template.default_tone == "apologetic"
+
+
+def test_subscription_noun_alone_does_not_force_billing_template() -> None:
+    template = select_reply_template(
+        review_body="Subscription works fine for me.",
+        review_rating=4,
+    )
+
+    assert template.theme == "other"
+    assert template.default_tone == "neutral"
+
+
+def test_positive_purchase_language_does_not_force_billing_template() -> None:
+    template = select_reply_template(
+        review_body="Purchased the app and use it every day.",
+        review_rating=5,
+    )
+
+    assert template.theme == "praise"
+    assert template.default_tone == "appreciative"
 
 
 @pytest.mark.parametrize(

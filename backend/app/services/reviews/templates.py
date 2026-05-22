@@ -41,12 +41,14 @@ _BUG_KEYWORDS = (
     "won't open",
     "cant open",
     "can't open",
-    "unable to",
-    "fails to",
 )
 
 _BUG_REGEX_PATTERNS = (
     r"\b(?:can't|cant|cannot|unable to|fails to)\s+(?:\w+\s+){0,4}anymore\b",
+    r"\b(?:can't|cant|cannot|unable to|fails to)\s+(?:\w+\s+){0,4}(?:"
+    r"open|load|launch|save|sync|connect|share|search|refresh|update|"
+    r"upload|download|export|import|record|track|submit|login|log in|"
+    r"sign in)\b",
 )
 
 _FEATURE_REQUEST_KEYWORDS = (
@@ -96,6 +98,16 @@ _BILLING_CONCERN_KEYWORDS = tuple(
     keyword
     for keyword in _BILLING_KEYWORDS
     if keyword not in _BILLING_FEATURE_REQUEST_NOUNS
+)
+
+_BILLING_ISSUE_CONTEXT_KEYWORDS = (
+    "confusing",
+    "unclear",
+    "expensive",
+    "overpriced",
+    "pricey",
+    "issue",
+    "problem",
 )
 
 _PRAISE_KEYWORDS = (
@@ -221,18 +233,25 @@ def classify_review_theme(review_body: str | None, review_rating: int) -> Review
     has_billing_concern = _contains_any(text, _BILLING_CONCERN_KEYWORDS)
     has_billing_topic = _contains_any(text, _BILLING_FEATURE_REQUEST_NOUNS)
     has_praise_signal = _contains_any(text, _PRAISE_KEYWORDS)
+    has_complaint_signal = _contains_any(text, _COMPLAINT_KEYWORDS)
+    has_billing_issue_context = _contains_any(text, _BILLING_ISSUE_CONTEXT_KEYWORDS)
 
     if has_bug_signal:
         return "bug_report"
     if has_feature_request_signal and not has_billing_concern:
         return "feature_request"
     if has_billing_concern or (
-        has_billing_topic and not (review_rating >= 4 and has_praise_signal)
+        has_billing_topic
+        and (
+            has_billing_issue_context
+            or has_complaint_signal
+            or review_rating <= 2
+        )
     ):
         return "billing"
     if review_rating >= 4 and (has_praise_signal or review_rating == 5):
         return "praise"
-    if review_rating <= 2 or _contains_any(text, _COMPLAINT_KEYWORDS):
+    if review_rating <= 2 or has_complaint_signal:
         return "complaint"
     if has_praise_signal:
         return "praise"
