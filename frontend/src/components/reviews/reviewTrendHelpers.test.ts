@@ -5,6 +5,7 @@ import type { ReviewTrendOut } from "@/types";
 import {
   buildTrendMoments,
   formatAverageRating,
+  formatLowRatingLabel,
   formatTrendDate,
   largestSwing,
 } from "./reviewTrendHelpers";
@@ -58,6 +59,8 @@ describe("reviewTrendHelpers", () => {
     expect(formatTrendDate("2026-05-16")).toMatch(/May/);
     expect(formatAverageRating(3.25)).toBe("3.3 / 5");
     expect(formatAverageRating(null)).toBe("—");
+    expect(formatLowRatingLabel(1)).toBe("1-star reviews");
+    expect(formatLowRatingLabel(3)).toBe("1-3 star reviews");
   });
 
   it("prefers the largest spike when it dominates the swing", () => {
@@ -81,6 +84,23 @@ describe("reviewTrendHelpers", () => {
       hint: `Drop on ${formatTrendDate("2026-05-17")}`,
       color: "teal",
       icon: "down",
+    });
+  });
+
+  it("returns a flat swing when the window has no sharp moves", () => {
+    expect(
+      largestSwing({
+        ...trendFixture.summary,
+        biggest_spike_date: null,
+        biggest_spike_delta: 0,
+        biggest_drop_date: null,
+        biggest_drop_delta: 0,
+      }),
+    ).toEqual({
+      value: "Flat",
+      hint: "No sharp swing in this window",
+      color: "gray",
+      icon: "flat",
     });
   });
 
@@ -116,5 +136,41 @@ describe("reviewTrendHelpers", () => {
         })),
       }),
     ).toEqual([]);
+  });
+
+  it("omits the worst day card when no low-rating reviews landed", () => {
+    expect(
+      buildTrendMoments({
+        ...trendFixture,
+        points: [
+          {
+            ...trendFixture.points[0],
+            low_rating_reviews: 0,
+            average_rating: 4.5,
+          },
+          {
+            ...trendFixture.points[1],
+            low_rating_reviews: 0,
+            average_rating: 4.0,
+          },
+          {
+            ...trendFixture.points[2],
+            low_rating_reviews: 0,
+            average_rating: 3.0,
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        label: "Busiest day",
+        value: "6 reviews",
+        hint: `${formatTrendDate("2026-05-16")} · 0 low-star`,
+      },
+      {
+        label: "Lowest rating day",
+        value: "3.0 / 5",
+        hint: `${formatTrendDate("2026-05-17")} · 0 low-star`,
+      },
+    ]);
   });
 });

@@ -19,6 +19,12 @@ export function formatAverageRating(value: number | null): string {
   return `${value.toFixed(1)} / 5`;
 }
 
+export function formatLowRatingLabel(lowRatingMax: number): string {
+  if (lowRatingMax <= 0) return "Low-rating reviews";
+  if (lowRatingMax === 1) return "1-star reviews";
+  return `1-${lowRatingMax} star reviews`;
+}
+
 export function largestSwing(summary: ReviewTrendOut["summary"]): {
   value: string;
   hint: string;
@@ -78,7 +84,10 @@ export function buildTrendMoments(trend: ReviewTrendOut): TrendMoment[] {
     return [];
   }
 
-  const worstDay = firstPeakBy(activePoints, (point) => point.low_rating_reviews);
+  const worstDay = firstPeakBy(
+    activePoints.filter((point) => point.low_rating_reviews > 0),
+    (point) => point.low_rating_reviews,
+  );
   const busiestDay = firstPeakBy(activePoints, (point) => point.total_reviews);
 
   const lowestRatedDay = activePoints.reduce<ReviewTrendPointOut | null>(

@@ -19,6 +19,7 @@ import {
   IconArrowUpRight,
   IconChartLine,
   IconMessageCircle,
+  IconMinus,
   IconMoodSad,
   IconStarFilled,
 } from "@tabler/icons-react";
@@ -26,6 +27,7 @@ import type { ReviewTrendOut } from "@/types";
 import {
   buildTrendMoments,
   formatAverageRating,
+  formatLowRatingLabel,
   formatTrendDate,
   largestSwing,
 } from "./reviewTrendHelpers";
@@ -128,11 +130,14 @@ export default function ReviewTrendDashboard({
   const SwingIcon =
     swing.icon === "down"
       ? IconArrowDownRight
-      : IconArrowUpRight;
+      : swing.icon === "flat"
+        ? IconMinus
+        : IconArrowUpRight;
+  const lowRatingLabel = formatLowRatingLabel(trend.low_rating_max);
   const chartData = trend.points.map((point) => ({
     label: formatTrendDate(point.date),
     "All reviews": point.total_reviews,
-    "1-2 star reviews": point.low_rating_reviews,
+    [lowRatingLabel]: point.low_rating_reviews,
   }));
   const noData = trend.summary.total_reviews === 0;
   const moments = buildTrendMoments(trend);
@@ -149,8 +154,8 @@ export default function ReviewTrendDashboard({
               <div>
                 <Title order={4}>Review sentiment trend</Title>
                 <Text size="sm" c="dimmed">
-                  Daily volume for all reviews vs 1-2 star reviews so spikes
-                  and drop-offs stand out before you open the queue.
+                  Daily volume for all reviews vs {lowRatingLabel.toLowerCase()}{" "}
+                  so spikes and drop-offs stand out before you open the queue.
                 </Text>
               </div>
             </Group>
@@ -173,7 +178,7 @@ export default function ReviewTrendDashboard({
             icon={<IconMessageCircle size={18} />}
           />
           <TrendStatCard
-            label="1-2 star reviews"
+            label={lowRatingLabel}
             value={`${trend.summary.low_rating_reviews}`}
             hint={`${trend.summary.low_rating_share_pct.toFixed(1)}% of window volume`}
             color="red"
@@ -214,7 +219,7 @@ export default function ReviewTrendDashboard({
                 All reviews
               </Badge>
               <Badge color="red" variant="light">
-                1-2 star reviews
+                {lowRatingLabel}
               </Badge>
             </Group>
 
@@ -224,7 +229,7 @@ export default function ReviewTrendDashboard({
               dataKey="label"
               series={[
                 { name: "All reviews", color: "gray.5" },
-                { name: "1-2 star reviews", color: "red.6" },
+                { name: lowRatingLabel, color: "red.6" },
               ]}
               curveType="linear"
               withDots
