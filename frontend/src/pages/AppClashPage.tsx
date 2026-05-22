@@ -18,8 +18,9 @@ import {
   IconStarFilled,
   IconSwords,
 } from "@tabler/icons-react";
-import { useApp, useAppClash } from "@/lib/hooks";
-import type { ClashRow } from "@/types";
+import KeywordIntelBadge from "@/components/keywords/keywordIntel";
+import { useApp, useAppClash, useTrackedKeywords } from "@/lib/hooks";
+import type { ClashRow, KeywordTrackingResponse } from "@/types";
 
 const COUNTRY_OPTIONS = [
   { value: "us", label: "United States" },
@@ -151,9 +152,11 @@ function ClashCard({ row }: { row: ClashRow }) {
 export default function AppClashPage() {
   const { id } = useParams<{ id: string }>();
   const appId = id ? Number(id) : 0;
+  const trackedKeywordAppId = appId > 0 ? String(appId) : "";
   const { data: app } = useApp(id ?? "");
   const [country, setCountry] = useState("us");
   const clashQuery = useAppClash(appId, country);
+  const trackedKeywords = useTrackedKeywords(trackedKeywordAppId);
 
   if (!Number.isFinite(appId) || appId <= 0) {
     return (
@@ -182,6 +185,27 @@ export default function AppClashPage() {
       </div>
 
       <Stack gap="sm">
+        {(trackedKeywords.data?.length ?? 0) > 0 && (
+          <Paper withBorder p="xs">
+            <Stack gap="xs">
+              <Group justify="space-between" gap="xs">
+                <Text size="xs" fw={600} c="dimmed" tt="uppercase">
+                  Tracked keyword intel
+                </Text>
+                <Text size="xs" c="dimmed">
+                  {trackedKeywords.data?.length ?? 0} keyword
+                  {(trackedKeywords.data?.length ?? 0) === 1 ? "" : "s"}
+                </Text>
+              </Group>
+              <Group gap="xs">
+                {(trackedKeywords.data ?? []).map((tracking) => (
+                  <TrackedKeywordIntel key={tracking.id} tracking={tracking} />
+                ))}
+              </Group>
+            </Stack>
+          </Paper>
+        )}
+
         <Paper withBorder p="xs">
           <Group gap="md" wrap="wrap" align="flex-end">
             <Select
@@ -218,5 +242,37 @@ export default function AppClashPage() {
         )}
       </Stack>
     </Container>
+  );
+}
+
+function TrackedKeywordIntel({
+  tracking,
+}: {
+  tracking: KeywordTrackingResponse;
+}) {
+  return (
+    <Group gap={4} wrap="wrap">
+      <Badge
+        size="sm"
+        radius="sm"
+        variant="light"
+        color="gray"
+        style={{
+          textTransform: "none",
+          maxWidth: 180,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {tracking.keyword.text}
+      </Badge>
+      <Badge size="xs" radius="sm" variant="outline" color="gray">
+        {tracking.keyword.locale}
+      </Badge>
+      <KeywordIntelBadge
+        popularity={tracking.keyword.popularity}
+        updatedAt={tracking.keyword.popularity_updated_at}
+      />
+    </Group>
   );
 }

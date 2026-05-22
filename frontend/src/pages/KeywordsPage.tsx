@@ -50,6 +50,7 @@ import {
 } from "@/lib/hooks";
 import RankHistoryChart from "@/components/keywords/RankHistoryChart";
 import CrossLocalizationMatrix from "@/components/keywords/CrossLocalizationMatrix";
+import KeywordIntelBadge from "@/components/keywords/keywordIntel";
 import KeywordCoverageDots from "@/components/metadata/KeywordCoverageDots";
 import type {
   KeywordTrackingResponse,
@@ -230,6 +231,17 @@ function TrackedKeywordsTab({ appId }: { appId: string }) {
                   <Badge variant="light" size="sm" color="gray">
                     {row.keyword.locale}
                   </Badge>
+                ),
+              },
+              {
+                accessor: "keyword.popularity",
+                title: "Intel",
+                width: 110,
+                render: (row: KeywordTrackingResponse) => (
+                  <KeywordIntelBadge
+                    popularity={row.keyword.popularity}
+                    updatedAt={row.keyword.popularity_updated_at}
+                  />
                 ),
               },
               {
