@@ -222,8 +222,16 @@ def _matches_any_pattern(text: str, patterns: tuple[str, ...]) -> bool:
     return any(_compile_regex_pattern(pattern).search(text) for pattern in patterns)
 
 
-def classify_review_theme(review_body: str | None, review_rating: int) -> ReviewTheme:
-    text = _normalize_text(review_body)
+def _build_review_signal_text(review_title: str | None, review_body: str | None) -> str:
+    return _normalize_text(" ".join(part for part in (review_title, review_body) if part))
+
+
+def classify_review_theme(
+    review_body: str | None,
+    review_rating: int,
+    review_title: str | None = None,
+) -> ReviewTheme:
+    text = _build_review_signal_text(review_title, review_body)
     has_bug_signal = _contains_any(text, _BUG_KEYWORDS) or _matches_any_pattern(
         text, _BUG_REGEX_PATTERNS
     )
@@ -262,5 +270,16 @@ def get_reply_template(theme: ReviewTheme) -> ReplyTemplate:
     return _TEMPLATES[theme]
 
 
-def select_reply_template(*, review_body: str | None, review_rating: int) -> ReplyTemplate:
-    return get_reply_template(classify_review_theme(review_body, review_rating))
+def select_reply_template(
+    *,
+    review_title: str | None = None,
+    review_body: str | None,
+    review_rating: int,
+) -> ReplyTemplate:
+    return get_reply_template(
+        classify_review_theme(
+            review_body=review_body,
+            review_rating=review_rating,
+            review_title=review_title,
+        )
+    )

@@ -51,17 +51,23 @@ def _build_system_prompt(
     return f"{base}\n{template_guidance}\n{_TONE_GUIDANCE[tone]}"
 
 
-def _user_message(review_body: str, review_rating: int) -> str:
-    return (
-        f"Review (rating: {review_rating}/5):\n"
-        f"{review_body.strip()}\n\n"
-        "Write the reply now."
-    )
+def _user_message(
+    review_title: str | None,
+    review_body: str,
+    review_rating: int,
+) -> str:
+    title = review_title.strip() if review_title else ""
+    review_lines = [f"Review (rating: {review_rating}/5):"]
+    if title:
+        review_lines.append(f"Title: {title}")
+    review_lines.extend([review_body.strip(), "", "Write the reply now."])
+    return "\n".join(review_lines)
 
 
 async def draft_reply(
     *,
     api_key: str,
+    review_title: str | None = None,
     review_body: str,
     review_rating: int,
     target_locale: str,
@@ -74,6 +80,7 @@ async def draft_reply(
     needed (we soft-trim here as a safety net).
     """
     reply_template = select_reply_template(
+        review_title=review_title,
         review_body=review_body,
         review_rating=review_rating,
     )
@@ -91,7 +98,7 @@ async def draft_reply(
         messages=[
             {
                 "role": "user",
-                "content": _user_message(review_body, review_rating),
+                "content": _user_message(review_title, review_body, review_rating),
             },
         ],
     )

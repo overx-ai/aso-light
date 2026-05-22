@@ -220,6 +220,41 @@ async def test_draft_reply_uses_theme_template_when_tone_is_omitted(
 
 
 @pytest.mark.asyncio
+async def test_draft_reply_uses_review_title_for_template_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str] = {}
+
+    class FakeMessages:
+        async def create(self, **kwargs: str) -> SimpleNamespace:
+            captured["system"] = kwargs["system"]
+            captured["user"] = kwargs["messages"][0]["content"]
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="Draft reply")],
+            )
+
+    class FakeAnthropic:
+        def __init__(self, *, api_key: str) -> None:
+            self.api_key = api_key
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr("app.services.reviews.draft.AsyncAnthropic", FakeAnthropic)
+
+    result = await draft_reply(
+        api_key="test-key",
+        review_title="Please add Apple Watch support.",
+        review_body="Love the app and use it daily.",
+        review_rating=5,
+        target_locale="en-US",
+    )
+
+    assert result == "Draft reply"
+    assert "share that the feedback will be reviewed" in captured["system"].lower()
+    assert "tone: warmly appreciative" in captured["system"].lower()
+    assert "title: please add apple watch support." in captured["user"].lower()
+
+
+@pytest.mark.asyncio
 async def test_draft_reply_honors_manual_tone_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

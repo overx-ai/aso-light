@@ -94,6 +94,7 @@ def _serialize_review(
                 break
 
     reply_template = select_reply_template(
+        review_title=attrs.get("title"),
         review_body=attrs.get("body"),
         review_rating=rating,
     )
@@ -240,6 +241,7 @@ async def draft_review_reply(
     try:
         suggestion = await draft_reply(
             api_key=settings.ANTHROPIC_API_KEY,
+            review_title=review.title,
             review_body=review.body,
             review_rating=review.rating,
             target_locale=locale,
