@@ -623,6 +623,7 @@ export interface ReviewOut {
   id: string;
   rating: number;
   theme: ReviewTheme;
+  reply_template: string;
   title: string | null;
   body: string | null;
   territory: string | null;
@@ -654,6 +655,7 @@ export interface DraftReplyOut {
   locale: string;
   theme: ReviewTheme;
   tone: ReplyTone;
+  reply_template: string;
 }
 
 export interface TranslateReviewIn {

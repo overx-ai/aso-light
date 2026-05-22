@@ -18,6 +18,7 @@ class ReviewOut(BaseModel):
     id: str
     rating: int
     theme: ReviewTheme
+    reply_template: str
     title: str | None = None
     body: str | None = None
     territory: str | None = None
@@ -44,6 +45,7 @@ class DraftOut(BaseModel):
     locale: str
     theme: ReviewTheme
     tone: ReplyTone
+    reply_template: str
 
 
 class TranslateReviewIn(BaseModel):

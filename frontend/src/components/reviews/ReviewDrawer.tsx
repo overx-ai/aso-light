@@ -32,7 +32,7 @@ import {
   useTranslateReview,
   useUpdateReply,
 } from "@/lib/hooks";
-import type { ReplyTone, ReviewTheme } from "@/types";
+import type { ReplyTone, ReviewOut, ReviewResponseOut, ReviewTheme } from "@/types";
 
 const RESPONSE_BODY_MAX_LEN = 5970;
 const SOURCE_LOCALE_STORAGE_KEY = "metadata-source-locale";
@@ -95,6 +95,13 @@ const DEFAULT_TONE_BY_THEME: Record<ReviewTheme, ReplyTone> = {
   other: "neutral",
 };
 
+function initialReplyValue(
+  review: ReviewOut | undefined,
+  existingResponse: ReviewResponseOut | null,
+): string {
+  return existingResponse?.body ?? review?.reply_template ?? "";
+}
+
 export default function ReviewDrawer({
   appId,
   reviewId,
@@ -125,10 +132,10 @@ export default function ReviewDrawer({
   // Reset draft & translation when switching reviews / reopening
   useEffect(() => {
     if (!opened) return;
-    setReply(existingResponse?.body ?? "");
+    setReply(initialReplyValue(review, existingResponse));
     setTranslation(null);
     setTranslationCached(false);
-  }, [opened, reviewId, existingResponse?.body]);
+  }, [opened, reviewId, review?.reply_template, existingResponse?.body]);
 
   useEffect(() => {
     if (!opened) return;
@@ -207,6 +214,9 @@ export default function ReviewDrawer({
   let counterColor: "red" | "yellow" | "green" = "green";
   if (overLimit) counterColor = "red";
   else if (reply.length > RESPONSE_BODY_MAX_LEN * 0.9) counterColor = "yellow";
+  const replyGuidance = existingResponse
+    ? "Current App Store Connect reply loaded. You can edit it before posting."
+    : `Default ${THEME_LABELS[reviewTheme].toLowerCase()} template loaded. You can edit or replace it before posting.`;
 
   return (
     <Drawer
@@ -336,9 +346,13 @@ export default function ReviewDrawer({
             autosize
             minRows={4}
             maxRows={16}
-            placeholder="Type your reply here…"
+            placeholder={review.reply_template}
             size="sm"
           />
+
+          <Text size="xs" c="dimmed">
+            {replyGuidance}
+          </Text>
 
           <Group justify="space-between" gap="xs">
             <Badge size="xs" variant="light" color={counterColor}>

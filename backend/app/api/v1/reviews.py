@@ -36,6 +36,7 @@ from app.services.reviews.common import (
 from app.services.reviews.draft import (
     default_tone_for_theme,
     draft_reply,
+    reply_template_for_theme,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,6 +181,7 @@ async def draft_review_reply(
         locale=locale,
         theme=review.theme,
         tone=tone,
+        reply_template=reply_template_for_theme(review.theme),
     )
 
 

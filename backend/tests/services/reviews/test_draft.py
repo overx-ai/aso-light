@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 from app.services.reviews.common import serialize_review
-from app.services.reviews.draft import classify_review_theme, default_tone_for_theme
+from app.services.reviews.draft import (
+    classify_review_theme,
+    default_tone_for_theme,
+    reply_template_for_theme,
+)
 
 
 def test_classifies_bug_reports_from_failure_language() -> None:
@@ -51,6 +55,12 @@ def test_default_tone_matches_theme() -> None:
     assert default_tone_for_theme("support_request") == "neutral"
 
 
+def test_reply_template_matches_theme() -> None:
+    assert "sorry" in reply_template_for_theme("bug_report").lower()
+    assert "suggestion" in reply_template_for_theme("feature_request").lower()
+    assert "thank you" in reply_template_for_theme("praise").lower()
+
+
 def test_serialize_review_includes_classified_theme() -> None:
     review = serialize_review(
         {
@@ -67,3 +77,4 @@ def test_serialize_review_includes_classified_theme() -> None:
     )
 
     assert review.theme == "praise"
+    assert review.reply_template == reply_template_for_theme("praise")

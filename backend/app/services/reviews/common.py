@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.schemas.review import ReviewOut, ReviewResponseOut
-from app.services.reviews.draft import classify_review_theme
+from app.services.reviews.draft import classify_review_theme, reply_template_for_theme
 
 # ASC returns alpha-3 territory codes. Map common ones to a default reply
 # locale; everything else falls back to en-US.
@@ -68,6 +68,11 @@ def serialize_review(
     rating = int(attrs.get("rating") or 0)
     title = attrs.get("title")
     body = attrs.get("body")
+    theme = classify_review_theme(
+        review_title=title,
+        review_body=body,
+        review_rating=rating,
+    )
     return ReviewOut(
         id=raw.get("id", ""),
         rating=rating,
@@ -77,11 +82,8 @@ def serialize_review(
         reviewer_nickname=attrs.get("reviewerNickname"),
         created_date=attrs.get("createdDate"),
         response=response,
-        theme=classify_review_theme(
-            review_title=title,
-            review_body=body,
-            review_rating=rating,
-        ),
+        theme=theme,
+        reply_template=reply_template_for_theme(theme),
     )
 
 

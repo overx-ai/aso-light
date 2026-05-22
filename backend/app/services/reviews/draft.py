@@ -33,6 +33,7 @@ DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 class ReplyTemplate:
     default_tone: ReplyTone
     guidance: str
+    reply_template: str
 
 
 _TONE_GUIDANCE: dict[ReplyTone, str] = {
@@ -150,6 +151,11 @@ _THEME_TEMPLATES: dict[ReviewTheme, ReplyTemplate] = {
             "3) suggest the in-app support channel for details like device or "
             "app version if follow-up is needed. Do not sound defensive."
         ),
+        reply_template=(
+            "Thanks for flagging this, and sorry for the trouble. "
+            "We're actively working on improvements, and we'd appreciate more "
+            "details through the in-app support option so we can investigate."
+        ),
     ),
     "feature_request": ReplyTemplate(
         default_tone="appreciative",
@@ -158,12 +164,20 @@ _THEME_TEMPLATES: dict[ReviewTheme, ReplyTemplate] = {
             "the use case or value behind it, 3) say the idea has been noted "
             "for future consideration without promising delivery or timing."
         ),
+        reply_template=(
+            "Thanks for the suggestion. We can see why that would be useful, "
+            "and we've noted it as we continue planning future improvements."
+        ),
     ),
     "praise": ReplyTemplate(
         default_tone="appreciative",
         guidance=(
             "Template: 1) thank the user warmly, 2) briefly mention that "
             "you are glad the app is helping, 3) keep it concise and upbeat."
+        ),
+        reply_template=(
+            "Thank you for the kind words. We're glad the app has been "
+            "helpful, and we appreciate you taking the time to share this."
         ),
     ),
     "billing_issue": ReplyTemplate(
@@ -174,6 +188,11 @@ _THEME_TEMPLATES: dict[ReviewTheme, ReplyTemplate] = {
             "in-app support channel for account-specific help. Mention App "
             "Store subscription settings only if it fits naturally."
         ),
+        reply_template=(
+            "Sorry for the frustration around your purchase. Please contact "
+            "us through the in-app support option so we can look into the "
+            "account-specific details and help."
+        ),
     ),
     "support_request": ReplyTemplate(
         default_tone="neutral",
@@ -182,12 +201,21 @@ _THEME_TEMPLATES: dict[ReviewTheme, ReplyTemplate] = {
             "brief helpful direction, 3) point to the in-app help or support "
             "channel for step-by-step assistance if needed."
         ),
+        reply_template=(
+            "Thanks for the question. The fastest way to get step-by-step "
+            "help is through the in-app support option, and we'll be happy "
+            "to assist."
+        ),
     ),
     "other": ReplyTemplate(
         default_tone="neutral",
         guidance=(
             "Template: 1) acknowledge the feedback, 2) respond helpfully and "
             "specifically, 3) close politely without adding marketing language."
+        ),
+        reply_template=(
+            "Thanks for your feedback. We appreciate you taking the time to "
+            "share it, and we're continuing to improve the app."
         ),
     ),
 }
@@ -232,6 +260,10 @@ def classify_review_theme(
 
 def default_tone_for_theme(theme: ReviewTheme) -> ReplyTone:
     return _THEME_TEMPLATES[theme].default_tone
+
+
+def reply_template_for_theme(theme: ReviewTheme) -> str:
+    return _THEME_TEMPLATES[theme].reply_template
 
 
 def _build_system_prompt(
