@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Badge, Button, Group, Stack, Text, Tooltip } from "@mantine/core";
 import { IconCheck, IconPlus, IconUpload } from "@tabler/icons-react";
 import { DataTable } from "mantine-datatable";
+import KeywordIntelBadge from "@/components/keywords/keywordIntel";
 import {
   useAddKeyword,
   useTrackedKeywords,
@@ -78,13 +79,13 @@ function trackedKey(locale: string, text: string): string {
   return `${locale.toLowerCase()}:${text.toLowerCase().trim()}`;
 }
 
-function buildTrackedSet(
+function buildTrackedMap(
   tracked: KeywordTrackingResponse[] | undefined,
-): Set<string> {
-  const out = new Set<string>();
+): Map<string, KeywordTrackingResponse> {
+  const out = new Map<string, KeywordTrackingResponse>();
   if (!tracked) return out;
   for (const t of tracked) {
-    out.add(trackedKey(t.keyword.locale, t.keyword.text));
+    out.set(trackedKey(t.keyword.locale, t.keyword.text), t);
   }
   return out;
 }
@@ -136,7 +137,8 @@ export default function MetadataGrid({
 }: MetadataGridProps) {
   const records = useMemo(() => buildRows(snapshot), [snapshot]);
   const { data: tracked } = useTrackedKeywords(String(appId));
-  const trackedSet = useMemo(() => buildTrackedSet(tracked), [tracked]);
+  const trackedMap = useMemo(() => buildTrackedMap(tracked), [tracked]);
+  const trackedSet = useMemo(() => new Set(trackedMap.keys()), [trackedMap]);
   const addKeyword = useAddKeyword();
 
   const totalKeywords = useMemo(
@@ -232,6 +234,7 @@ export default function MetadataGrid({
                 <Group gap={4}>
                   {r.keywordList.map((kw) => {
                     const key = trackedKey(r.locale, kw);
+                    const trackedKeyword = trackedMap.get(key);
                     const isTracked = trackedSet.has(key);
                     const isPending =
                       addKeyword.isPending &&
@@ -239,19 +242,28 @@ export default function MetadataGrid({
                       addKeyword.variables?.text === kw &&
                       addKeyword.variables?.locale === r.locale;
                     return (
-                      <KeywordChip
-                        key={kw}
-                        text={kw}
-                        isTracked={isTracked}
-                        isPending={isPending}
-                        onAdd={() =>
-                          addKeyword.mutate({
-                            appId: String(appId),
-                            text: kw,
-                            locale: r.locale,
-                          })
-                        }
-                      />
+                      <Group key={kw} gap={4} wrap="nowrap">
+                        <KeywordChip
+                          text={kw}
+                          isTracked={isTracked}
+                          isPending={isPending}
+                          onAdd={() =>
+                            addKeyword.mutate({
+                              appId: String(appId),
+                              text: kw,
+                              locale: r.locale,
+                            })
+                          }
+                        />
+                        {trackedKeyword && (
+                          <KeywordIntelBadge
+                            popularity={trackedKeyword.keyword.popularity}
+                            updatedAt={
+                              trackedKeyword.keyword.popularity_updated_at
+                            }
+                          />
+                        )}
+                      </Group>
                     );
                   })}
                 </Group>

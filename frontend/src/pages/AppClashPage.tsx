@@ -18,7 +18,8 @@ import {
   IconStarFilled,
   IconSwords,
 } from "@tabler/icons-react";
-import { useApp, useAppClash } from "@/lib/hooks";
+import TrackedKeywordIntelPanel from "@/components/keywords/TrackedKeywordIntelPanel";
+import { useApp, useAppClash, useTrackedKeywords } from "@/lib/hooks";
 import type { ClashRow } from "@/types";
 
 const COUNTRY_OPTIONS = [
@@ -151,9 +152,11 @@ function ClashCard({ row }: { row: ClashRow }) {
 export default function AppClashPage() {
   const { id } = useParams<{ id: string }>();
   const appId = id ? Number(id) : 0;
+  const trackedKeywordAppId = appId > 0 ? String(appId) : "";
   const { data: app } = useApp(id ?? "");
   const [country, setCountry] = useState("us");
   const clashQuery = useAppClash(appId, country);
+  const trackedKeywords = useTrackedKeywords(trackedKeywordAppId);
 
   if (!Number.isFinite(appId) || appId <= 0) {
     return (
@@ -182,6 +185,13 @@ export default function AppClashPage() {
       </div>
 
       <Stack gap="sm">
+        <TrackedKeywordIntelPanel
+          trackings={trackedKeywords.data}
+          isLoading={trackedKeywords.isLoading}
+          isError={trackedKeywords.isError}
+          hideWhenEmpty
+        />
+
         <Paper withBorder p="xs">
           <Group gap="md" wrap="wrap" align="flex-end">
             <Select
