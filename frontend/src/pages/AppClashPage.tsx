@@ -18,9 +18,9 @@ import {
   IconStarFilled,
   IconSwords,
 } from "@tabler/icons-react";
-import KeywordIntelBadge from "@/components/keywords/keywordIntel";
+import TrackedKeywordIntelPanel from "@/components/keywords/TrackedKeywordIntelPanel";
 import { useApp, useAppClash, useTrackedKeywords } from "@/lib/hooks";
-import type { ClashRow, KeywordTrackingResponse } from "@/types";
+import type { ClashRow } from "@/types";
 
 const COUNTRY_OPTIONS = [
   { value: "us", label: "United States" },
@@ -169,9 +169,6 @@ export default function AppClashPage() {
   }
 
   const rows = clashQuery.data?.rows ?? [];
-  const trackedKeywordCount = trackedKeywords.data?.length ?? 0;
-  const showTrackedKeywordIntel =
-    trackedKeywords.isError || trackedKeywordCount > 0;
 
   return (
     <Container size="xl">
@@ -188,34 +185,12 @@ export default function AppClashPage() {
       </div>
 
       <Stack gap="sm">
-        {showTrackedKeywordIntel && (
-          <Paper withBorder p="xs">
-            <Stack gap="xs">
-              <Group justify="space-between" gap="xs">
-                <Text size="xs" fw={600} c="dimmed" tt="uppercase">
-                  Tracked keyword intel
-                </Text>
-                <Text size="xs" c="dimmed">
-                  {trackedKeywords.isError
-                    ? "Unavailable"
-                    : `${trackedKeywordCount} keyword${trackedKeywordCount === 1 ? "" : "s"}`}
-                </Text>
-              </Group>
-              {trackedKeywords.isError ? (
-                <Alert color="yellow" icon={<IconAlertCircle size={16} />}>
-                  Tracked keyword intel is temporarily unavailable. Try again
-                  in a moment.
-                </Alert>
-              ) : (
-                <Group gap="xs">
-                  {(trackedKeywords.data ?? []).map((tracking) => (
-                    <TrackedKeywordIntel key={tracking.id} tracking={tracking} />
-                  ))}
-                </Group>
-              )}
-            </Stack>
-          </Paper>
-        )}
+        <TrackedKeywordIntelPanel
+          trackings={trackedKeywords.data}
+          isLoading={trackedKeywords.isLoading}
+          isError={trackedKeywords.isError}
+          hideWhenEmpty
+        />
 
         <Paper withBorder p="xs">
           <Group gap="md" wrap="wrap" align="flex-end">
@@ -253,37 +228,5 @@ export default function AppClashPage() {
         )}
       </Stack>
     </Container>
-  );
-}
-
-function TrackedKeywordIntel({
-  tracking,
-}: {
-  tracking: KeywordTrackingResponse;
-}) {
-  return (
-    <Group gap={4} wrap="wrap">
-      <Badge
-        size="sm"
-        radius="sm"
-        variant="light"
-        color="gray"
-        style={{
-          textTransform: "none",
-          maxWidth: 180,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-        }}
-      >
-        {tracking.keyword.text}
-      </Badge>
-      <Badge size="xs" radius="sm" variant="outline" color="gray">
-        {tracking.keyword.locale}
-      </Badge>
-      <KeywordIntelBadge
-        popularity={tracking.keyword.popularity}
-        updatedAt={tracking.keyword.popularity_updated_at}
-      />
-    </Group>
   );
 }
