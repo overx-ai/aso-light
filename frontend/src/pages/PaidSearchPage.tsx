@@ -391,13 +391,14 @@ function CampaignsTab({ appId }: { appId: number }) {
   const [selectedCampaign, setSelectedCampaign] = useState<ASACampaignOut | null>(
     null,
   );
+  const drilldownOpen = selectedCampaign !== null;
   const campaignPerformance = useASAPerformanceReport(
     appId,
     "CAMPAIGN",
     CAMPAIGN_BREAKDOWN_WINDOW_DAYS,
   );
   const adGroupPerformance = useASAPerformanceReport(
-    appId,
+    drilldownOpen ? appId : 0,
     "AD_GROUP",
     CAMPAIGN_BREAKDOWN_WINDOW_DAYS,
   );
@@ -418,7 +419,8 @@ function CampaignsTab({ appId }: { appId: number }) {
               {CAMPAIGN_BREAKDOWN_WINDOW_DAYS} days.
             </Text>
           </div>
-          {(campaignPerformance.isLoading || adGroupPerformance.isLoading) && (
+          {(campaignPerformance.isLoading ||
+            (drilldownOpen && adGroupPerformance.isLoading)) && (
             <Loader size="xs" />
           )}
         </Group>
@@ -522,8 +524,8 @@ function CampaignsTab({ appId }: { appId: number }) {
       <CampaignDrilldownDrawer
         appId={appId}
         campaign={selectedCampaign}
-        performanceLoading={adGroupPerformance.isLoading}
-        performanceRows={adGroupPerformance.data?.rows ?? []}
+        performanceLoading={drilldownOpen && adGroupPerformance.isLoading}
+        performanceRows={drilldownOpen ? adGroupPerformance.data?.rows ?? [] : []}
         onClose={() => setSelectedCampaign(null)}
       />
     </>
@@ -1419,7 +1421,7 @@ export default function PaidSearchPage() {
             <OverviewTab appId={appId} />
           </Tabs.Panel>
           <Tabs.Panel value="campaigns" pt="md">
-            <CampaignsTab appId={appId} />
+            <CampaignsTab key={appId} appId={appId} />
           </Tabs.Panel>
           <Tabs.Panel value="keywords" pt="md">
             <KeywordsTab appId={appId} />
