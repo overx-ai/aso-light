@@ -18,6 +18,7 @@ This spec covers feature **#37 (Review Responses)** from the aso.dev parity rese
 
 In:
 - ASC Customer Reviews list (paginated) with filters: territory, rating (1–5), has-response.
+- Low-rating trend dashboard over a selectable recent window (7/14/30/90 days), with daily review volume vs 1–2 star volume so spikes and drops are visible without opening individual reviews.
 - View a single review's full text + existing response (if any).
 - AI-drafted reply via Claude Haiku 4.5 — uses review locale, takes optional tone hint, never auto-posts.
 - Translate review body to the operator's preferred locale (re-uses existing `translate_with_cache`).
@@ -26,7 +27,7 @@ In:
 Out (deferred):
 - DB caching of reviews (ASC remains source of truth; live fetch with TanStack Query stale-time).
 - Bulk reply / templates.
-- Sentiment analytics, charts.
+- Theme classification and sentiment analytics beyond low-rating / volume trends.
 - Filing complaints with Apple about abusive reviews.
 - Notifications / push when new low-star reviews land.
 
@@ -67,6 +68,7 @@ Tones: `neutral` (default), `apologetic`, `appreciative`. Each prepends 2-3 line
 
 **API** — `backend/app/api/v1/reviews.py`, mounted under `/apps`:
 - `GET /apps/{app_id}/reviews?territory=&rating=&has_response=&cursor=` → `ReviewListOut`
+- `GET /apps/{app_id}/reviews/trends?territory=&days=&low_rating_max=` → `ReviewTrendOut`
 - `GET /apps/{app_id}/reviews/{review_id}` → `ReviewOut`
 - `POST /apps/{app_id}/reviews/{review_id}/draft` body `DraftIn` → `DraftOut` (no DB write; suggestion only)
 - `POST /apps/{app_id}/reviews/{review_id}/translate` body `{target_locale}` → `{translation, cached}` (re-uses `translate_with_cache` against the review body, treating it as a free-form text field with `field_kind="review_body"`)
@@ -78,6 +80,7 @@ All endpoints verify ownership via the existing `_get_verified_app(app_id, user_
 
 **Frontend** — `frontend/src/pages/ReviewsPage.tsx` + `frontend/src/components/reviews/`
 - Routed at `/apps/:id/reviews`, added to per-app sub-nav (`AppNavItem`).
+- Trend dashboard near the top: selectable 7/14/30/90 day window, summary cards, daily line chart (all reviews vs 1–2 star reviews), and notable-day callouts for worst/busiest/lowest-rated days.
 - Top filter bar: territory `Select` (BCP-47 set), rating `Select` (1–5 / any), `Switch` "needs reply".
 - DataTable: rating stars, territory chip, reviewer, title preview, body preview (lineClamp 2), created date, response badge (✓ replied / —).
 - Row click → side `Drawer`:
@@ -99,12 +102,15 @@ All endpoints verify ownership via the existing `_get_verified_app(app_id, user_
 ## Verification
 
 1. `make dev`, login, pick an app with reviews, navigate to the new Reviews tab.
-2. Filter by rating=1 territory=US — list updates; verify the network call carries the filter params.
-3. Click a review → drawer opens with full body. Click **Translate** — translation appears, cache hit on second click.
-4. Click **Suggest reply** → reply textarea fills; tone "apologetic" produces a noticeably softer draft.
-5. Edit, click **Post reply** → ASC accepts (201); reply badge in the list flips to ✓.
-6. Click the same review again → **Update** mutates, **Delete** removes.
-7. Negative path: unset `ANTHROPIC_API_KEY`, restart — Suggest hidden, translate works.
+2. Switch the dashboard between 7/14/30/90 day windows and verify the chart + summary cards update.
+3. Filter by territory=USA — the trend request carries the territory filter while the rating / needs-reply filters continue affecting only the queue table.
+4. Confirm a spike or drop day is visible from the chart + notable-day cards without opening any individual review.
+5. Filter by rating=1 territory=USA — list updates; verify the network call carries the filter params.
+6. Click a review → drawer opens with full body. Click **Translate** — translation appears, cache hit on second click.
+7. Click **Suggest reply** → reply textarea fills; tone "apologetic" produces a noticeably softer draft.
+8. Edit, click **Post reply** → ASC accepts (201); reply badge in the list flips to ✓.
+9. Click the same review again → **Update** mutates, **Delete** removes.
+10. Negative path: unset `ANTHROPIC_API_KEY`, restart — Suggest hidden, translate works.
 
 ## Critical files (new + edit)
 

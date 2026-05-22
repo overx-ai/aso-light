@@ -23,6 +23,12 @@ import {
   IconStarFilled,
 } from "@tabler/icons-react";
 import type { ReviewTrendOut } from "@/types";
+import {
+  buildTrendMoments,
+  formatAverageRating,
+  formatTrendDate,
+  largestSwing,
+} from "./reviewTrendHelpers";
 
 const WINDOW_OPTIONS = [
   { value: "7", label: "7d" },
@@ -30,54 +36,6 @@ const WINDOW_OPTIONS = [
   { value: "30", label: "30d" },
   { value: "90", label: "90d" },
 ];
-
-function formatTrendDate(value: string | null): string {
-  if (!value) return "—";
-  return new Date(`${value}T12:00:00Z`).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function formatAverageRating(value: number | null): string {
-  if (value === null) return "—";
-  return `${value.toFixed(1)} / 5`;
-}
-
-function largestSwing(summary: ReviewTrendOut["summary"]): {
-  value: string;
-  hint: string;
-  color: string;
-  icon: typeof IconArrowUpRight;
-} {
-  if (
-    summary.biggest_spike_delta > 0 &&
-    summary.biggest_spike_delta >= Math.abs(summary.biggest_drop_delta)
-  ) {
-    return {
-      value: `+${summary.biggest_spike_delta}`,
-      hint: `Spike on ${formatTrendDate(summary.biggest_spike_date)}`,
-      color: "red",
-      icon: IconArrowUpRight,
-    };
-  }
-
-  if (summary.biggest_drop_delta < 0) {
-    return {
-      value: `${summary.biggest_drop_delta}`,
-      hint: `Drop on ${formatTrendDate(summary.biggest_drop_date)}`,
-      color: "teal",
-      icon: IconArrowDownRight,
-    };
-  }
-
-  return {
-    value: "Flat",
-    hint: "No sharp swing in this window",
-    color: "gray",
-    icon: IconArrowUpRight,
-  };
-}
 
 function TrendStatCard({
   icon,
@@ -167,13 +125,17 @@ export default function ReviewTrendDashboard({
   }
 
   const swing = largestSwing(trend.summary);
-  const SwingIcon = swing.icon;
+  const SwingIcon =
+    swing.icon === "down"
+      ? IconArrowDownRight
+      : IconArrowUpRight;
   const chartData = trend.points.map((point) => ({
     label: formatTrendDate(point.date),
     "All reviews": point.total_reviews,
     "1-2 star reviews": point.low_rating_reviews,
   }));
   const noData = trend.summary.total_reviews === 0;
+  const moments = buildTrendMoments(trend);
 
   return (
     <Paper withBorder p="md" radius="md">
@@ -270,6 +232,29 @@ export default function ReviewTrendDashboard({
               strokeWidth={2}
               tooltipAnimationDuration={200}
             />
+
+            {moments.length > 0 && (
+              <Stack gap="xs">
+                <Text size="sm" fw={600}>
+                  Notable days
+                </Text>
+                <SimpleGrid cols={{ base: 1, sm: 3 }}>
+                  {moments.map((moment) => (
+                    <Paper key={moment.label} withBorder p="sm" radius="md">
+                      <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
+                        {moment.label}
+                      </Text>
+                      <Text size="lg" fw={700} mt={4}>
+                        {moment.value}
+                      </Text>
+                      <Text size="xs" c="dimmed" mt={4}>
+                        {moment.hint}
+                      </Text>
+                    </Paper>
+                  ))}
+                </SimpleGrid>
+              </Stack>
+            )}
 
             <Group gap="md" wrap="wrap">
               <Text size="xs" c="dimmed">
