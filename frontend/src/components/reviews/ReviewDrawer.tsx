@@ -32,7 +32,8 @@ import {
   useTranslateReview,
   useUpdateReply,
 } from "@/lib/hooks";
-import type { ReplyTone, ReviewOut, ReviewResponseOut, ReviewTheme } from "@/types";
+import type { ReplyTone, ReviewTheme } from "@/types";
+import { getInitialReplyValue, isReplyDirty } from "./replyDraftState";
 
 const RESPONSE_BODY_MAX_LEN = 5970;
 const SOURCE_LOCALE_STORAGE_KEY = "metadata-source-locale";
@@ -95,13 +96,6 @@ const DEFAULT_TONE_BY_THEME: Record<ReviewTheme, ReplyTone> = {
   other: "neutral",
 };
 
-function initialReplyValue(
-  review: ReviewOut | undefined,
-  existingResponse: ReviewResponseOut | null,
-): string {
-  return existingResponse?.body ?? review?.reply_template ?? "";
-}
-
 export default function ReviewDrawer({
   appId,
   reviewId,
@@ -132,10 +126,10 @@ export default function ReviewDrawer({
   // Reset draft & translation when switching reviews / reopening
   useEffect(() => {
     if (!opened) return;
-    setReply(initialReplyValue(review, existingResponse));
+    setReply(getInitialReplyValue(existingResponse));
     setTranslation(null);
     setTranslationCached(false);
-  }, [opened, reviewId, review?.reply_template, existingResponse?.body]);
+  }, [opened, reviewId, existingResponse?.body]);
 
   useEffect(() => {
     if (!opened) return;
@@ -187,7 +181,7 @@ export default function ReviewDrawer({
   };
 
   const overLimit = reply.length > RESPONSE_BODY_MAX_LEN;
-  const dirty = (existingResponse?.body ?? "") !== reply;
+  const dirty = isReplyDirty(existingResponse, reply);
 
   const onSave = () => {
     if (!dirty || overLimit || reply.length === 0) return;
@@ -216,7 +210,7 @@ export default function ReviewDrawer({
   else if (reply.length > RESPONSE_BODY_MAX_LEN * 0.9) counterColor = "yellow";
   const replyGuidance = existingResponse
     ? "Current App Store Connect reply loaded. You can edit it before posting."
-    : `Default ${THEME_LABELS[reviewTheme].toLowerCase()} template loaded. You can edit or replace it before posting.`;
+    : `Default ${THEME_LABELS[reviewTheme].toLowerCase()} template shown as guidance. Draft or paste your reply before posting.`;
 
   return (
     <Drawer
