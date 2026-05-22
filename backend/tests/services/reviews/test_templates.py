@@ -64,6 +64,27 @@ def test_low_rating_without_specific_keywords_uses_complaint_template() -> None:
     assert "acknowledge the frustration" in template.guidance.lower()
 
 
+@pytest.mark.parametrize(
+    ("review_body", "review_rating", "expected_theme"),
+    [
+        ("No issues so far, works great", 5, "praise"),
+        ("Badge support would be nice", 3, "feature_request"),
+        ("The recharge flow is confusing", 2, "complaint"),
+    ],
+)
+def test_template_selection_avoids_false_positive_substring_matches(
+    review_body: str,
+    review_rating: int,
+    expected_theme: str,
+) -> None:
+    template = select_reply_template(
+        review_body=review_body,
+        review_rating=review_rating,
+    )
+
+    assert template.theme == expected_theme
+
+
 @pytest.mark.asyncio
 async def test_draft_reply_uses_theme_template_when_tone_is_omitted(
     monkeypatch: pytest.MonkeyPatch,

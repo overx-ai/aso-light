@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+import re
 from typing import Literal
 
 ReplyTone = Literal["neutral", "apologetic", "appreciative"]
@@ -48,6 +50,7 @@ _FEATURE_REQUEST_KEYWORDS = (
     "feature request",
     "please add",
     "would love",
+    "would be nice",
     "wish it had",
     "wish you had",
     "could you add",
@@ -169,8 +172,13 @@ def _normalize_text(text: str | None) -> str:
     return " ".join(text.casefold().split())
 
 
+@lru_cache(maxsize=None)
+def _compile_phrase_pattern(phrase: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<!\w){re.escape(phrase)}(?!\w)")
+
+
 def _contains_any(text: str, phrases: tuple[str, ...]) -> bool:
-    return any(phrase in text for phrase in phrases)
+    return any(_compile_phrase_pattern(phrase).search(text) for phrase in phrases)
 
 
 def classify_review_theme(review_body: str | None, review_rating: int) -> ReviewTheme:
