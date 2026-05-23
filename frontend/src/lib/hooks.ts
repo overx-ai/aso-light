@@ -85,6 +85,7 @@ import type {
   TranslateReviewOut,
   ReplyIn,
   ReplyTone,
+  ReviewTheme,
   VisibilityWatchListOut,
   VisibilitySnapshotOut,
   VisibilitySnapshotListOut,
@@ -2766,11 +2767,13 @@ export function useDraftReply(appId: number) {
     mutationFn: async ({
       reviewId,
       tone,
+      theme,
     }: {
       reviewId: string;
       tone: ReplyTone;
+      theme?: ReviewTheme | null;
     }): Promise<DraftReplyOut> => {
-      const body: DraftReplyIn = { tone };
+      const body: DraftReplyIn = { tone, theme };
       const response = await api.post<DraftReplyOut>(
         `/apps/${appId}/reviews/${reviewId}/draft`,
         body,

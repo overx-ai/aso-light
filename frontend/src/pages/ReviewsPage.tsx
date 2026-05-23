@@ -21,6 +21,10 @@ import {
   IconStarFilled,
 } from "@tabler/icons-react";
 import { useApp, useReviews } from "@/lib/hooks";
+import {
+  REVIEW_THEME_COLORS,
+  REVIEW_THEME_LABELS,
+} from "@/lib/reviewThemes";
 import type { ReviewOut } from "@/types";
 import ReviewDrawer from "@/components/reviews/ReviewDrawer";
 
@@ -181,6 +185,20 @@ export default function ReviewsPage() {
                 render: (r) => (
                   <Badge size="xs" variant="light" color="gray">
                     {r.territory ?? "—"}
+                  </Badge>
+                ),
+              },
+              {
+                accessor: "theme",
+                title: "Theme",
+                width: 120,
+                render: (r) => (
+                  <Badge
+                    size="xs"
+                    variant="light"
+                    color={REVIEW_THEME_COLORS[r.theme]}
+                  >
+                    {REVIEW_THEME_LABELS[r.theme]}
                   </Badge>
                 ),
               },

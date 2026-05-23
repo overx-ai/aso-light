@@ -10,13 +10,15 @@ guidelines for review replies.
 """
 from __future__ import annotations
 
-from typing import Literal
-
 from anthropic import AsyncAnthropic
 
 from app.services.asc.reviews import RESPONSE_BODY_MAX_LEN
+from app.services.reviews.templates import (
+    ReplyTone,
+    ReviewTheme,
+    review_reply_template,
+)
 
-ReplyTone = Literal["neutral", "apologetic", "appreciative"]
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
 
@@ -36,7 +38,11 @@ _TONE_GUIDANCE: dict[ReplyTone, str] = {
 }
 
 
-def _build_system_prompt(tone: ReplyTone, target_locale: str) -> str:
+def _build_system_prompt(
+    tone: ReplyTone,
+    target_locale: str,
+    theme: ReviewTheme,
+) -> str:
     base = (
         "You are a customer support specialist replying to an App Store "
         f"review on behalf of the developer. Write the reply in {target_locale}. "
@@ -46,7 +52,13 @@ def _build_system_prompt(tone: ReplyTone, target_locale: str) -> str:
         "a bug, suggest contacting the in-app support channel for follow-up. "
         "Output ONLY the reply text — no quotes, no preface, no signature."
     )
-    return f"{base}\n{_TONE_GUIDANCE[tone]}"
+    template = review_reply_template(theme)
+    return (
+        f"{base}\n"
+        f"{_TONE_GUIDANCE[tone]}\n"
+        f"Classified review theme: {template.label}.\n"
+        f"{template.prompt_guidance}"
+    )
 
 
 def _user_message(review_body: str, review_rating: int) -> str:
@@ -64,6 +76,7 @@ async def draft_reply(
     review_rating: int,
     target_locale: str,
     tone: ReplyTone = "neutral",
+    theme: ReviewTheme = "other",
     model: str = DEFAULT_MODEL,
 ) -> str:
     """Generate a draft reply via Claude. Returns the reply text only.
@@ -75,7 +88,7 @@ async def draft_reply(
     response = await client.messages.create(
         model=model,
         max_tokens=1024,
-        system=_build_system_prompt(tone, target_locale),
+        system=_build_system_prompt(tone, target_locale, theme),
         messages=[
             {
                 "role": "user",
