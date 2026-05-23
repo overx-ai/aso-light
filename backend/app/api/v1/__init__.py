@@ -10,6 +10,7 @@ from app.api.v1.clash import router as clash_router
 from app.api.v1.clone import router as clone_router
 from app.api.v1.credentials import router as credentials_router
 from app.api.v1.export import router as export_router
+from app.api.v1.growth import router as growth_router
 from app.api.v1.indices import router as indices_router
 from app.api.v1.keywords import router as keywords_router
 from app.api.v1.metadata import (
@@ -36,6 +37,7 @@ router.include_router(pricing_router, prefix="/apps", tags=["pricing"])
 router.include_router(clone_router, prefix="/apps", tags=["clone"])
 router.include_router(revenuecat_router, prefix="/apps", tags=["revenuecat"])
 router.include_router(availability_router, prefix="/apps", tags=["availability"])
+router.include_router(growth_router, prefix="/apps", tags=["growth"])
 router.include_router(metadata_router, prefix="/apps", tags=["metadata"])
 router.include_router(reviews_router, prefix="/apps", tags=["reviews"])
 router.include_router(visibility_router, prefix="/apps", tags=["visibility"])
