@@ -79,6 +79,7 @@ import type {
   ReviewListOut,
   ReviewOut,
   ReviewResponseOut,
+  ReviewTrendOut,
   DraftReplyIn,
   DraftReplyOut,
   TranslateReviewIn,
@@ -158,6 +159,16 @@ export const queryKeys = {
       filters.territory ?? null,
       filters.rating ?? null,
       filters.has_response ?? null,
+    ] as const,
+  reviewTrends: (
+    appId: number,
+    filters: { territory?: string; days: number },
+  ) =>
+    [
+      "review-trends",
+      appId,
+      filters.territory ?? null,
+      filters.days,
     ] as const,
   review: (appId: number, reviewId: string) =>
     ["review", appId, reviewId] as const,
@@ -2737,6 +2748,31 @@ export function useReviews(appId: number, filters: ReviewListFilters = {}) {
     },
     enabled: appId > 0,
     staleTime: 60_000,
+  });
+}
+
+interface ReviewTrendFilters {
+  territory?: string;
+  days: number;
+}
+
+export function useReviewTrends(appId: number, filters: ReviewTrendFilters) {
+  return useQuery({
+    queryKey: queryKeys.reviewTrends(appId, filters),
+    queryFn: async () => {
+      const response = await api.get<ReviewTrendOut>(
+        `/apps/${appId}/reviews/trends`,
+        {
+          params: {
+            territory: filters.territory || undefined,
+            days: filters.days,
+          },
+        },
+      );
+      return response.data;
+    },
+    enabled: appId > 0,
+    staleTime: 5 * 60_000,
   });
 }
 

@@ -23,6 +23,7 @@ import {
 import { useApp, useReviews } from "@/lib/hooks";
 import type { ReviewOut } from "@/types";
 import ReviewDrawer from "@/components/reviews/ReviewDrawer";
+import ReviewTrendDashboard from "@/components/reviews/ReviewTrendDashboard";
 
 const RATING_OPTIONS = [
   { value: "any", label: "Any" },
@@ -60,6 +61,7 @@ export default function ReviewsPage() {
 
   const [territory, setTerritory] = useState<string>("any");
   const [rating, setRating] = useState<string>("any");
+  const [trendDays, setTrendDays] = useState(30);
   const [needsReply, setNeedsReply] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -132,6 +134,13 @@ export default function ReviewsPage() {
             </Text>
           </Group>
         </Paper>
+
+        <ReviewTrendDashboard
+          appId={appId}
+          territory={filters.territory}
+          days={trendDays}
+          onDaysChange={setTrendDays}
+        />
 
         {reviewsQuery.error ? (
           <Alert color="red" icon={<IconAlertCircle size={16} />}>

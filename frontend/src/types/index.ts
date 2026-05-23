@@ -635,6 +635,54 @@ export interface ReviewListOut {
   next_cursor: string | null;
 }
 
+export interface ReviewTrendPoint {
+  date: string;
+  total: number;
+  low_rating: number;
+  average_rating: number | null;
+  rating_1: number;
+  rating_2: number;
+  rating_3: number;
+  rating_4: number;
+  rating_5: number;
+}
+
+export interface ReviewThemeTrendPoint {
+  date: string;
+  count: number;
+  low_rating: number;
+}
+
+export interface ReviewThemeTrend {
+  theme: string;
+  total: number;
+  low_rating: number;
+  points: ReviewThemeTrendPoint[];
+}
+
+export interface ReviewTrendInsight {
+  kind: "spike" | "drop";
+  metric: string;
+  date: string;
+  previous_value: number;
+  value: number;
+  change: number;
+}
+
+export interface ReviewTrendOut {
+  days: number;
+  start_date: string;
+  end_date: string;
+  total_reviews: number;
+  low_rating_total: number;
+  average_rating: number | null;
+  low_rating_threshold: number;
+  truncated: boolean;
+  points: ReviewTrendPoint[];
+  themes: ReviewThemeTrend[];
+  insights: ReviewTrendInsight[];
+}
+
 export type ReplyTone = "neutral" | "apologetic" | "appreciative";
 
 export interface DraftReplyIn {
