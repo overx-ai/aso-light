@@ -782,6 +782,46 @@ export interface AsoCheckOut {
   items: AsoIssueOut[];
 }
 
+// ---- Growth Advisor ----
+
+export type GrowthRecommendationCategory =
+  | "pricing"
+  | "metadata"
+  | "keywords"
+  | "visibility"
+  | "reviews"
+  | "paid_search"
+  | "availability";
+
+export type GrowthRecommendationSeverity = "critical" | "warning" | "info";
+
+export interface GrowthRecommendationEvidence {
+  label: string;
+  value: string;
+}
+
+export interface GrowthRecommendation {
+  id: string;
+  category: GrowthRecommendationCategory;
+  severity: GrowthRecommendationSeverity;
+  title: string;
+  description: string;
+  impact: string;
+  cta_label: string;
+  cta_path: string;
+  evidence: GrowthRecommendationEvidence[];
+}
+
+export interface GrowthRecommendationSummary {
+  total: number;
+  pricing: number;
+}
+
+export interface GrowthRecommendationsOut {
+  summary: GrowthRecommendationSummary;
+  items: GrowthRecommendation[];
+}
+
 // ---- App Clash ----
 
 export interface ClashRow {
