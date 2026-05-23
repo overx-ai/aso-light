@@ -1,13 +1,10 @@
 """Pydantic schemas for customer reviews and developer responses."""
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, Field
 
 from app.services.asc.reviews import RESPONSE_BODY_MAX_LEN
-
-ReplyTone = Literal["neutral", "apologetic", "appreciative"]
+from app.services.reviews.templates import ReplyTone, ReviewTheme
 
 
 class ReviewResponseOut(BaseModel):
@@ -23,6 +20,7 @@ class ReviewOut(BaseModel):
     title: str | None = None
     body: str | None = None
     territory: str | None = None
+    theme: ReviewTheme = "other"
     reviewer_nickname: str | None = None
     created_date: str | None = None
     response: ReviewResponseOut | None = None
@@ -39,11 +37,13 @@ class ReplyIn(BaseModel):
 
 class DraftIn(BaseModel):
     tone: ReplyTone = "neutral"
+    theme: ReviewTheme | None = None
 
 
 class DraftOut(BaseModel):
     suggestion: str
     locale: str
+    theme: ReviewTheme
 
 
 class TranslateReviewIn(BaseModel):

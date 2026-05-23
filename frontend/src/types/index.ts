@@ -625,6 +625,7 @@ export interface ReviewOut {
   title: string | null;
   body: string | null;
   territory: string | null;
+  theme: ReviewTheme;
   reviewer_nickname: string | null;
   created_date: string | null;
   response: ReviewResponseOut | null;
@@ -637,13 +638,26 @@ export interface ReviewListOut {
 
 export type ReplyTone = "neutral" | "apologetic" | "appreciative";
 
+export type ReviewTheme =
+  | "bug"
+  | "performance"
+  | "feature_request"
+  | "billing"
+  | "account"
+  | "usability"
+  | "content"
+  | "praise"
+  | "other";
+
 export interface DraftReplyIn {
   tone: ReplyTone;
+  theme?: ReviewTheme | null;
 }
 
 export interface DraftReplyOut {
   suggestion: string;
   locale: string;
+  theme: ReviewTheme;
 }
 
 export interface TranslateReviewIn {
