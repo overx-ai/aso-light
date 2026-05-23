@@ -5,7 +5,9 @@ import {
   Badge,
   Button,
   Container,
+  Drawer,
   Group,
+  Loader,
   Modal,
   Paper,
   Radio,
@@ -45,18 +47,29 @@ import {
   type ASANegativeCandidate,
   type ASANegativeKeywordOut,
   type ASAOrganicCandidate,
+  type ASAPerformanceReportRow,
   type ASASearchTermReportRow,
 } from "@/lib/hooks";
+import {
+  buildCampaignDrilldown,
+  buildPerformanceMap,
+  type CampaignDrilldownRow,
+} from "@/pages/paid-search/campaignDrilldown";
 
 // ----- Helpers -----
+
+const CAMPAIGN_BREAKDOWN_WINDOW_DAYS = 30;
 
 function formatNumber(n: number): string {
   return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
-function formatMoney(amount: string | number, currency: string | null): string {
+function formatMoney(
+  amount: string | number | null | undefined,
+  currency: string | null,
+): string {
   const n = typeof amount === "string" ? parseFloat(amount) : amount;
-  if (!Number.isFinite(n)) return "-";
+  if (n === null || n === undefined || !Number.isFinite(n)) return "—";
   const cur = currency ?? "USD";
   try {
     return n.toLocaleString(undefined, {
@@ -74,6 +87,15 @@ function statusColor(status: string): string {
   if (s === "ENABLED" || s === "ACTIVE" || s === "RUNNING") return "green";
   if (s === "PAUSED") return "yellow";
   return "gray";
+}
+
+function formatPercent(
+  value: number | string | null | undefined,
+  digits = 1,
+): string {
+  const n = typeof value === "string" ? parseFloat(value) : value;
+  if (n === null || n === undefined || !Number.isFinite(n)) return "—";
+  return `${(n * 100).toFixed(digits)}%`;
 }
 
 // ----- Empty state shown when no ASA credentials connected -----
@@ -366,90 +388,340 @@ function OverviewTab({ appId }: { appId: number }) {
 
 function CampaignsTab({ appId }: { appId: number }) {
   const { data, isLoading } = useASACampaigns(appId);
+  const [selectedCampaign, setSelectedCampaign] = useState<ASACampaignOut | null>(
+    null,
+  );
+  const drilldownOpen = selectedCampaign !== null;
+  const campaignPerformance = useASAPerformanceReport(
+    appId,
+    "CAMPAIGN",
+    CAMPAIGN_BREAKDOWN_WINDOW_DAYS,
+  );
+  const adGroupPerformance = useASAPerformanceReport(
+    drilldownOpen ? appId : 0,
+    "AD_GROUP",
+    CAMPAIGN_BREAKDOWN_WINDOW_DAYS,
+  );
+
+  const campaignMetrics = useMemo(
+    () => buildPerformanceMap(campaignPerformance.data?.rows ?? []),
+    [campaignPerformance.data?.rows],
+  );
 
   return (
-    <Paper withBorder radius="md">
-      <DataTable<ASACampaignOut>
-        withTableBorder={false}
-        striped
-        highlightOnHover
-        fetching={isLoading}
-        minHeight={(data ?? []).length === 0 ? 200 : undefined}
-        records={data ?? []}
-        idAccessor="id"
-        noRecordsText="No ASA campaigns linked to this app yet."
-        columns={[
-          {
-            accessor: "name",
-            title: "Campaign",
-            render: (r) => (
-              <Stack gap={0}>
-                <Text size="sm" fw={500}>
-                  {r.name}
-                </Text>
-                <Text size="xs" c="dimmed">
-                  Adam ID {r.app_adam_id}
-                </Text>
-              </Stack>
-            ),
-          },
-          {
-            accessor: "status",
-            title: "Status",
-            width: 110,
-            render: (r) => (
-              <Badge variant="light" color={statusColor(r.status)} size="sm">
-                {r.status}
-              </Badge>
-            ),
-          },
-          {
-            accessor: "daily_budget",
-            title: "Daily budget",
-            width: 140,
-            render: (r) =>
-              r.daily_budget_amount ? (
-                <Text size="sm">
+    <>
+      <Paper withBorder radius="md">
+        <Group justify="space-between" p="md" pb="xs" wrap="wrap">
+          <div>
+            <Title order={5}>Campaign performance</Title>
+            <Text size="xs" c="dimmed">
+              Click any campaign to inspect its ad groups without leaving the paid-search page. Performance reflects the last{" "}
+              {CAMPAIGN_BREAKDOWN_WINDOW_DAYS} days.
+            </Text>
+          </div>
+          {(campaignPerformance.isLoading ||
+            (drilldownOpen && adGroupPerformance.isLoading)) && (
+            <Loader size="xs" />
+          )}
+        </Group>
+
+        <DataTable<ASACampaignOut>
+          withTableBorder={false}
+          striped
+          highlightOnHover
+          fetching={isLoading || campaignPerformance.isLoading}
+          minHeight={(data ?? []).length === 0 ? 200 : undefined}
+          records={data ?? []}
+          idAccessor="id"
+          noRecordsText="No ASA campaigns linked to this app yet."
+          onRowClick={({ record }) => setSelectedCampaign(record)}
+          columns={[
+            {
+              accessor: "name",
+              title: "Campaign",
+              render: (r) => (
+                <Stack gap={0}>
+                  <Text size="sm" fw={500}>
+                    {r.name}
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    Adam ID {r.app_adam_id}
+                    {r.archived_at ? " · archived" : ""}
+                  </Text>
+                </Stack>
+              ),
+            },
+            {
+              accessor: "status",
+              title: "Status",
+              width: 110,
+              render: (r) => (
+                <Badge variant="light" color={statusColor(r.status)} size="sm">
+                  {r.status}
+                </Badge>
+              ),
+            },
+            {
+              accessor: "spend_30d",
+              title: "Spend (30d)",
+              width: 120,
+              textAlign: "right" as const,
+              render: (r) => {
+                const metrics = campaignMetrics.get(r.id);
+                return metrics ? (
+                  <Text size="sm">
+                    {formatMoney(metrics.spend, metrics.spendCurrency)}
+                  </Text>
+                ) : (
+                  <Text size="sm" c="dimmed">
+                    —
+                  </Text>
+                );
+              },
+            },
+            {
+              accessor: "installs_30d",
+              title: "Installs",
+              width: 90,
+              textAlign: "right" as const,
+              render: (r) => {
+                const metrics = campaignMetrics.get(r.id);
+                return (
+                  <Text size="sm" c={metrics ? undefined : "dimmed"}>
+                    {metrics ? formatNumber(metrics.installs) : "—"}
+                  </Text>
+                );
+              },
+            },
+            {
+              accessor: "taps_30d",
+              title: "Taps",
+              width: 90,
+              textAlign: "right" as const,
+              render: (r) => {
+                const metrics = campaignMetrics.get(r.id);
+                return (
+                  <Text size="sm" c={metrics ? undefined : "dimmed"}>
+                    {metrics ? formatNumber(metrics.taps) : "—"}
+                  </Text>
+                );
+              },
+            },
+            {
+              accessor: "daily_budget",
+              title: "Daily budget",
+              width: 140,
+              render: (r) => (
+                <Text size="sm" c={r.daily_budget_amount ? undefined : "dimmed"}>
                   {formatMoney(r.daily_budget_amount, r.daily_budget_currency)}
                 </Text>
-              ) : (
-                <Text size="sm" c="dimmed">
-                  —
-                </Text>
               ),
-          },
-          {
-            accessor: "storefronts",
-            title: "Storefronts",
-            width: 120,
-            render: (r) => (
-              <Text size="xs" c="dimmed">
-                {Array.isArray(r.storefronts)
-                  ? r.storefronts.length === 0
-                    ? "—"
-                    : `${r.storefronts.length}`
-                  : "—"}
-              </Text>
-            ),
-          },
-          {
-            accessor: "archived",
-            title: "Archived",
-            width: 110,
-            render: (r) =>
-              r.archived_at ? (
-                <Badge size="xs" color="gray" variant="light">
-                  archived
-                </Badge>
-              ) : (
-                <Text size="xs" c="dimmed">
-                  —
-                </Text>
-              ),
-          },
-        ]}
+            },
+          ]}
+        />
+      </Paper>
+
+      <CampaignDrilldownDrawer
+        appId={appId}
+        campaign={selectedCampaign}
+        performanceLoading={drilldownOpen && adGroupPerformance.isLoading}
+        performanceRows={drilldownOpen ? adGroupPerformance.data?.rows ?? [] : []}
+        onClose={() => setSelectedCampaign(null)}
       />
-    </Paper>
+    </>
+  );
+}
+
+function CampaignDrilldownDrawer({
+  appId,
+  campaign,
+  performanceLoading,
+  performanceRows,
+  onClose,
+}: {
+  appId: number;
+  campaign: ASACampaignOut | null;
+  performanceLoading: boolean;
+  performanceRows: ASAPerformanceReportRow[];
+  onClose: () => void;
+}) {
+  const adGroups = useASAAdGroups(appId, campaign?.id ?? 0);
+
+  const drilldown = useMemo(
+    () => buildCampaignDrilldown(adGroups.data ?? [], performanceRows),
+    [adGroups.data, performanceRows],
+  );
+
+  const loading = performanceLoading || adGroups.isLoading;
+
+  return (
+    <Drawer
+      opened={campaign !== null}
+      onClose={onClose}
+      position="right"
+      size="xl"
+      title={
+        campaign ? (
+          <Group gap="xs" wrap="wrap">
+            <Text fw={600} size="sm">
+              {campaign.name}
+            </Text>
+            <Badge variant="light" color={statusColor(campaign.status)} size="sm">
+              {campaign.status}
+            </Badge>
+            <Text size="xs" c="dimmed">
+              Ad-group breakdown · last {CAMPAIGN_BREAKDOWN_WINDOW_DAYS} days
+            </Text>
+          </Group>
+        ) : (
+          "Campaign breakdown"
+        )
+      }
+    >
+      {!campaign ? null : (
+        <Stack gap="md">
+          {loading ? (
+            <Group gap="xs">
+              <Loader size="sm" />
+              <Text size="sm" c="dimmed">
+                Loading ad-group performance…
+              </Text>
+            </Group>
+          ) : (
+            <Group gap="md" wrap="wrap">
+              <Paper withBorder p="md" miw={140}>
+                <Text size="xs" c="dimmed">
+                  Spend (30d)
+                </Text>
+                <Text fw={600}>
+                  {formatMoney(
+                    drilldown.totals.spend,
+                    drilldown.totals.spendCurrency,
+                  )}
+                </Text>
+              </Paper>
+              <Paper withBorder p="md" miw={140}>
+                <Text size="xs" c="dimmed">
+                  Installs
+                </Text>
+                <Text fw={600}>{formatNumber(drilldown.totals.installs)}</Text>
+              </Paper>
+              <Paper withBorder p="md" miw={140}>
+                <Text size="xs" c="dimmed">
+                  Taps
+                </Text>
+                <Text fw={600}>{formatNumber(drilldown.totals.taps)}</Text>
+              </Paper>
+              <Paper withBorder p="md" miw={140}>
+                <Text size="xs" c="dimmed">
+                  Ad groups
+                </Text>
+                <Text fw={600}>{formatNumber(drilldown.rows.length)}</Text>
+              </Paper>
+            </Group>
+          )}
+
+          <Paper withBorder radius="md">
+            <DataTable<CampaignDrilldownRow>
+              withTableBorder={false}
+              striped
+              highlightOnHover
+              fetching={loading}
+              minHeight={drilldown.rows.length === 0 ? 200 : undefined}
+              records={drilldown.rows}
+              idAccessor="id"
+              noRecordsText="No ad groups linked to this campaign yet."
+              columns={[
+                {
+                  accessor: "name",
+                  title: "Ad group",
+                  render: (r) => (
+                    <Stack gap={0}>
+                      <Text size="sm" fw={500}>
+                        {r.name}
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        {[r.deviceClass, r.gender].filter(Boolean).join(" · ") ||
+                          `ASA ID ${r.asaAdGroupId}`}
+                      </Text>
+                    </Stack>
+                  ),
+                },
+                {
+                  accessor: "status",
+                  title: "Status",
+                  width: 110,
+                  render: (r) => (
+                    <Badge
+                      variant="light"
+                      color={r.archivedAt ? "gray" : statusColor(r.status)}
+                      size="sm"
+                    >
+                      {r.archivedAt ? "ARCHIVED" : r.status}
+                    </Badge>
+                  ),
+                },
+                {
+                  accessor: "defaultBidAmount",
+                  title: "Bid",
+                  width: 110,
+                  render: (r) => (
+                    <Text
+                      size="sm"
+                      c={r.defaultBidAmount ? undefined : "dimmed"}
+                    >
+                      {formatMoney(r.defaultBidAmount, r.defaultBidCurrency)}
+                    </Text>
+                  ),
+                },
+                {
+                  accessor: "spend",
+                  title: "Spend",
+                  width: 100,
+                  textAlign: "right" as const,
+                  render: (r) => formatMoney(r.spend, r.spendCurrency),
+                },
+                {
+                  accessor: "installs",
+                  title: "Installs",
+                  width: 90,
+                  textAlign: "right" as const,
+                  render: (r) => formatNumber(r.installs),
+                },
+                {
+                  accessor: "taps",
+                  title: "Taps",
+                  width: 90,
+                  textAlign: "right" as const,
+                  render: (r) => formatNumber(r.taps),
+                },
+                {
+                  accessor: "impressions",
+                  title: "Imp.",
+                  width: 90,
+                  textAlign: "right" as const,
+                  render: (r) => formatNumber(r.impressions),
+                },
+                {
+                  accessor: "conversionRate",
+                  title: "CR",
+                  width: 80,
+                  textAlign: "right" as const,
+                  render: (r) => formatPercent(r.conversionRate),
+                },
+                {
+                  accessor: "avgCpt",
+                  title: "CPT",
+                  width: 100,
+                  textAlign: "right" as const,
+                  render: (r) => formatMoney(r.avgCpt, r.spendCurrency),
+                },
+              ]}
+            />
+          </Paper>
+        </Stack>
+      )}
+    </Drawer>
   );
 }
 
@@ -1149,7 +1421,7 @@ export default function PaidSearchPage() {
             <OverviewTab appId={appId} />
           </Tabs.Panel>
           <Tabs.Panel value="campaigns" pt="md">
-            <CampaignsTab appId={appId} />
+            <CampaignsTab key={appId} appId={appId} />
           </Tabs.Panel>
           <Tabs.Panel value="keywords" pt="md">
             <KeywordsTab appId={appId} />
