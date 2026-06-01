@@ -4,6 +4,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import LoginPage from "@/pages/LoginPage";
 import RegisterPage from "@/pages/RegisterPage";
 import DashboardPage from "@/pages/DashboardPage";
+import GrowthPage from "@/pages/GrowthPage";
 import CredentialsPage from "@/pages/CredentialsPage";
 import PricingPage from "@/pages/PricingPage";
 import KeywordsPage from "@/pages/KeywordsPage";
@@ -28,6 +29,7 @@ export default function App() {
         <Route element={<Layout />}>
           <Route index element={<DashboardPage />} />
           <Route path="credentials" element={<CredentialsPage />} />
+          <Route path="apps/:id/growth" element={<GrowthPage />} />
           <Route path="apps/:id/pricing" element={<PricingPage />} />
           <Route path="apps/:id/keywords" element={<KeywordsPage />} />
           <Route path="apps/:id/availability" element={<AvailabilityPage />} />

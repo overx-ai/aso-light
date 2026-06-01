@@ -139,11 +139,21 @@ class LocaleUpsertIn(BaseModel):
 
 
 class BulkPreviewIn(BaseModel):
-    """Bulk preview request: a single field/value fanned out to N locales."""
+    """Bulk preview request: a single field/value fanned out to N locales.
+
+    Two modes:
+
+    * **Same value** — set ``value`` and leave ``values_by_locale`` null; the
+      same string is fanned out to every target locale.
+    * **Localized values** — set ``values_by_locale`` (locale → string) for
+      translated metadata; every target locale must have an entry. ``value``
+      is ignored in this mode.
+    """
 
     field: str
     value: str | None = None
     target_locales: list[str] = Field(default_factory=list)
+    values_by_locale: dict[str, str | None] | None = None
 
     @field_validator("field")
     @classmethod

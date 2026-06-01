@@ -90,6 +90,7 @@ import type {
   VisibilitySnapshotListOut,
   VisibilityWatchCreate,
   FullSovOut,
+  GrowthRecommendationsOut,
 } from "@/types";
 
 // ---- Query Keys ----
@@ -167,6 +168,8 @@ export const queryKeys = {
     ["visibility-snapshots", appId, watchId] as const,
   visibilitySov: (appId: number, days: number) =>
     ["visibility-sov", appId, days] as const,
+  growthRecommendations: (appId: number) =>
+    ["growth-recommendations", appId] as const,
 };
 
 // ---- Credential Hooks ----
@@ -2964,6 +2967,22 @@ export function useVisibilitySov(appId: number, days = 30) {
       return response.data;
     },
     enabled: appId > 0,
+  });
+}
+
+// ---- Growth recommendations ----
+
+export function useGrowthRecommendations(appId: number) {
+  return useQuery({
+    queryKey: queryKeys.growthRecommendations(appId),
+    queryFn: async () => {
+      const response = await api.get<GrowthRecommendationsOut>(
+        `/apps/${appId}/growth/recommendations`,
+      );
+      return response.data;
+    },
+    enabled: appId > 0,
+    staleTime: 5 * 60 * 1000,
   });
 }
 

@@ -12,6 +12,8 @@ import {
   IconChartBar,
   IconChecks,
   IconSwords,
+  IconSparkles,
+  IconTargetArrow,
 } from "@tabler/icons-react";
 import type { App } from "@/types";
 
@@ -21,6 +23,7 @@ interface AppNavItemProps {
 }
 
 const SUB_ROUTES = [
+  { path: "growth", label: "Growth", icon: IconSparkles },
   { path: "pricing", label: "Pricing", icon: IconCoin },
   { path: "keywords", label: "Keywords", icon: IconKeyboard },
   { path: "availability", label: "Availability", icon: IconWorld },
@@ -28,6 +31,7 @@ const SUB_ROUTES = [
   { path: "aso-check", label: "ASO Check", icon: IconChecks },
   { path: "cross-localization", label: "Cross-Loc", icon: IconLanguage },
   { path: "reviews", label: "Reviews", icon: IconMessage },
+  { path: "paid-search", label: "Paid Search", icon: IconTargetArrow },
   { path: "visibility", label: "Visibility", icon: IconChartBar },
   { path: "clash", label: "App Clash", icon: IconSwords },
   { path: "revenuecat", label: "RevenueCat", icon: IconCash },

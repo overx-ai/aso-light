@@ -272,6 +272,7 @@ async def bulk_preview(
         try:
             items = await bulk.preview(
                 app, body.field, body.value, body.target_locales,
+                values_by_locale=body.values_by_locale,
             )
         except ValueError as exc:
             raise HTTPException(
@@ -300,6 +301,7 @@ async def bulk_apply(
             results: list[BulkApplyResult] = await bulk.apply(
                 app, body.field, body.value, body.target_locales,
                 force=body.force,
+                values_by_locale=body.values_by_locale,
             )
         except ValueError as exc:
             raise HTTPException(

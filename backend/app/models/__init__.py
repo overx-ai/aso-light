@@ -16,6 +16,7 @@ from app.models.credential import ASCCredential
 from app.models.economic_index import EconomicIndex
 from app.models.iap import IAPPrice, InAppPurchase
 from app.models.keyword import Keyword, KeywordLocaleIndex, KeywordRanking, KeywordTracking
+from app.models.keyword_intel import KeywordIntelCache
 from app.models.metadata import (
     AppMetadataLocalization,
     AppMetadataState,
@@ -24,6 +25,7 @@ from app.models.metadata import (
 from app.models.personal_access_token import PersonalAccessToken
 from app.models.preset import PricePreset
 from app.models.revenuecat_credential import RevenueCatCredential
+from app.models.review_theme import ReviewThemeCache
 from app.models.subscription import Subscription, SubscriptionGroup, SubscriptionPrice
 from app.models.territory import Territory
 from app.models.user import User
@@ -53,6 +55,7 @@ __all__ = [
     "IAPPrice",
     "InAppPurchase",
     "Keyword",
+    "KeywordIntelCache",
     "KeywordLocaleIndex",
     "KeywordRanking",
     "KeywordTracking",
@@ -60,6 +63,7 @@ __all__ = [
     "PersonalAccessToken",
     "PricePreset",
     "RevenueCatCredential",
+    "ReviewThemeCache",
     "Subscription",
     "SubscriptionGroup",
     "SubscriptionPrice",

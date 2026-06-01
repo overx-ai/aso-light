@@ -298,9 +298,19 @@ async def bulk_preview(
     field: str,
     target_locales: list[str],
     value: str | None = None,
+    values_by_locale: dict[str, str | None] | None = None,
 ) -> BulkPreviewOut:
-    """Compute a per-locale diff for a bulk fan-out (no ASC writes)."""
-    body = BulkPreviewIn(field=field, value=value, target_locales=target_locales)
+    """Compute a per-locale diff for a bulk fan-out (no ASC writes).
+
+    Pass ``value`` for same-value fan-out, or ``values_by_locale`` (locale →
+    string, one per target locale) for localized/translated values.
+    """
+    body = BulkPreviewIn(
+        field=field,
+        value=value,
+        target_locales=target_locales,
+        values_by_locale=values_by_locale,
+    )
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
@@ -308,6 +318,7 @@ async def bulk_preview(
             try:
                 items = await bulk.preview(
                     app, body.field, body.value, body.target_locales,
+                    values_by_locale=body.values_by_locale,
                 )
             except ValueError as exc:
                 raise ToolError(str(exc))
@@ -321,10 +332,19 @@ async def bulk_apply(
     target_locales: list[str],
     value: str | None = None,
     force: bool = False,
+    values_by_locale: dict[str, str | None] | None = None,
 ) -> BulkApplyOut:
-    """Replay a bulk plan against ASC and persist the snapshot deltas."""
+    """Replay a bulk plan against ASC and persist the snapshot deltas.
+
+    Pass ``value`` for same-value fan-out, or ``values_by_locale`` (locale →
+    string, one per target locale) for localized/translated values.
+    """
     body = BulkApplyIn(
-        field=field, value=value, target_locales=target_locales, force=force,
+        field=field,
+        value=value,
+        target_locales=target_locales,
+        force=force,
+        values_by_locale=values_by_locale,
     )
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
@@ -334,6 +354,7 @@ async def bulk_apply(
                 results: list[BulkApplyResult] = await bulk.apply(
                     app, body.field, body.value, body.target_locales,
                     force=body.force,
+                    values_by_locale=body.values_by_locale,
                 )
             except ValueError as exc:
                 raise ToolError(str(exc))

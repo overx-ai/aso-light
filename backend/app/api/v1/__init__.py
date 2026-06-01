@@ -10,7 +10,9 @@ from app.api.v1.clash import router as clash_router
 from app.api.v1.clone import router as clone_router
 from app.api.v1.credentials import router as credentials_router
 from app.api.v1.export import router as export_router
+from app.api.v1.growth import router as growth_router
 from app.api.v1.indices import router as indices_router
+from app.api.v1.keyword_intel import router as keyword_intel_router
 from app.api.v1.keywords import router as keywords_router
 from app.api.v1.metadata import (
     keywords_extra_router as metadata_keywords_router,
@@ -39,6 +41,8 @@ router.include_router(availability_router, prefix="/apps", tags=["availability"]
 router.include_router(metadata_router, prefix="/apps", tags=["metadata"])
 router.include_router(reviews_router, prefix="/apps", tags=["reviews"])
 router.include_router(visibility_router, prefix="/apps", tags=["visibility"])
+router.include_router(growth_router, prefix="/apps", tags=["growth"])
+router.include_router(keyword_intel_router, prefix="/apps", tags=["keyword-intel"])
 router.include_router(aso_check_router, prefix="/apps", tags=["aso-check"])
 router.include_router(clash_router, prefix="/apps", tags=["clash"])
 router.include_router(keywords_router, tags=["keywords"])

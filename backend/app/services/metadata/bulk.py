@@ -94,8 +94,14 @@ class BulkMetadataService:
         field: str,
         value: str | None,
         target_locales: list[str],
+        values_by_locale: dict[str, str | None] | None = None,
     ) -> str:
-        """Normalize + validate the bulk request, returning ``kind``."""
+        """Normalize + validate the bulk request, returning ``kind``.
+
+        In localized mode (``values_by_locale`` provided) every target locale
+        must have a proposed value, and each value must pass field validation.
+        In same-value mode the single ``value`` is validated once.
+        """
         if field not in (APP_INFO_FIELDS | VERSION_FIELDS):
             raise ValueError(
                 f"Unknown metadata field: {field!r}. "
@@ -106,10 +112,31 @@ class BulkMetadataService:
                 f"target_locales capped at {MAX_BULK_TARGET_LOCALES}, "
                 f"got {len(target_locales)}"
             )
-        ok, err = validate_field(field, value)
-        if not ok:
-            raise ValueError(err)
+        if values_by_locale is not None:
+            for locale in target_locales:
+                if locale not in values_by_locale:
+                    raise ValueError(
+                        f"Missing proposed value for target locale {locale}"
+                    )
+                ok, err = validate_field(field, values_by_locale[locale])
+                if not ok:
+                    raise ValueError(err)
+        else:
+            ok, err = validate_field(field, value)
+            if not ok:
+                raise ValueError(err)
         return "app_info" if field in APP_INFO_FIELDS else "version"
+
+    @staticmethod
+    def _value_for(
+        locale: str,
+        value: str | None,
+        values_by_locale: dict[str, str | None] | None,
+    ) -> str | None:
+        """Resolve the proposed value for a single locale."""
+        if values_by_locale is not None:
+            return values_by_locale.get(locale)
+        return value
 
     async def _load_existing(
         self,
@@ -143,8 +170,13 @@ class BulkMetadataService:
         target_locales: list[str],
         existing: dict[str, AppMetadataLocalization],
         state: AppMetadataState | None,
+        values_by_locale: dict[str, str | None] | None = None,
     ) -> list[BulkPreviewItem]:
-        """Build the per-locale diff list shared by preview + apply."""
+        """Build the per-locale diff list shared by preview + apply.
+
+        When ``values_by_locale`` is provided, each locale's proposed value
+        (and therefore its char-overflow check) is resolved independently.
+        """
         editable_fields = (
             list(state.editable_fields_json or []) if state else None
         )
@@ -152,11 +184,12 @@ class BulkMetadataService:
         for locale in target_locales:
             row = existing.get(locale)
             current = getattr(row, field, None) if row else None
-            overflow = char_overflow(field, value)
+            new_value = self._value_for(locale, value, values_by_locale)
+            overflow = char_overflow(field, new_value)
             would_skip: bool = False
             reason: str | None = None
 
-            if current == value:
+            if current == new_value:
                 would_skip, reason = True, "unchanged"
             elif overflow > 0:
                 would_skip, reason = (
@@ -182,7 +215,7 @@ class BulkMetadataService:
                 BulkPreviewItem(
                     locale=locale,
                     current_value=current,
-                    new_value=value,
+                    new_value=new_value,
                     char_overflow_by=overflow,
                     would_skip=would_skip,
                     reason=reason,
@@ -200,13 +233,18 @@ class BulkMetadataService:
         field: str,
         value: str | None,
         target_locales: list[str],
+        *,
+        values_by_locale: dict[str, str | None] | None = None,
     ) -> list[BulkPreviewItem]:
         """Compute the per-locale diff for a bulk fan-out. NO ASC writes."""
-        kind = self._validate_inputs(field, value, target_locales)
+        kind = self._validate_inputs(
+            field, value, target_locales, values_by_locale,
+        )
         existing = await self._load_existing(app, kind, target_locales)
         state = await self._load_state(app)
         return self._build_items(
             field, value, kind, target_locales, existing, state,
+            values_by_locale=values_by_locale,
         )
 
     async def apply(
@@ -215,7 +253,9 @@ class BulkMetadataService:
         field: str,
         value: str | None,
         target_locales: list[str],
+        *,
         force: bool = False,
+        values_by_locale: dict[str, str | None] | None = None,
     ) -> list[BulkApplyResult]:
         """Replay the bulk plan as ASC PATCH calls.
 
@@ -225,12 +265,18 @@ class BulkMetadataService:
         ``char_overflow`` skip — sending an over-limit value would fail at
         ASC anyway and waste a request — nor the "no existing version
         localization" skip, since there is no row to PATCH.
+
+        When ``values_by_locale`` is provided each locale is patched with its
+        own proposed value; otherwise the single ``value`` is fanned out.
         """
-        kind = self._validate_inputs(field, value, target_locales)
+        kind = self._validate_inputs(
+            field, value, target_locales, values_by_locale,
+        )
         existing = await self._load_existing(app, kind, target_locales)
         state = await self._load_state(app)
         plan = self._build_items(
             field, value, kind, target_locales, existing, state,
+            values_by_locale=values_by_locale,
         )
         asc_attr = FIELD_TO_ASC_ATTR[field]
         version_state = state.editable_version_state if state else None
@@ -267,7 +313,8 @@ class BulkMetadataService:
                 )
                 continue
 
-            attrs = {asc_attr: value}
+            new_value = self._value_for(item.locale, value, values_by_locale)
+            attrs = {asc_attr: new_value}
             try:
                 if kind == "app_info":
                     await self.asc.update_app_info_localization(
@@ -318,7 +365,7 @@ class BulkMetadataService:
                 continue
 
             # Mirror the change into the local snapshot. Caller commits.
-            setattr(row, field, value)
+            setattr(row, field, new_value)
             results.append(
                 BulkApplyResult(
                     locale=item.locale,
