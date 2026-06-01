@@ -1,7 +1,13 @@
 {
   "name": "aso-light-frontend",
-  "private": true,
+  "private": false,
   "version": "0.1.0",
+  "description": "Frontend for ASO-Light — self-hosted App Store Optimization",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/overx-ai/aso-light.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

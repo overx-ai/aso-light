@@ -16,7 +16,12 @@
 | [004 - Localization Management](004-localization-management.md) | Subscription/IAP display names & descriptions, bulk sync, JSON import |
 | [005 - Subscription Management](005-subscription-management.md) | Create / update groups, subscriptions, group localizations, introductory offers (CRUD via UI; submit-for-review manual) |
 | [006 - Metadata Editor + Cross-Loc](006-metadata-editor.md) | Per-locale app metadata CRUD, bulk fan-out, Claude AI translation, color-coded keyword coverage, cross-localization grid |
-| [008 - Refresher ASC Metadata Recommendations](008-refresher-asc-metadata-recommendations.md) | Draft promotional text and subtitle variants for Refresher across 5 locales |
+| [006 - Product Swap iOS Integration](006-product-swap-ios-integration.md) | Clone+archive subscription/IAP swap flow + the iOS-side checklist |
+| [007 - MCP Integration](007-mcp-integration.md) | MCP server mounted at `/mcp`, Personal Access Token auth, tool reference, client config |
+| [009 - Reviews Theme Classifier + Reply Queue](009-reviews-theme-classifier.md) | LLM-tagged review themes + severity, priority-sorted reply queue, theme filter chips |
+| [010 - Keyword Intelligence](010-keyword-intelligence.md) | Provider-abstracted volume + difficulty cache; free ASA-derived providers |
+| [011 - Apple Search Ads Analytics](011-apple-search-ads-analytics.md) | ASA ingest pipeline, KPI dashboard, REST + MCP tools, paid-organic join |
+| [012 - Growth Recommendations Advisor](012-growth-recommendations.md) | Cross-domain recommendation engine powering the Growth page |
 
 ## Specs
 
@@ -68,4 +73,4 @@
 | Metadata components | `frontend/src/components/metadata/*` |
 
 ---
-*Last updated: 2026-05-09*
+*Last updated: 2026-06-01*

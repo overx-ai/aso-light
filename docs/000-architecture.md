@@ -2,7 +2,7 @@
 
 ## Overview
 
-ASO-Light is a web-based App Store Optimization SaaS tool — a focused alternative to aso.dev. It enables app developers to manage App Store prices across all 175+ territories using economic multipliers (PPP, Big Mac, Netflix, Spotify) and track keyword performance.
+ASO-Light is a self-hosted, web-based App Store Optimization application — a focused, open alternative to aso.dev. It enables app developers to manage App Store prices across all 175+ territories using economic multipliers (PPP, Big Mac, Netflix, Spotify) and track keyword performance. It can run as a single-operator install or a multi-tenant deployment; user accounts and per-user ASC credentials are first-class.
 
 ## System Components
 
@@ -12,7 +12,7 @@ ASO-Light is a web-based App Store Optimization SaaS tool — a focused alternat
 | Database | Persistent storage | SQLite (dev) / PostgreSQL (prod) |
 | Frontend SPA | User interface | React 19 + Mantine v8 + TypeScript |
 | ASC API Client | App Store Connect integration | httpx + PyJWT (ES256) |
-| Rate Cache API | Live exchange rates (166 currencies) | External: `api.overx.ai` |
+| Rate Cache API | Live exchange rates (166 currencies) | Configurable via `RATE_CACHE_API_URL`; defaults to the free public `api.overx.ai` ([rate-cache-api](https://github.com/overx-ai/rate-cache-api), self-hostable) |
 | AI Translator | Claude-backed metadata translation suggestions (Phase 5) | Anthropic SDK (`claude-haiku-4-5`) |
 
 ## Data Flow
@@ -26,7 +26,7 @@ FastAPI Backend
        │              │                   │
        ▼              ▼                   ▼
  PostgreSQL     Apple ASC API       External APIs
- (SQLite dev)   api.appstoreconnect  api.overx.ai (FX rates)
+ (SQLite dev)   api.appstoreconnect  FX rates API (configurable)
                 .apple.com           World Bank PPP
                                      Economist CSV
                                      iTunes Search

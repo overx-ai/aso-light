@@ -1,8 +1,10 @@
 [project]
 name = "aso-light"
 version = "0.1.0"
-description = "ASO (App Store Optimization) SaaS tool"
+description = "Self-hosted App Store Optimization tool — pricing, metadata, keywords, reviews, and Apple Search Ads analytics"
 requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Jack Ma" }]
 dependencies = [
     "fastapi[standard]",
     "uvicorn",
@@ -22,6 +24,11 @@ dependencies = [
     "anthropic>=0.45.0",
     "fastmcp>=2.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/overx-ai/aso-light"
+Repository = "https://github.com/overx-ai/aso-light"
+Issues = "https://github.com/overx-ai/aso-light/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
