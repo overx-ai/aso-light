@@ -29,6 +29,7 @@ from app.services.metadata.translate import (
     translate_with_cache,
 )
 from app.services.reviews.draft import draft_reply
+from app.services.reviews.templates import classify_review_theme
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -85,6 +86,7 @@ def _territory_to_locale(territory: str | None) -> str:
 def _serialize_review(raw: dict[str, Any], included: list[dict[str, Any]] | None = None) -> ReviewOut:
     """Convert ASC JSON:API review payload + included responses → ReviewOut."""
     attrs = raw.get("attributes") or {}
+    rating = int(attrs.get("rating") or 0)
     response: ReviewResponseOut | None = None
 
     rel = (raw.get("relationships") or {}).get("response", {}).get("data")
@@ -102,10 +104,15 @@ def _serialize_review(raw: dict[str, Any], included: list[dict[str, Any]] | None
 
     return ReviewOut(
         id=raw.get("id", ""),
-        rating=int(attrs.get("rating") or 0),
+        rating=rating,
         title=attrs.get("title"),
         body=attrs.get("body"),
         territory=attrs.get("territory"),
+        theme=classify_review_theme(
+            title=attrs.get("title"),
+            body=attrs.get("body"),
+            rating=rating,
+        ),
         reviewer_nickname=attrs.get("reviewerNickname"),
         created_date=attrs.get("createdDate"),
         response=response,
@@ -223,6 +230,7 @@ async def draft_review_reply(
         )
 
     locale = _territory_to_locale(review.territory)
+    theme = body.theme or review.theme
     try:
         suggestion = await draft_reply(
             api_key=settings.ANTHROPIC_API_KEY,
@@ -230,6 +238,7 @@ async def draft_review_reply(
             review_rating=review.rating,
             target_locale=locale,
             tone=body.tone,
+            theme=theme,
         )
     except Exception as exc:  # noqa: BLE001 — anthropic SDK raises diverse types
         logger.warning(
@@ -240,7 +249,7 @@ async def draft_review_reply(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="AI drafting service unavailable",
         ) from exc
-    return DraftOut(suggestion=suggestion, locale=locale)
+    return DraftOut(suggestion=suggestion, locale=locale, theme=theme)
 
 
 @router.post(

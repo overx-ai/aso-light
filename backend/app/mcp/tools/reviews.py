@@ -17,6 +17,7 @@ from app.mcp.server import mcp
 from app.schemas.review import (
     DraftOut,
     ReplyTone,
+    ReviewTheme,
     ReviewListOut,
     ReviewOut,
     ReviewResponseOut,
@@ -29,6 +30,7 @@ from app.services.metadata.translate import (
     translate_with_cache,
 )
 from app.services.reviews.draft import draft_reply
+from app.services.reviews.templates import classify_review_theme
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,7 @@ def _serialize_review(
 ) -> ReviewOut:
     """Convert ASC JSON:API review payload (+ included responses) → ReviewOut."""
     attrs = raw.get("attributes") or {}
+    rating = int(attrs.get("rating") or 0)
     response: ReviewResponseOut | None = None
 
     rel = (raw.get("relationships") or {}).get("response", {}).get("data")
@@ -92,10 +95,15 @@ def _serialize_review(
 
     return ReviewOut(
         id=raw.get("id", ""),
-        rating=int(attrs.get("rating") or 0),
+        rating=rating,
         title=attrs.get("title"),
         body=attrs.get("body"),
         territory=attrs.get("territory"),
+        theme=classify_review_theme(
+            title=attrs.get("title"),
+            body=attrs.get("body"),
+            rating=rating,
+        ),
         reviewer_nickname=attrs.get("reviewerNickname"),
         created_date=attrs.get("createdDate"),
         response=response,
@@ -198,6 +206,7 @@ async def draft_review_reply(
     app_id: int,
     review_id: str,
     tone: ReplyTone = "neutral",
+    theme: ReviewTheme | None = None,
 ) -> DraftOut:
     """Generate a suggested reply to a review using Claude.
 
@@ -223,6 +232,7 @@ async def draft_review_reply(
         raise ToolError("Review has no body to reply to.")
 
     locale = _territory_to_locale(review.territory)
+    selected_theme = theme or review.theme
     try:
         suggestion = await draft_reply(
             api_key=settings.ANTHROPIC_API_KEY,
@@ -230,6 +240,7 @@ async def draft_review_reply(
             review_rating=review.rating,
             target_locale=locale,
             tone=tone,
+            theme=selected_theme,
         )
     except Exception as exc:  # noqa: BLE001 — anthropic SDK raises diverse types
         logger.warning(
@@ -237,7 +248,7 @@ async def draft_review_reply(
             app_id, review_id, exc,
         )
         raise ToolError("AI drafting service unavailable") from exc
-    return DraftOut(suggestion=suggestion, locale=locale)
+    return DraftOut(suggestion=suggestion, locale=locale, theme=selected_theme)
 
 
 @mcp.tool(name="reviews.translate")

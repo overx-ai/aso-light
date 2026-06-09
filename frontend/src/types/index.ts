@@ -655,6 +655,7 @@ export interface ReviewOut {
   title: string | null;
   body: string | null;
   territory: string | null;
+  theme: ReviewTheme;
   reviewer_nickname: string | null;
   created_date: string | null;
   response: ReviewResponseOut | null;
@@ -667,13 +668,26 @@ export interface ReviewListOut {
 
 export type ReplyTone = "neutral" | "apologetic" | "appreciative";
 
+export type ReviewTheme =
+  | "bug"
+  | "performance"
+  | "feature_request"
+  | "billing"
+  | "account"
+  | "usability"
+  | "content"
+  | "praise"
+  | "other";
+
 export interface DraftReplyIn {
   tone: ReplyTone;
+  theme?: ReviewTheme | null;
 }
 
 export interface DraftReplyOut {
   suggestion: string;
   locale: string;
+  theme: ReviewTheme;
 }
 
 export interface TranslateReviewIn {
@@ -796,6 +810,46 @@ export interface AsoIssueSummary {
 export interface AsoCheckOut {
   summary: AsoIssueSummary;
   items: AsoIssueOut[];
+}
+
+// ---- Growth Advisor ----
+
+export type GrowthRecommendationCategory =
+  | "pricing"
+  | "metadata"
+  | "keywords"
+  | "visibility"
+  | "reviews"
+  | "paid_search"
+  | "availability";
+
+export type GrowthRecommendationSeverity = "critical" | "warning" | "info";
+
+export interface GrowthRecommendationEvidence {
+  label: string;
+  value: string;
+}
+
+export interface GrowthRecommendation {
+  id: string;
+  category: GrowthRecommendationCategory;
+  severity: GrowthRecommendationSeverity;
+  title: string;
+  description: string;
+  impact: string;
+  cta_label: string;
+  cta_path: string;
+  evidence: GrowthRecommendationEvidence[];
+}
+
+export interface GrowthRecommendationSummary {
+  total: number;
+  pricing: number;
+}
+
+export interface GrowthRecommendationsOut {
+  summary: GrowthRecommendationSummary;
+  items: GrowthRecommendation[];
 }
 
 // ---- App Clash ----

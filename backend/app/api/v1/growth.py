@@ -1,6 +1,8 @@
+"""Growth Advisor endpoints."""
+
 from __future__ import annotations
 
-from dataclasses import asdict
+
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -9,8 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1._deps import _get_verified_app
 from app.core.security import get_current_user
 from app.db.session import get_session
-from app.schemas.growth import GrowthRecommendationOut, GrowthRecommendationsOut
-from app.services.growth.recommendations import generate_growth_recommendations
+from app.schemas.growth import (
+    GrowthRecommendationsOut,
+    GrowthRecommendationSummary,
+)
+from app.services.growth.recommendations import GrowthRecommendationService
 
 router = APIRouter()
 
@@ -25,14 +30,13 @@ async def get_growth_recommendations(
     session: AsyncSession = Depends(get_session),
 ) -> GrowthRecommendationsOut:
     user_id = int(current_user["user_id"])
-    await _get_verified_app(app_id, user_id, session)
-    recommendations = await generate_growth_recommendations(
-        session=session,
-        app_id=app_id,
-    )
+    app = await _get_verified_app(app_id, user_id, session)
+
+    items = await GrowthRecommendationService(session).recommendations_for_app(app.id)
     return GrowthRecommendationsOut(
-        items=[
-            GrowthRecommendationOut.model_validate(asdict(rec))
-            for rec in recommendations
-        ]
+        summary=GrowthRecommendationSummary(
+            total=len(items),
+            pricing=sum(1 for item in items if item.category == "pricing"),
+        ),
+        items=items,
     )

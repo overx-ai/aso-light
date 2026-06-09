@@ -7,9 +7,9 @@ Create Date: 2026-05-05
 Adds a nullable ``gdp_per_capita_usd`` (Float) column to ``territories``.
 Powers default GDP-sort on the cross-localization metadata grid.
 
-Idempotent in line with 001_preset_config: ``Base.metadata.create_all`` may
-have already created the column on first boot, so we only ``add_column`` /
-``drop_column`` when the column actually exists / is missing.
+Idempotent in line with 001_preset_config so pre-migration-first databases can
+still converge safely; we only ``add_column`` / ``drop_column`` when the
+column actually exists / is missing.
 """
 from typing import Sequence, Union
 

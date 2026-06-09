@@ -50,6 +50,8 @@ import {
 } from "@/lib/hooks";
 import RankHistoryChart from "@/components/keywords/RankHistoryChart";
 import CrossLocalizationMatrix from "@/components/keywords/CrossLocalizationMatrix";
+import KeywordIntelBadge from "@/components/keywords/keywordIntel";
+import TrackedKeywordIntelPanel from "@/components/keywords/TrackedKeywordIntelPanel";
 import KeywordCoverageDots from "@/components/metadata/KeywordCoverageDots";
 import type {
   KeywordTrackingResponse,
@@ -230,6 +232,17 @@ function TrackedKeywordsTab({ appId }: { appId: string }) {
                   <Badge variant="light" size="sm" color="gray">
                     {row.keyword.locale}
                   </Badge>
+                ),
+              },
+              {
+                accessor: "keyword.popularity",
+                title: "Intel",
+                width: 110,
+                render: (row: KeywordTrackingResponse) => (
+                  <KeywordIntelBadge
+                    popularity={row.keyword.popularity}
+                    updatedAt={row.keyword.popularity_updated_at}
+                  />
                 ),
               },
               {
@@ -1209,6 +1222,7 @@ export default function KeywordsPage() {
   const { id } = useParams<{ id: string }>();
   const appId = id ?? "";
   const { data: app, isLoading } = useApp(appId);
+  const trackedKeywords = useTrackedKeywords(appId);
 
   return (
     <Container size="xl">
@@ -1226,41 +1240,50 @@ export default function KeywordsPage() {
         </div>
       )}
 
-      <Tabs defaultValue="tracked">
-        <Tabs.List>
-          <Tabs.Tab value="tracked" leftSection={<IconTarget size={16} />}>
-            Tracked Keywords
-          </Tabs.Tab>
-          <Tabs.Tab value="search" leftSection={<IconSearch size={16} />}>
-            Search
-          </Tabs.Tab>
-          <Tabs.Tab
-            value="cross-localization"
-            leftSection={<IconLanguage size={16} />}
-          >
-            Cross-Localization
-          </Tabs.Tab>
-          <Tabs.Tab value="competitors" leftSection={<IconUsers size={16} />}>
-            Competitors
-          </Tabs.Tab>
-        </Tabs.List>
+      <Stack gap="md">
+        <TrackedKeywordIntelPanel
+          trackings={trackedKeywords.data}
+          isLoading={trackedKeywords.isLoading}
+          isError={trackedKeywords.isError}
+          emptyMessage="Track a keyword to see cached keyword-intel states here."
+        />
 
-        <Tabs.Panel value="tracked" pt="md">
-          <TrackedKeywordsTab appId={appId} />
-        </Tabs.Panel>
+        <Tabs defaultValue="tracked">
+          <Tabs.List>
+            <Tabs.Tab value="tracked" leftSection={<IconTarget size={16} />}>
+              Tracked Keywords
+            </Tabs.Tab>
+            <Tabs.Tab value="search" leftSection={<IconSearch size={16} />}>
+              Search
+            </Tabs.Tab>
+            <Tabs.Tab
+              value="cross-localization"
+              leftSection={<IconLanguage size={16} />}
+            >
+              Cross-Localization
+            </Tabs.Tab>
+            <Tabs.Tab value="competitors" leftSection={<IconUsers size={16} />}>
+              Competitors
+            </Tabs.Tab>
+          </Tabs.List>
 
-        <Tabs.Panel value="search" pt="md">
-          <SearchTab appId={appId} />
-        </Tabs.Panel>
+          <Tabs.Panel value="tracked" pt="md">
+            <TrackedKeywordsTab appId={appId} />
+          </Tabs.Panel>
 
-        <Tabs.Panel value="cross-localization" pt="md">
-          <CrossLocalizationTab />
-        </Tabs.Panel>
+          <Tabs.Panel value="search" pt="md">
+            <SearchTab appId={appId} />
+          </Tabs.Panel>
 
-        <Tabs.Panel value="competitors" pt="md">
-          <CompetitorsTab appId={appId} />
-        </Tabs.Panel>
-      </Tabs>
+          <Tabs.Panel value="cross-localization" pt="md">
+            <CrossLocalizationTab />
+          </Tabs.Panel>
+
+          <Tabs.Panel value="competitors" pt="md">
+            <CompetitorsTab appId={appId} />
+          </Tabs.Panel>
+        </Tabs>
+      </Stack>
     </Container>
   );
 }

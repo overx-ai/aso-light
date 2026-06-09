@@ -15,6 +15,7 @@ import ReviewsPage from "@/pages/ReviewsPage";
 import VisibilityPage from "@/pages/VisibilityPage";
 import AsoCheckPage from "@/pages/AsoCheckPage";
 import AppClashPage from "@/pages/AppClashPage";
+import GrowthPage from "@/pages/GrowthPage";
 import PaidSearchPage from "@/pages/PaidSearchPage";
 import SettingsPage from "@/pages/SettingsPage";
 import RevenueCatSettingsPage from "@/pages/RevenueCatSettingsPage";
@@ -31,6 +32,7 @@ export default function App() {
           <Route path="credentials" element={<CredentialsPage />} />
           <Route path="apps/:id/growth" element={<GrowthPage />} />
           <Route path="apps/:id/pricing" element={<PricingPage />} />
+          <Route path="apps/:id/growth" element={<GrowthPage />} />
           <Route path="apps/:id/keywords" element={<KeywordsPage />} />
           <Route path="apps/:id/availability" element={<AvailabilityPage />} />
           <Route path="apps/:id/metadata" element={<MetadataPage />} />

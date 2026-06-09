@@ -1,265 +1,219 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   Alert,
   Badge,
   Button,
-  Card,
   Container,
   Group,
   Loader,
   Paper,
-  Progress,
+  SegmentedControl,
   SimpleGrid,
   Stack,
   Text,
+  ThemeIcon,
   Title,
-  Tooltip,
 } from "@mantine/core";
 import {
+  IconAlertCircle,
   IconArrowRight,
   IconBulb,
-  IconCheck,
-  IconFileDescription,
-  IconKeyboard,
-  IconMessage,
-  IconRefresh,
-  IconSparkles,
-  IconTargetArrow,
+  IconCoin,
+  IconInfoCircle,
 } from "@tabler/icons-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { queryKeys, useGrowthRecommendations } from "@/lib/hooks";
+import { useApp, useGrowthRecommendations } from "@/lib/hooks";
 import type {
-  GrowthCategory,
-  GrowthPriority,
-  GrowthRecommendationOut,
+  GrowthRecommendation,
+  GrowthRecommendationCategory,
+  GrowthRecommendationSeverity,
 } from "@/types";
 
-const CATEGORY_META: Record<
-  GrowthCategory,
-  { label: string; color: string; icon: typeof IconSparkles }
-> = {
-  setup: { label: "Setup", color: "gray", icon: IconSparkles },
-  metadata: { label: "Metadata", color: "indigo", icon: IconFileDescription },
-  keywords: { label: "Keywords", color: "teal", icon: IconKeyboard },
-  paid_search: { label: "Paid search", color: "blue", icon: IconTargetArrow },
-  reviews: { label: "Reviews", color: "red", icon: IconMessage },
-  pricing: { label: "Pricing", color: "orange", icon: IconBulb },
+type CategoryFilter = "all" | GrowthRecommendationCategory;
+
+const CATEGORY_LABEL: Record<GrowthRecommendationCategory, string> = {
+  pricing: "Pricing",
+  metadata: "Metadata",
+  keywords: "Keywords",
+  visibility: "Visibility",
+  reviews: "Reviews",
+  paid_search: "Paid Search",
+  availability: "Availability",
 };
 
-const PRIORITY_COLOR: Record<GrowthPriority, string> = {
-  high: "red",
-  medium: "yellow",
-  low: "gray",
+const SEVERITY_COLOR: Record<GrowthRecommendationSeverity, string> = {
+  critical: "red",
+  warning: "yellow",
+  info: "blue",
 };
-
-const PRIORITY_SCORE: Record<GrowthPriority, number> = {
-  high: 100,
-  medium: 62,
-  low: 34,
-};
-
-function labelize(key: string) {
-  return key.replace(/_/g, " ");
-}
-
-function formatEvidenceValue(value: unknown) {
-  if (Array.isArray(value)) return value.join(", ");
-  if (typeof value === "number") {
-    return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(3);
-  }
-  if (typeof value === "boolean") return value ? "yes" : "no";
-  if (value == null) return "none";
-  return String(value);
-}
 
 function RecommendationCard({
-  rec,
+  item,
   onOpen,
 }: {
-  rec: GrowthRecommendationOut;
+  item: GrowthRecommendation;
   onOpen: (path: string) => void;
 }) {
-  const meta = CATEGORY_META[rec.category];
-  const Icon = meta.icon;
-  const evidence = Object.entries(rec.evidence).slice(0, 4);
-
   return (
-    <Card withBorder radius="sm" p="md">
+    <Paper withBorder radius="sm" p="md">
       <Stack gap="sm">
-        <Group justify="space-between" align="flex-start" wrap="nowrap">
-          <Group gap="xs" wrap="nowrap">
-            <Paper
-              withBorder
-              radius="sm"
-              p={6}
-              style={{ color: `var(--mantine-color-${meta.color}-6)` }}
-            >
-              <Icon size={18} />
-            </Paper>
-            <div>
-              <Group gap={6}>
-                <Badge color={meta.color} variant="light" size="sm">
-                  {meta.label}
-                </Badge>
-                <Badge
-                  color={PRIORITY_COLOR[rec.priority]}
-                  variant="filled"
-                  size="sm"
-                >
-                  {rec.priority}
-                </Badge>
-              </Group>
-              <Title order={4} mt={6} style={{ lineHeight: 1.2 }}>
-                {rec.title}
-              </Title>
-            </div>
+        <Group justify="space-between" align="flex-start" gap="sm">
+          <Group gap="xs">
+            <ThemeIcon variant="light" color="blue" size="sm">
+              {item.category === "pricing" ? (
+                <IconCoin size={14} />
+              ) : (
+                <IconBulb size={14} />
+              )}
+            </ThemeIcon>
+            <Badge variant="light" color="gray" size="sm">
+              {CATEGORY_LABEL[item.category]}
+            </Badge>
           </Group>
-          <Tooltip label={`Confidence: ${rec.confidence} · Effort: ${rec.effort}`}>
-            <Progress
-              w={78}
-              size={8}
-              mt={6}
-              value={PRIORITY_SCORE[rec.confidence]}
-              color={PRIORITY_COLOR[rec.confidence]}
-            />
-          </Tooltip>
+          <Badge
+            variant="light"
+            color={SEVERITY_COLOR[item.severity]}
+            size="sm"
+          >
+            {item.severity}
+          </Badge>
         </Group>
 
-        <Text size="sm" c="dimmed">
-          {rec.detail}
-        </Text>
+        <Stack gap={4}>
+          <Title order={4}>{item.title}</Title>
+          <Text size="sm" c="dimmed">
+            {item.description}
+          </Text>
+          <Text size="sm">{item.impact}</Text>
+        </Stack>
 
-        {evidence.length > 0 && (
-          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
-            {evidence.map(([key, value]) => (
-              <Paper key={key} withBorder radius="sm" p="xs">
-                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-                  {labelize(key)}
+        {item.evidence.length > 0 && (
+          <Stack gap={4}>
+            {item.evidence.map((entry) => (
+              <Group
+                key={`${item.id}-${entry.label}`}
+                gap="xs"
+                align="flex-start"
+              >
+                <Text size="xs" c="dimmed" w={130}>
+                  {entry.label}
                 </Text>
-                <Text size="sm" fw={600} lineClamp={2}>
-                  {formatEvidenceValue(value)}
+                <Text size="xs" style={{ flex: 1, minWidth: 0 }}>
+                  {entry.value}
                 </Text>
-              </Paper>
+              </Group>
             ))}
-          </SimpleGrid>
+          </Stack>
         )}
 
-        <Group justify="space-between" mt="xs">
-          <Group gap={6}>
-            <Badge variant="outline" color="gray">
-              {rec.effort} effort
-            </Badge>
-            <Badge variant="outline" color={PRIORITY_COLOR[rec.confidence]}>
-              {rec.confidence} confidence
-            </Badge>
-          </Group>
+        <Group justify="flex-end">
           <Button
             size="xs"
-            variant="light"
             rightSection={<IconArrowRight size={14} />}
-            onClick={() => onOpen(rec.cta_path)}
+            onClick={() => onOpen(item.cta_path)}
           >
-            {rec.cta_label}
+            {item.cta_label}
           </Button>
         </Group>
       </Stack>
-    </Card>
+    </Paper>
   );
 }
 
 export default function GrowthPage() {
-  const { id } = useParams();
+  const { id } = useParams<{ id: string }>();
+  const appId = id ? Number(id) : 0;
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const appId = Number(id);
-  const { data, isLoading, isFetching, isError } = useGrowthRecommendations(appId);
+  const { data: app } = useApp(id ?? "");
+  const recommendationsQuery = useGrowthRecommendations(appId);
+  const [category, setCategory] = useState<CategoryFilter>("all");
 
-  const counts = useMemo(() => {
-    const items = data?.items ?? [];
-    return {
-      total: items.length,
-      high: items.filter((item) => item.priority === "high").length,
-      quick: items.filter((item) => item.effort === "low").length,
-    };
-  }, [data]);
+  const filtered = useMemo(() => {
+    const items = recommendationsQuery.data?.items ?? [];
+    if (category === "all") return items;
+    return items.filter((item) => item.category === category);
+  }, [recommendationsQuery.data, category]);
 
-  const refresh = () => {
-    queryClient.invalidateQueries({
-      queryKey: queryKeys.growthRecommendations(appId),
-    });
-  };
+  if (!Number.isFinite(appId) || appId <= 0) {
+    return (
+      <Container size="xl">
+        <Alert color="red" icon={<IconAlertCircle size={16} />}>
+          Invalid app id.
+        </Alert>
+      </Container>
+    );
+  }
+
+  const summary = recommendationsQuery.data?.summary;
 
   return (
     <Container size="xl">
-      <Group justify="space-between" mb="lg" align="flex-start">
-        <div>
-          <Group gap="xs">
-            <IconSparkles size={24} color="var(--mantine-color-indigo-6)" />
-            <Title order={2}>Growth</Title>
-          </Group>
-          <Text c="dimmed" size="sm" mt={4}>
-            Prioritized actions from metadata, keywords, Search Ads, reviews,
-            and pricing signals.
-          </Text>
-        </div>
-        <Button
-          variant="light"
-          leftSection={isFetching ? <Loader size={14} /> : <IconRefresh size={16} />}
-          onClick={refresh}
-          disabled={isFetching}
-        >
-          Refresh
-        </Button>
-      </Group>
+      <div style={{ marginBottom: "var(--mantine-spacing-lg)" }}>
+        <Group gap="sm" align="center">
+          <IconBulb size={22} />
+          <Title order={2}>{app?.name ?? "App"} - Growth Advisor</Title>
+        </Group>
+        <Text c="dimmed" size="sm" mt={4}>
+          Prioritized fixes from synced storefront, keyword, visibility, and
+          pricing data.
+        </Text>
+      </div>
 
-      <SimpleGrid cols={{ base: 1, sm: 3 }} mb="lg">
-        <Paper withBorder radius="sm" p="md">
-          <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-            Open actions
-          </Text>
-          <Title order={3}>{counts.total}</Title>
-        </Paper>
-        <Paper withBorder radius="sm" p="md">
-          <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-            High priority
-          </Text>
-          <Title order={3} c="red">
-            {counts.high}
-          </Title>
-        </Paper>
-        <Paper withBorder radius="sm" p="md">
-          <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-            Low effort
-          </Text>
-          <Title order={3} c="teal">
-            {counts.quick}
-          </Title>
-        </Paper>
-      </SimpleGrid>
-
-      {isLoading ? (
-        <Stack gap="md">
-          <Card withBorder radius="sm" h={180} />
-          <Card withBorder radius="sm" h={180} />
-        </Stack>
-      ) : isError ? (
-        <Alert color="red" title="Recommendations unavailable">
-          Could not load growth recommendations for this app.
-        </Alert>
-      ) : !data || data.items.length === 0 ? (
-        <Alert color="green" icon={<IconCheck size={18} />} title="No open actions">
-          ASO-Light did not find a high-signal action from the current local data.
+      {recommendationsQuery.isLoading ? (
+        <Group justify="center" py="xl">
+          <Loader />
+        </Group>
+      ) : recommendationsQuery.error ? (
+        <Alert color="red" icon={<IconAlertCircle size={16} />}>
+          Could not load growth recommendations.
         </Alert>
       ) : (
         <Stack gap="md">
-          {data.items.map((rec) => (
-            <RecommendationCard
-              key={rec.id}
-              rec={rec}
-              onOpen={(path) => navigate(path)}
-            />
-          ))}
+          <Group gap="sm" wrap="wrap">
+            <Paper withBorder radius="sm" p="xs" px="md">
+              <Group gap="xs">
+                <IconInfoCircle
+                  size={16}
+                  color="var(--mantine-color-blue-6)"
+                />
+                <Text size="sm">{summary?.total ?? 0} recommendations</Text>
+              </Group>
+            </Paper>
+            <Paper withBorder radius="sm" p="xs" px="md">
+              <Group gap="xs">
+                <IconCoin size={16} color="var(--mantine-color-green-6)" />
+                <Text size="sm">{summary?.pricing ?? 0} pricing</Text>
+              </Group>
+            </Paper>
+          </Group>
+
+          <SegmentedControl
+            size="xs"
+            value={category}
+            onChange={(value) => setCategory(value as CategoryFilter)}
+            data={[
+              { value: "all", label: "All" },
+              { value: "pricing", label: "Pricing" },
+            ]}
+          />
+
+          {filtered.length === 0 ? (
+            <Paper withBorder radius="sm" p="lg">
+              <Text size="sm" c="dimmed">
+                Nothing to show for this filter.
+              </Text>
+            </Paper>
+          ) : (
+            <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+              {filtered.map((item) => (
+                <RecommendationCard
+                  key={item.id}
+                  item={item}
+                  onOpen={navigate}
+                />
+              ))}
+            </SimpleGrid>
+          )}
         </Stack>
       )}
     </Container>

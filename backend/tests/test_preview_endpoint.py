@@ -1,119 +1,195 @@
-"""End-to-end test for the pricing preview endpoint.
+"""DB-backed preview test using the shared sync pytest async harness."""
 
-Runs against the live database and real exchange rates API,
-but the ASC price points fetch will timeout (expected).
-"""
+from __future__ import annotations
 
-import asyncio
 import sys
+import uuid
+from decimal import Decimal
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from app.core.config import settings
-from app.db.session import async_session_factory, engine
-from app.db.base import Base
-from app.models.territory import Territory
-from app.models.subscription import Subscription, SubscriptionGroup, SubscriptionPrice
-from app.services.pricing.currency_rounding import apply_currency_rounding
-from app.services.pricing.vat import apply_vat as apply_vat_fn
-from app.services.rates.client import RateCacheClient
-from decimal import Decimal
 from sqlalchemy import select
 
+TESTS_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = TESTS_DIR.parent
 
-async def test_preview_logic():
-    """Test the exchange rate preview logic directly against the DB."""
+sys.path.insert(0, str(TESTS_DIR))
+sys.path.insert(0, str(BACKEND_DIR))
+
+import app.models  # noqa: F401
+
+from _async_harness import run_async
+from app.db.base import Base
+from app.db.session import async_session_factory, engine
+from app.models.app import App
+from app.models.credential import ASCCredential
+from app.models.subscription import Subscription, SubscriptionGroup, SubscriptionPrice
+from app.models.territory import Territory
+from app.models.user import User
+from app.services.pricing.currency_rounding import apply_currency_rounding
+
+
+class _StaticRateClient:
+    def __init__(self, rates: dict[str, float]) -> None:
+        self._rates = rates
+        self.calls: list[str] = []
+
+    async def get_rates(self, base: str = "USD") -> dict[str, float]:
+        self.calls.append(base)
+        return self._rates
+
+
+async def _reset_schema() -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+
+
+async def _seed_preview_world() -> int:
+    suffix = uuid.uuid4().hex[:8]
 
     async with async_session_factory() as session:
-        # 1. Load territories
-        result = await session.execute(select(Territory))
-        territories = result.scalars().all()
-        territory_map = {t.code: t for t in territories}
-        print(f"Loaded {len(territory_map)} territories")
+        us = Territory(code="US", name="United States", currency_code="USD", vat_rate=0.0)
+        jp = Territory(code="JP", name="Japan", currency_code="JPY", vat_rate=0.10)
+        br = Territory(code="BR", name="Brazil", currency_code="BRL", vat_rate=0.0)
+        session.add_all([us, jp, br])
+        await session.flush()
 
-        # 2. Check subscription exists
-        sub_result = await session.execute(select(Subscription).where(Subscription.id == 1))
-        subscription = sub_result.scalar_one_or_none()
-        if subscription is None:
-            print("ERROR: Subscription 1 not found")
-            return
-        print(f"Subscription: {subscription.name} ({subscription.product_id})")
-
-        # 3. Load current prices from DB
-        prices_result = await session.execute(
-            select(SubscriptionPrice).where(
-                SubscriptionPrice.subscription_id == subscription.id
-            )
+        user = User(
+            email=f"preview-{suffix}@example.com",
+            password_hash="not-used-by-this-test",
+            name="Preview Test",
         )
-        current_prices = prices_result.scalars().all()
-        current_price_by_territory = {p.territory_id: p for p in current_prices}
-        print(f"Current prices in DB: {len(current_prices)}")
+        session.add(user)
+        await session.flush()
 
-    # 4. Fetch exchange rates (real API)
-    base_price = Decimal("2.99")
-    base_territory_code = "US"
-    base_territory = territory_map.get(base_territory_code)
-    if base_territory is None:
-        print(f"ERROR: Base territory '{base_territory_code}' not found")
-        print(f"Available codes (first 10): {list(territory_map.keys())[:10]}")
-        return
-    base_currency = base_territory.currency_code
-    print(f"Base: {base_territory_code} / {base_currency}")
+        credential = ASCCredential(
+            user_id=user.id,
+            name="Preview ASC",
+            issuer_id=f"issuer-{suffix}",
+            key_id=f"key-{suffix}",
+            private_key_encrypted="fixture-private-key",
+        )
+        session.add(credential)
+        await session.flush()
 
-    rate_client = RateCacheClient(settings.RATE_CACHE_API_URL)
-    rates = await rate_client.get_rates(base=base_currency)
-    print(f"Fetched {len(rates)} exchange rates")
+        app = App(
+            credential_id=credential.id,
+            asc_app_id=f"adam-{suffix}",
+            bundle_id=f"com.example.preview.{suffix}",
+            name="Preview App",
+            platform="ios",
+        )
+        session.add(app)
+        await session.flush()
 
-    # 5. Calculate preview items (same logic as pricing.py exchange_rate branch)
-    preview_items = []
-    for territory in territory_map.values():
-        currency = territory.currency_code
-        if currency == base_currency:
-            rate = 1.0
-        else:
-            rate = rates.get(currency)
+        group = SubscriptionGroup(
+            app_id=app.id,
+            asc_group_id=f"group-{suffix}",
+            name="Premium",
+        )
+        session.add(group)
+        await session.flush()
+
+        subscription = Subscription(
+            group_id=group.id,
+            asc_subscription_id=f"sub-{suffix}",
+            name="Monthly",
+            product_id=f"com.example.preview.{suffix}.monthly",
+        )
+        session.add(subscription)
+        await session.flush()
+
+        session.add_all(
+            [
+                SubscriptionPrice(
+                    subscription_id=subscription.id,
+                    territory_id=us.id,
+                    price_point_id="pp-us",
+                    customer_price=2.99,
+                    proceeds=2.09,
+                ),
+                SubscriptionPrice(
+                    subscription_id=subscription.id,
+                    territory_id=br.id,
+                    price_point_id="pp-br",
+                    customer_price=12.90,
+                    proceeds=9.03,
+                ),
+            ]
+        )
+        await session.commit()
+        return subscription.id
+
+
+def test_preview_logic():
+    """Exercise the DB-backed exchange-rate preview flow without pytest async markers."""
+
+    async def go() -> tuple[list[dict[str, float | str | None]], list[str]]:
+        await _reset_schema()
+        subscription_id = await _seed_preview_world()
+
+        async with async_session_factory() as session:
+            result = await session.execute(select(Territory))
+            territories = result.scalars().all()
+            territory_map = {territory.code: territory for territory in territories}
+
+            sub_result = await session.execute(
+                select(Subscription).where(Subscription.id == subscription_id)
+            )
+            subscription = sub_result.scalar_one()
+
+            prices_result = await session.execute(
+                select(SubscriptionPrice).where(
+                    SubscriptionPrice.subscription_id == subscription.id
+                )
+            )
+            current_prices = prices_result.scalars().all()
+            current_price_by_territory = {
+                price.territory_id: price for price in current_prices
+            }
+
+        base_price = Decimal("2.99")
+        base_territory = territory_map["US"]
+        rate_client = _StaticRateClient({"JPY": 158.9200, "BRL": 5.0300})
+        rates = await rate_client.get_rates(base=base_territory.currency_code)
+
+        preview_items: list[dict[str, float | str | None]] = []
+        for territory in territory_map.values():
+            currency = territory.currency_code
+            rate = 1.0 if currency == base_territory.currency_code else rates.get(currency)
             if rate is None:
                 continue
 
-        suggested_decimal = base_price * Decimal(str(rate))
+            suggested_decimal = apply_currency_rounding(
+                base_price * Decimal(str(rate)),
+                currency,
+            )
+            current = current_price_by_territory.get(territory.id)
 
-        # Apply smart rounding
-        suggested_decimal = apply_currency_rounding(suggested_decimal, currency)
-        suggested = float(suggested_decimal)
+            preview_items.append(
+                {
+                    "territory_code": territory.code,
+                    "currency_code": currency,
+                    "current_price": current.customer_price if current else None,
+                    "suggested_price": float(suggested_decimal),
+                }
+            )
 
-        current = current_price_by_territory.get(territory.id)
-        current_price = current.customer_price if current else None
+        return preview_items, rate_client.calls
 
-        preview_items.append({
-            "territory_code": territory.code,
-            "territory_name": territory.name,
-            "currency_code": currency,
-            "current_price": current_price,
-            "suggested_price": suggested,
-            "nearest_apple_price": None,
-            "price_point_id": None,
-            "diff_percent": None,
-        })
+    preview_items, calls = run_async(go())
 
-    print(f"\nGenerated {len(preview_items)} preview items")
-    print(f"\n{'Territory':<6} {'Currency':<5} {'Suggested':>10} {'Current':>10}")
-    print("-" * 40)
-    for item in sorted(preview_items, key=lambda x: x["territory_code"])[:20]:
-        current = f"${item['current_price']:.2f}" if item["current_price"] else "N/A"
-        print(f"{item['territory_code']:<6} {item['currency_code']:<5} ${item['suggested_price']:>9.2f} {current:>10}")
-    if len(preview_items) > 20:
-        print(f"... and {len(preview_items) - 20} more territories")
+    assert calls == ["USD"]
+    assert len(preview_items) == 3
 
-    # Assertions
-    assert len(preview_items) > 100, f"Expected 100+ territories, got {len(preview_items)}"
+    us_item = next(item for item in preview_items if item["territory_code"] == "US")
+    assert us_item["current_price"] == 2.99
+    assert abs(us_item["suggested_price"] - 2.99) < 0.001
 
-    us = next(i for i in preview_items if i["territory_code"] == "US")
-    assert abs(us["suggested_price"] - float(base_price)) < 0.10, \
-        f"US price should be ~{base_price}, got {us['suggested_price']}"
+    br_item = next(item for item in preview_items if item["territory_code"] == "BR")
+    assert br_item["current_price"] == 12.90
+    assert abs(br_item["suggested_price"] - 14.90) < 0.001
 
-    print("\nAll assertions passed!")
-
-
-if __name__ == "__main__":
-    asyncio.run(test_preview_logic())
+    jp_item = next(item for item in preview_items if item["territory_code"] == "JP")
+    assert jp_item["current_price"] is None
+    assert jp_item["suggested_price"] == 480.0

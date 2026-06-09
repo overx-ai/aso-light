@@ -5,6 +5,13 @@ which binds them to whatever ``DATABASE_URL`` resolves to at that moment.
 This conftest runs before any test module is imported, so it can rewrite
 the relevant env vars to point at a throwaway SQLite file.
 
+Backend tests that need to await application code should keep the pytest
+test itself as a sync ``def`` and drive the coroutine via
+``tests/_async_harness.py:run_async(...)``. That keeps async setup
+consistent without relying on per-module ``pytest-asyncio`` markers or
+event-loop fixtures.
+
+
 Why this matters: ``tests/test_asa_joins.py`` writes real ``ASCCredential``
 rows with ``encrypt_value("k")`` as the .p8 placeholder. Without isolation,
 those rows accumulate in the dev DB and crash any ASC-touching code path

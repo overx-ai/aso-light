@@ -55,9 +55,10 @@ cd aso-light
 # Install backend + frontend dependencies
 make install
 
-# Configure environment
-cp backend/.env.example backend/.env
-# Generate a Fernet key and paste it into backend/.env as FERNET_KEY:
+# Apply migrations manually (optional preflight for any database)
+make db-up && make migrate
+
+# Generate a Fernet key for FERNET_KEY in backend/.env
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
 # Start backend (:8002) + frontend (:5173)
@@ -97,6 +98,10 @@ cd frontend && npm run build   # output in frontend/dist/
 ```
 
 The MCP server is mounted at `/mcp` on the same FastAPI app and authenticates with Personal Access Tokens — see [docs/007-mcp-integration.md](docs/007-mcp-integration.md).
+
+Backend startup is migration-first in every environment: it runs Alembic
+`upgrade head` before seeding territories. `make migrate` remains available
+when you want an explicit preflight step before starting the app.
 
 ## Project Structure
 

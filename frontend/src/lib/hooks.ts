@@ -85,6 +85,7 @@ import type {
   TranslateReviewOut,
   ReplyIn,
   ReplyTone,
+  ReviewTheme,
   VisibilityWatchListOut,
   VisibilitySnapshotOut,
   VisibilitySnapshotListOut,
@@ -99,6 +100,8 @@ export const queryKeys = {
   credentials: ["credentials"] as const,
   apps: ["apps"] as const,
   app: (id: string) => ["apps", id] as const,
+  growthRecommendations: (appId: number) =>
+    ["growth-recommendations", appId] as const,
   subscriptions: (appId: string) => ["subscriptions", appId] as const,
   subscriptionPrices: (appId: string, subId: string) =>
     ["subscriptionPrices", appId, subId] as const,
@@ -2769,11 +2772,13 @@ export function useDraftReply(appId: number) {
     mutationFn: async ({
       reviewId,
       tone,
+      theme,
     }: {
       reviewId: string;
       tone: ReplyTone;
+      theme?: ReviewTheme | null;
     }): Promise<DraftReplyOut> => {
-      const body: DraftReplyIn = { tone };
+      const body: DraftReplyIn = { tone, theme };
       const response = await api.post<DraftReplyOut>(
         `/apps/${appId}/reviews/${reviewId}/draft`,
         body,
@@ -3079,6 +3084,22 @@ export function useAsoCheck(appId: number) {
     queryFn: async () => {
       const response = await api.get<import("@/types").AsoCheckOut>(
         `/apps/${appId}/aso-check`,
+      );
+      return response.data;
+    },
+    enabled: appId > 0,
+    staleTime: 60_000,
+  });
+}
+
+// ---- Growth Advisor ----
+
+export function useGrowthRecommendations(appId: number) {
+  return useQuery({
+    queryKey: queryKeys.growthRecommendations(appId),
+    queryFn: async () => {
+      const response = await api.get<GrowthRecommendationsOut>(
+        `/apps/${appId}/growth/recommendations`,
       );
       return response.data;
     },

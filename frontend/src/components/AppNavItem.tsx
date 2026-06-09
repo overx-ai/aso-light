@@ -12,7 +12,7 @@ import {
   IconChartBar,
   IconChecks,
   IconSwords,
-  IconSparkles,
+  IconBulb,
   IconTargetArrow,
 } from "@tabler/icons-react";
 import type { App } from "@/types";
@@ -23,7 +23,7 @@ interface AppNavItemProps {
 }
 
 const SUB_ROUTES = [
-  { path: "growth", label: "Growth", icon: IconSparkles },
+  { path: "growth", label: "Growth", icon: IconBulb },
   { path: "pricing", label: "Pricing", icon: IconCoin },
   { path: "keywords", label: "Keywords", icon: IconKeyboard },
   { path: "availability", label: "Availability", icon: IconWorld },

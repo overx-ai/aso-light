@@ -1,32 +1,45 @@
+"""Schemas for app growth recommendations."""
+
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-GrowthCategory = Literal[
-    "setup",
+RecommendationCategory = Literal[
+    "pricing",
     "metadata",
     "keywords",
-    "paid_search",
+    "visibility",
     "reviews",
-    "pricing",
+    "paid_search",
+    "availability",
 ]
-GrowthPriority = Literal["high", "medium", "low"]
+RecommendationSeverity = Literal["critical", "warning", "info"]
+
+
+class RecommendationEvidence(BaseModel):
+    label: str
+    value: str
 
 
 class GrowthRecommendationOut(BaseModel):
     id: str
-    category: GrowthCategory
-    priority: GrowthPriority
-    confidence: GrowthPriority
-    effort: GrowthPriority
+    category: RecommendationCategory
+    severity: RecommendationSeverity
     title: str
-    detail: str
-    evidence: dict[str, Any]
+    description: str
+    impact: str
     cta_label: str
     cta_path: str
+    evidence: list[RecommendationEvidence] = Field(default_factory=list)
+
+
+class GrowthRecommendationSummary(BaseModel):
+    total: int
+    pricing: int
 
 
 class GrowthRecommendationsOut(BaseModel):
+    summary: GrowthRecommendationSummary
     items: list[GrowthRecommendationOut]

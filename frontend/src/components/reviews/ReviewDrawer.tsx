@@ -32,7 +32,11 @@ import {
   useTranslateReview,
   useUpdateReply,
 } from "@/lib/hooks";
-import type { ReplyTone } from "@/types";
+import {
+  REVIEW_THEME_DEFAULT_TONE,
+  REVIEW_THEME_OPTIONS,
+} from "@/lib/reviewThemes";
+import type { ReplyTone, ReviewTheme } from "@/types";
 
 const RESPONSE_BODY_MAX_LEN = 5970;
 const SOURCE_LOCALE_STORAGE_KEY = "metadata-source-locale";
@@ -82,6 +86,7 @@ export default function ReviewDrawer({
   const deleteReply = useDeleteReply(appId);
 
   const [tone, setTone] = useState<ReplyTone>("neutral");
+  const [theme, setTheme] = useState<ReviewTheme>("other");
   const [reply, setReply] = useState("");
   const [translation, setTranslation] = useState<string | null>(null);
   const [translationCached, setTranslationCached] = useState(false);
@@ -97,10 +102,13 @@ export default function ReviewDrawer({
   // Reset draft & translation when switching reviews / reopening
   useEffect(() => {
     if (!opened) return;
+    const nextTheme = review?.theme ?? "other";
+    setTheme(nextTheme);
+    setTone(REVIEW_THEME_DEFAULT_TONE[nextTheme]);
     setReply(existingResponse?.body ?? "");
     setTranslation(null);
     setTranslationCached(false);
-  }, [opened, reviewId, existingResponse?.body]);
+  }, [opened, reviewId, review?.theme, existingResponse?.body]);
 
   if (!review && reviewQuery.isLoading) {
     return (
@@ -136,11 +144,17 @@ export default function ReviewDrawer({
 
   const onDraft = () => {
     draftMutation.mutate(
-      { reviewId: review.id, tone },
+      { reviewId: review.id, tone, theme },
       {
         onSuccess: (out) => setReply(out.suggestion),
       },
     );
+  };
+
+  const onThemeChange = (value: string | null) => {
+    const nextTheme = (value as ReviewTheme | null) ?? "other";
+    setTheme(nextTheme);
+    setTone(REVIEW_THEME_DEFAULT_TONE[nextTheme]);
   };
 
   const overLimit = reply.length > RESPONSE_BODY_MAX_LEN;
@@ -268,6 +282,14 @@ export default function ReviewDrawer({
           </Group>
 
           <Group gap="xs">
+            <Select
+              data={REVIEW_THEME_OPTIONS}
+              value={theme}
+              onChange={onThemeChange}
+              size="xs"
+              style={{ flex: 1.2 }}
+              label="Theme"
+            />
             <Select
               data={TONE_OPTIONS}
               value={tone}

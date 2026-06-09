@@ -71,6 +71,52 @@ def _build_tracking_response(
     )
 
 
+async def _list_tracked_keywords(
+    app_id: int, with_paid: bool = False,
+) -> list[KeywordTrackingResponse]:
+    async with session_scope() as session:
+        await resolve_app(app_id, session)
+        result = await session.execute(
+            select(KeywordTracking)
+            .options(
+                selectinload(KeywordTracking.keyword),
+                selectinload(KeywordTracking.rankings),
+            )
+            .where(KeywordTracking.app_id == app_id)
+            .order_by(KeywordTracking.created_at.desc())
+        )
+        trackings = result.scalars().all()
+        rows = [_build_tracking_response(t) for t in trackings]
+
+        if with_paid:
+            from app.services.asa.joins import paid_organic_join
+
+            paid = await paid_organic_join(
+                session=session, app_id=app_id, days=30,
+            )
+            paid_by_term = {p["term"].lower(): p for p in paid}
+            for row in rows:
+                match = paid_by_term.get((row.keyword.text or "").lower())
+                if match is None or match["paid_impressions_30d"] == 0:
+                    continue
+                row.paid_metrics_30d = KeywordPaidMetrics30d(
+                    impressions=match["paid_impressions_30d"],
+                    taps=match["paid_taps_30d"],
+                    installs=match["paid_installs_30d"],
+                    spend_amount=float(match["paid_spend_30d"]),
+                    spend_currency=match["paid_spend_currency"],
+                )
+        return rows
+
+
+async def _refresh_keyword_rankings(app_id: int) -> dict[str, int]:
+    async with session_scope() as session:
+        await resolve_app(app_id, session)
+        tracker = KeywordRankingTracker(session)
+        recorded = await tracker.refresh_rankings(app_id)
+        return {"recorded": recorded}
+
+
 # ---------------------------------------------------------------------------
 # Suggestions / search / cross-localization (not app-scoped)
 # ---------------------------------------------------------------------------
@@ -126,39 +172,17 @@ async def list_tracked_keywords(
     impressions; otherwise it stays ``None``. The default (``False``) is
     backward-compatible — no shape change for existing callers.
     """
-    async with session_scope() as session:
-        await resolve_app(app_id, session)
-        result = await session.execute(
-            select(KeywordTracking)
-            .options(
-                selectinload(KeywordTracking.keyword),
-                selectinload(KeywordTracking.rankings),
-            )
-            .where(KeywordTracking.app_id == app_id)
-            .order_by(KeywordTracking.created_at.desc())
-        )
-        trackings = result.scalars().all()
-        rows = [_build_tracking_response(t) for t in trackings]
+    return await _list_tracked_keywords(app_id=app_id, with_paid=with_paid)
 
-        if with_paid:
-            from app.services.asa.joins import paid_organic_join
 
-            paid = await paid_organic_join(
-                session=session, app_id=app_id, days=30,
-            )
-            paid_by_term = {p["term"].lower(): p for p in paid}
-            for row in rows:
-                match = paid_by_term.get((row.keyword.text or "").lower())
-                if match is None or match["paid_impressions_30d"] == 0:
-                    continue
-                row.paid_metrics_30d = KeywordPaidMetrics30d(
-                    impressions=match["paid_impressions_30d"],
-                    taps=match["paid_taps_30d"],
-                    installs=match["paid_installs_30d"],
-                    spend_amount=float(match["paid_spend_30d"]),
-                    spend_currency=match["paid_spend_currency"],
-                )
-        return rows
+@mcp.tool(name="keyword_intel.list_for_app")
+async def list_keyword_intel_rows(app_id: int) -> list[KeywordTrackingResponse]:
+    """List the cached keyword-intel rows for an app.
+
+    This is a parity alias for the REST-backed tracked-keywords table:
+    same ownership chain, same cached DB read, same response shape.
+    """
+    return await _list_tracked_keywords(app_id=app_id)
 
 
 @mcp.tool(name="keywords.add")
@@ -236,11 +260,17 @@ async def refresh_keyword_rankings(app_id: int) -> dict[str, int]:
 
     Returns ``{"recorded": <count>}``.
     """
-    async with session_scope() as session:
-        await resolve_app(app_id, session)
-        tracker = KeywordRankingTracker(session)
-        recorded = await tracker.refresh_rankings(app_id)
-        return {"recorded": recorded}
+    return await _refresh_keyword_rankings(app_id=app_id)
+
+
+@mcp.tool(name="keyword_intel.refresh")
+async def refresh_keyword_intel(app_id: int) -> dict[str, int]:
+    """Refresh the cached keyword-intel rows for an app.
+
+    This is a parity alias for the REST ``POST /apps/{app_id}/keywords/refresh``
+    workflow, surfaced under the product-facing keyword-intel namespace.
+    """
+    return await _refresh_keyword_rankings(app_id=app_id)
 
 
 @mcp.tool(name="keywords.get_rankings")
