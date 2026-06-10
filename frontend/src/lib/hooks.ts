@@ -3092,22 +3092,6 @@ export function useAsoCheck(appId: number) {
   });
 }
 
-// ---- Growth Advisor ----
-
-export function useGrowthRecommendations(appId: number) {
-  return useQuery({
-    queryKey: queryKeys.growthRecommendations(appId),
-    queryFn: async () => {
-      const response = await api.get<GrowthRecommendationsOut>(
-        `/apps/${appId}/growth/recommendations`,
-      );
-      return response.data;
-    },
-    enabled: appId > 0,
-    staleTime: 60_000,
-  });
-}
-
 export function useVisibilityAnomalies(
   appId: number,
   days = 14,
