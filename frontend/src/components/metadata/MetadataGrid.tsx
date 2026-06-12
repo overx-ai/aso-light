@@ -25,6 +25,8 @@ interface GridRow {
   locale: string;
   name: string;
   subtitle: string;
+  nameWords: string[];
+  subtitleWords: string[];
   keywordList: string[];
   promotional_text: string;
 }
@@ -42,6 +44,25 @@ function parseKeywords(s: string | null): string[] {
     .filter((k) => k.length > 0);
 }
 
+// Tokenize free text (title / subtitle) into trackable words: split on
+// whitespace, strip surrounding punctuation (handles ":", ",", "&", etc.),
+// drop empty / single-character tokens, and dedupe case-insensitively.
+// Unicode-aware so umlauts (Kohärent) and non-Latin scripts (Дыхание) survive.
+export function parseWords(s: string | null): string[] {
+  if (!s) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of s.split(/\s+/)) {
+    const word = raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    if (word.length < 2) continue;
+    const k = word.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(word);
+  }
+  return out;
+}
+
 function buildRows(snapshot: AppMetadataSnapshot): GridRow[] {
   const map = new Map<string, GridRow>();
 
@@ -52,6 +73,8 @@ function buildRows(snapshot: AppMetadataSnapshot): GridRow[] {
         locale,
         name: "",
         subtitle: "",
+        nameWords: [],
+        subtitleWords: [],
         keywordList: [],
         promotional_text: "",
       };
@@ -64,6 +87,8 @@ function buildRows(snapshot: AppMetadataSnapshot): GridRow[] {
     const row = ensure(r.locale);
     row.name = r.name ?? "";
     row.subtitle = r.subtitle ?? "";
+    row.nameWords = parseWords(row.name);
+    row.subtitleWords = parseWords(row.subtitle);
   }
   for (const r of snapshot.versions as AppMetadataLocalization[]) {
     const row = ensure(r.locale);
@@ -126,6 +151,70 @@ function KeywordChip({ text, isTracked, isPending, onAdd }: KeywordChipProps) {
         {text}
       </Badge>
     </Tooltip>
+  );
+}
+
+interface TrackableChipsProps {
+  words: string[];
+  locale: string;
+  appId: number;
+  trackedMap: Map<string, KeywordTrackingResponse>;
+  trackedSet: Set<string>;
+  addKeyword: ReturnType<typeof useAddKeyword>;
+}
+
+// Renders a wrapping group of add-to-tracking chips for a list of words.
+// Shared by the Name, Subtitle, and Keywords columns.
+function TrackableChips({
+  words,
+  locale,
+  appId,
+  trackedMap,
+  trackedSet,
+  addKeyword,
+}: TrackableChipsProps) {
+  if (words.length === 0) {
+    return (
+      <Text size="xs" c="dimmed">
+        —
+      </Text>
+    );
+  }
+  return (
+    <Group gap={4}>
+      {words.map((kw) => {
+        const key = trackedKey(locale, kw);
+        const trackedKeyword = trackedMap.get(key);
+        const isTracked = trackedSet.has(key);
+        const isPending =
+          addKeyword.isPending &&
+          addKeyword.variables?.appId === String(appId) &&
+          addKeyword.variables?.text === kw &&
+          addKeyword.variables?.locale === locale;
+        return (
+          <Group key={kw} gap={4} wrap="nowrap">
+            <KeywordChip
+              text={kw}
+              isTracked={isTracked}
+              isPending={isPending}
+              onAdd={() =>
+                addKeyword.mutate({
+                  appId: String(appId),
+                  text: kw,
+                  locale,
+                })
+              }
+            />
+            {trackedKeyword && (
+              <KeywordIntelBadge
+                popularity={trackedKeyword.keyword.popularity}
+                updatedAt={trackedKeyword.keyword.popularity_updated_at}
+              />
+            )}
+          </Group>
+        );
+      })}
+    </Group>
   );
 }
 
@@ -202,73 +291,46 @@ export default function MetadataGrid({
           {
             accessor: "name",
             title: "Name",
-            width: 200,
+            width: 220,
             render: (r) => (
-              <Text size="xs" lineClamp={2}>
-                {truncate(r.name, 80)}
-              </Text>
+              <TrackableChips
+                words={r.nameWords}
+                locale={r.locale}
+                appId={appId}
+                trackedMap={trackedMap}
+                trackedSet={trackedSet}
+                addKeyword={addKeyword}
+              />
             ),
           },
           {
             accessor: "subtitle",
             title: "Subtitle",
-            width: 200,
+            width: 220,
             render: (r) => (
-              <Text size="xs" lineClamp={2} c="dimmed">
-                {truncate(r.subtitle, 80)}
-              </Text>
+              <TrackableChips
+                words={r.subtitleWords}
+                locale={r.locale}
+                appId={appId}
+                trackedMap={trackedMap}
+                trackedSet={trackedSet}
+                addKeyword={addKeyword}
+              />
             ),
           },
           {
             accessor: "keywords",
             title: "Keywords",
-            render: (r) => {
-              if (r.keywordList.length === 0) {
-                return (
-                  <Text size="xs" c="dimmed">
-                    —
-                  </Text>
-                );
-              }
-              return (
-                <Group gap={4}>
-                  {r.keywordList.map((kw) => {
-                    const key = trackedKey(r.locale, kw);
-                    const trackedKeyword = trackedMap.get(key);
-                    const isTracked = trackedSet.has(key);
-                    const isPending =
-                      addKeyword.isPending &&
-                      addKeyword.variables?.appId === String(appId) &&
-                      addKeyword.variables?.text === kw &&
-                      addKeyword.variables?.locale === r.locale;
-                    return (
-                      <Group key={kw} gap={4} wrap="nowrap">
-                        <KeywordChip
-                          text={kw}
-                          isTracked={isTracked}
-                          isPending={isPending}
-                          onAdd={() =>
-                            addKeyword.mutate({
-                              appId: String(appId),
-                              text: kw,
-                              locale: r.locale,
-                            })
-                          }
-                        />
-                        {trackedKeyword && (
-                          <KeywordIntelBadge
-                            popularity={trackedKeyword.keyword.popularity}
-                            updatedAt={
-                              trackedKeyword.keyword.popularity_updated_at
-                            }
-                          />
-                        )}
-                      </Group>
-                    );
-                  })}
-                </Group>
-              );
-            },
+            render: (r) => (
+              <TrackableChips
+                words={r.keywordList}
+                locale={r.locale}
+                appId={appId}
+                trackedMap={trackedMap}
+                trackedSet={trackedSet}
+                addKeyword={addKeyword}
+              />
+            ),
           },
           {
             accessor: "promotional_text",
