@@ -113,10 +113,22 @@ function TrackedKeywordsTab({ appId }: { appId: string }) {
       string,
       Array<{ locale: string; placement: KeywordPlacement }>
     >();
+    // Dedupe (locale, placement) per keyword so coverage dots never collide on
+    // their React key — the API can repeat a keyword across the locales it is
+    // tracked in, which would otherwise yield duplicate (locale, placement) pairs.
+    const seen = new Map<string, Set<string>>();
     for (const item of coverage.data?.items ?? []) {
       if (item.placement === "none") continue;
       const key = item.keyword.toLowerCase();
-      if (!map.has(key)) map.set(key, []);
+      let seenPairs = seen.get(key);
+      if (!seenPairs) {
+        seenPairs = new Set();
+        seen.set(key, seenPairs);
+        map.set(key, []);
+      }
+      const pair = `${item.locale}-${item.placement}`;
+      if (seenPairs.has(pair)) continue;
+      seenPairs.add(pair);
       map.get(key)!.push({ locale: item.locale, placement: item.placement });
     }
     return map;

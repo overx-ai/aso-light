@@ -38,7 +38,6 @@ from app.schemas.metadata import (
     BulkApplyResult,
     BulkPreviewIn,
     BulkPreviewOut,
-    KeywordCoverageItem,
     KeywordCoverageOut,
     LocaleUpsertIn,
     TranslateIn,
@@ -51,11 +50,12 @@ from app.services.metadata.client import (
     ASCMetadataService,
     MetadataNotEditableError,
 )
-from app.services.metadata.coloring import classify_keyword
+from app.services.metadata.coloring import build_coverage_items
 from app.services.metadata.snapshot import MetadataSnapshotService
 from app.services.metadata.translate import (
-    AnthropicTranslator,
     TranslationQuotaExceededError,
+    TranslatorUnavailableError,
+    build_translator,
     translate_with_cache,
 )
 
@@ -398,9 +398,11 @@ async def translate_metadata(
     async with session_scope() as session:
         await resolve_app(app_id, session)
 
-        if not settings.ANTHROPIC_API_KEY:
+        translator = build_translator(settings)
+        if translator is None:
             raise ToolError(
-                "AI translation not configured. Set ANTHROPIC_API_KEY."
+                "AI translation not configured. "
+                "Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY."
             )
 
         bad = [f for f in body.fields if f not in _TRANSLATABLE_FIELDS]
@@ -429,7 +431,6 @@ async def translate_metadata(
                     return getattr(row, field, None)
             return None
 
-        translator = AnthropicTranslator(api_key=settings.ANTHROPIC_API_KEY)
         items: list[TranslateSuggestionItem] = []
 
         try:
@@ -457,6 +458,10 @@ async def translate_metadata(
                     )
         except TranslationQuotaExceededError as exc:
             raise ToolError(str(exc))
+        except TranslatorUnavailableError as exc:
+            raise ToolError(
+                "All translation providers failed. Try again later.",
+            ) from exc
 
         return TranslateOut(items=items)
 
@@ -506,21 +511,8 @@ async def keyword_coverage(app_id: int) -> KeywordCoverageOut:
             else:
                 bucket["keywords"] = r.keywords
 
-        items: list[KeywordCoverageItem] = []
-        for tracking in trackings:
-            keyword_text = tracking.keyword.text
-            for locale, fields in by_locale.items():
-                placement = classify_keyword(
-                    keyword_text,
-                    fields["name"],
-                    fields["subtitle"],
-                    fields["keywords"],
-                )
-                items.append(
-                    KeywordCoverageItem(
-                        keyword=keyword_text,
-                        locale=locale,
-                        placement=placement,
-                    )
-                )
+        items = build_coverage_items(
+            (tracking.keyword.text for tracking in trackings),
+            by_locale,
+        )
         return KeywordCoverageOut(items=items)

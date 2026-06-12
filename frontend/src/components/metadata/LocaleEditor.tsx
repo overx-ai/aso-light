@@ -330,7 +330,16 @@ export default function LocaleEditor({
   const coverageQuery = useKeywordCoverage(appId);
   const coverageForLocale = useMemo(() => {
     if (!coverageQuery.data || !selectedLocale) return [];
-    return coverageQuery.data.items.filter((i) => i.locale === selectedLocale);
+    // Dedupe by (keyword, placement) so the coverage badge dots never collide on
+    // their React key if the API repeats a keyword for this locale.
+    const seen = new Set<string>();
+    return coverageQuery.data.items.filter((i) => {
+      if (i.locale !== selectedLocale) return false;
+      const key = `${i.keyword}-${i.placement}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }, [coverageQuery.data, selectedLocale]);
 
   const localeOptions = useMemo(

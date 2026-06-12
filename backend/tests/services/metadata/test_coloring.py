@@ -1,7 +1,10 @@
 """Tests for `app.services.metadata.coloring.classify_keyword`."""
 from __future__ import annotations
 
-from app.services.metadata.coloring import classify_keyword
+from app.services.metadata.coloring import (
+    build_coverage_items,
+    classify_keyword,
+)
 
 
 def test_keyword_in_title_only_returns_title() -> None:
@@ -79,3 +82,49 @@ def test_multiword_keyword_substring_match_in_title() -> None:
 def test_multiword_keyword_does_not_match_keywords_field_via_substring() -> None:
     # multi-word keyword present as substring within keywords blob but not as a full token
     assert classify_keyword("daily yoga", None, None, "daily,yoga,meditation") == "none"
+
+
+# ---------------------------------------------------------------------------
+# build_coverage_items
+# ---------------------------------------------------------------------------
+
+_BY_LOCALE = {
+    "en-US": {"name": "Refresher", "subtitle": "Box Sleep", "keywords": "pranayama,calm"},
+    "de-DE": {"name": None, "subtitle": None, "keywords": "pranayama"},
+}
+
+
+def test_build_coverage_items_one_item_per_locale() -> None:
+    items = build_coverage_items(["pranayama"], _BY_LOCALE)
+    assert len(items) == 2
+    by_locale = {it.locale: it for it in items}
+    assert by_locale["en-US"].placement == "keywords"
+    assert by_locale["de-DE"].placement == "keywords"
+
+
+def test_build_coverage_items_dedupes_repeated_text() -> None:
+    # Same keyword text tracked in 3 locales -> 3 tracking rows share the text.
+    # Must collapse to one item per (text, locale), not 3x.
+    items = build_coverage_items(["pranayama", "pranayama", "pranayama"], _BY_LOCALE)
+    assert len(items) == 2
+    pairs = {(it.keyword, it.locale) for it in items}
+    assert pairs == {("pranayama", "en-US"), ("pranayama", "de-DE")}
+
+
+def test_build_coverage_items_dedupes_case_insensitively_keeps_first_casing() -> None:
+    items = build_coverage_items(["Pranayama", "pranayama"], _BY_LOCALE)
+    assert len(items) == 2  # not 4
+    assert {it.keyword for it in items} == {"Pranayama"}  # first-seen casing
+
+
+def test_build_coverage_items_distinct_texts_each_classified() -> None:
+    items = build_coverage_items(["pranayama", "calm"], _BY_LOCALE)
+    assert len(items) == 4  # 2 texts x 2 locales
+    placement = {(it.keyword, it.locale): it.placement for it in items}
+    assert placement[("calm", "en-US")] == "keywords"
+    assert placement[("calm", "de-DE")] == "none"
+
+
+def test_build_coverage_items_empty_inputs() -> None:
+    assert build_coverage_items([], _BY_LOCALE) == []
+    assert build_coverage_items(["pranayama"], {}) == []

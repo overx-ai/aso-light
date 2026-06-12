@@ -12,6 +12,15 @@ class Settings(BaseSettings):
     FERNET_KEY: str = ""
     RATE_CACHE_API_URL: str = "https://api.overx.ai"
     ANTHROPIC_API_KEY: str | None = None
+    # --- AI translation providers ---
+    # OpenRouter (openrouter.ai) is OpenAI-compatible; we call it via httpx.
+    OPENROUTER_API_KEY: str | None = None
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    OPENROUTER_TRANSLATION_MODEL: str = "anthropic/claude-3.5-haiku"
+    # Ordered, comma-separated provider chain tried by build_translator().
+    # Providers without a configured API key are skipped; the rest run as an
+    # automatic fallback chain (failover on any provider error).
+    TRANSLATION_PROVIDER_CHAIN: str = "openrouter,anthropic"
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
 
     model_config = {

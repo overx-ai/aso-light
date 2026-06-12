@@ -1,7 +1,10 @@
 """Keyword-coverage classification for App Store metadata fields."""
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Literal
+
+from app.schemas.metadata import KeywordCoverageItem
 
 KeywordPlacement = Literal["title", "subtitle", "keywords", "none"]
 
@@ -47,3 +50,39 @@ def classify_keyword(
             return "keywords"
 
     return "none"
+
+
+def build_coverage_items(
+    keyword_texts: Iterable[str],
+    by_locale: dict[str, dict[str, str | None]],
+) -> list[KeywordCoverageItem]:
+    """Classify each distinct keyword against each locale's metadata.
+
+    Tracking the same keyword text in N locales yields N tracking rows that
+    share ``keyword.text``; coverage depends only on the distinct text (matching
+    is case-insensitive), so texts are deduped case-insensitively here — keeping
+    the first-seen display casing — to emit exactly one item per
+    ``(text, locale)``. ``by_locale`` maps a locale to its
+    ``{"name", "subtitle", "keywords"}`` fields.
+    """
+    seen: dict[str, str] = {}
+    for text in keyword_texts:
+        seen.setdefault(text.strip().lower(), text)
+
+    items: list[KeywordCoverageItem] = []
+    for text in seen.values():
+        for locale, fields in by_locale.items():
+            placement = classify_keyword(
+                text,
+                fields["name"],
+                fields["subtitle"],
+                fields["keywords"],
+            )
+            items.append(
+                KeywordCoverageItem(
+                    keyword=text,
+                    locale=locale,
+                    placement=placement,
+                )
+            )
+    return items

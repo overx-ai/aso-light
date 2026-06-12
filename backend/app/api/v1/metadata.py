@@ -43,7 +43,6 @@ from app.schemas.metadata import (
     BulkPreviewOut,
     CrossLocalizationGridItem,
     CrossLocalizationGridOut,
-    KeywordCoverageItem,
     KeywordCoverageOut,
     LocaleUpsertIn,
     TranslateIn,
@@ -62,12 +61,13 @@ from app.services.metadata.client import (
     ASCMetadataService,
     MetadataNotEditableError,
 )
-from app.services.metadata.coloring import classify_keyword
+from app.services.metadata.coloring import build_coverage_items
 from app.services.metadata.snapshot import MetadataSnapshotService
 from app.services.metadata.translate import (
     FIELD_CHAR_LIMITS as TRANSLATE_FIELD_LIMITS,
-    AnthropicTranslator,
     TranslationQuotaExceededError,
+    TranslatorUnavailableError,
+    build_translator,
     translate_with_cache,
 )
 
@@ -581,10 +581,14 @@ async def translate_metadata(
     user_id = int(current_user["user_id"])
     await _get_verified_app(app_id, user_id, session)
 
-    if not settings.ANTHROPIC_API_KEY:
+    translator = build_translator(settings)
+    if translator is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI translation not configured. Set ANTHROPIC_API_KEY.",
+            detail=(
+                "AI translation not configured. "
+                "Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY."
+            ),
         )
 
     # Reject fields the translator cannot handle (URLs, etc.).
@@ -620,7 +624,6 @@ async def translate_metadata(
                 return getattr(row, field, None)
         return None
 
-    translator = AnthropicTranslator(api_key=settings.ANTHROPIC_API_KEY)
     items: list[TranslateSuggestionItem] = []
 
     try:
@@ -650,6 +653,11 @@ async def translate_metadata(
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
+        ) from exc
+    except TranslatorUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="All translation providers failed. Try again later.",
         ) from exc
 
     # Cache rows are added inside ``translate_with_cache``; persist them.
@@ -711,23 +719,10 @@ async def keyword_coverage(
         else:  # version
             bucket["keywords"] = r.keywords
 
-    items: list[KeywordCoverageItem] = []
-    for tracking in trackings:
-        keyword_text = tracking.keyword.text
-        for locale, fields in by_locale.items():
-            placement = classify_keyword(
-                keyword_text,
-                fields["name"],
-                fields["subtitle"],
-                fields["keywords"],
-            )
-            items.append(
-                KeywordCoverageItem(
-                    keyword=keyword_text,
-                    locale=locale,
-                    placement=placement,
-                )
-            )
+    items = build_coverage_items(
+        (tracking.keyword.text for tracking in trackings),
+        by_locale,
+    )
     return KeywordCoverageOut(items=items)
 
 

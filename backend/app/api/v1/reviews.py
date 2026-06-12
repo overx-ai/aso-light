@@ -25,7 +25,7 @@ from app.schemas.review import (
 from app.services.asc.errors import ASCAPIError
 from app.services.asc.reviews import ASCReviewService
 from app.services.metadata.translate import (
-    AnthropicTranslator,
+    build_translator,
     translate_with_cache,
 )
 from app.services.reviews.draft import draft_reply
@@ -266,10 +266,14 @@ async def translate_review(
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
 
-    if not settings.ANTHROPIC_API_KEY:
+    translator = build_translator(settings)
+    if translator is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI translation not configured. Set ANTHROPIC_API_KEY.",
+            detail=(
+                "AI translation not configured. "
+                "Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY."
+            ),
         )
 
     async with await _get_asc_client_for_app(app, session) as client:
@@ -289,7 +293,6 @@ async def translate_review(
         # Trivial passthrough — no API call, no DB write.
         return TranslateReviewOut(translation=review.body, cached=True)
 
-    translator = AnthropicTranslator(api_key=settings.ANTHROPIC_API_KEY)
     try:
         translation, cached = await translate_with_cache(
             translator=translator,

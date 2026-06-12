@@ -26,7 +26,7 @@ from app.schemas.review import (
 from app.services.asc.errors import ASCAPIError
 from app.services.asc.reviews import RESPONSE_BODY_MAX_LEN, ASCReviewService
 from app.services.metadata.translate import (
-    AnthropicTranslator,
+    build_translator,
     translate_with_cache,
 )
 from app.services.reviews.draft import draft_reply
@@ -264,8 +264,12 @@ async def translate_review(
     """
     if not target_locale or len(target_locale) < 2:
         raise ToolError("target_locale must be a non-empty locale code")
-    if not settings.ANTHROPIC_API_KEY:
-        raise ToolError("AI translation not configured. Set ANTHROPIC_API_KEY.")
+    translator = build_translator(settings)
+    if translator is None:
+        raise ToolError(
+            "AI translation not configured. "
+            "Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY."
+        )
 
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
@@ -287,7 +291,6 @@ async def translate_review(
         if source_locale == target_locale:
             return TranslateReviewOut(translation=review.body, cached=True)
 
-        translator = AnthropicTranslator(api_key=settings.ANTHROPIC_API_KEY)
         try:
             translation, cached = await translate_with_cache(
                 translator=translator,
