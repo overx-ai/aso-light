@@ -558,35 +558,6 @@ export interface BulkApplyIn extends BulkPreviewIn {
 
 export type BulkApplyStatus = "applied" | "skipped" | "failed";
 
-// --- Growth recommendations ---
-
-export type GrowthCategory =
-  | "setup"
-  | "metadata"
-  | "keywords"
-  | "paid_search"
-  | "reviews"
-  | "pricing";
-
-export type GrowthPriority = "high" | "medium" | "low";
-
-export interface GrowthRecommendationOut {
-  id: string;
-  category: GrowthCategory;
-  priority: GrowthPriority;
-  confidence: GrowthPriority;
-  effort: GrowthPriority;
-  title: string;
-  detail: string;
-  evidence: Record<string, unknown>;
-  cta_label: string;
-  cta_path: string;
-}
-
-export interface GrowthRecommendationsOut {
-  items: GrowthRecommendationOut[];
-}
-
 export interface BulkApplyResult {
   locale: string;
   status: BulkApplyStatus;

@@ -22,6 +22,7 @@
 | [010 - Keyword Intelligence](010-keyword-intelligence.md) | Provider-abstracted volume + difficulty cache; free ASA-derived providers |
 | [011 - Apple Search Ads Analytics](011-apple-search-ads-analytics.md) | ASA ingest pipeline, KPI dashboard, REST + MCP tools, paid-organic join |
 | [012 - Growth Recommendations Advisor](012-growth-recommendations.md) | Cross-domain recommendation engine powering the Growth page |
+| [013 - Custom Product Pages + Visual Compare](013-custom-product-pages-and-visual-compare.md) | CPP CRUD + screenshot upload, Pillow before/after compositor, ASA→CPP ad-group wiring (`asa.assign_cpp` / `asa.unassign_cpp` / `asa.list_cpp_ads`) |
 
 ## Specs
 
@@ -43,6 +44,8 @@
 │       └── → 006-metadata-editor.md (app-level metadata; sibling of 004)
 └── 003-keyword-analysis.md
     └── → 006-metadata-editor.md (keyword coverage classifier)
+011-apple-search-ads-analytics.md
+    └── → 013-custom-product-pages-and-visual-compare.md (CPP CRUD + visual compare + ASA→CPP wiring)
 010-audit.md (planned — summarizes 001-009)
 ```
 
@@ -71,6 +74,9 @@
 | Metadata page | `frontend/src/pages/MetadataPage.tsx` |
 | Cross-Localization page | `frontend/src/pages/CrossLocalizationPage.tsx` |
 | Metadata components | `frontend/src/components/metadata/*` |
+| CPP service | `backend/app/services/asc/cpp.py` (CRUD + screenshot upload + default/CPP screenshot fetch) |
+| Visual compositor | `backend/app/services/visual/compare.py` (Pillow before/after montage) |
+| ASA→CPP ad wiring | `backend/app/services/asa/cpp_ads.py` + `backend/app/mcp/tools/asa.py` (`asa.assign_cpp` / `asa.unassign_cpp` / `asa.list_cpp_ads`) |
 
 ---
-*Last updated: 2026-06-09*
+*Last updated: 2026-06-16*

@@ -16,6 +16,7 @@ import VisibilityPage from "@/pages/VisibilityPage";
 import AsoCheckPage from "@/pages/AsoCheckPage";
 import AppClashPage from "@/pages/AppClashPage";
 import PaidSearchPage from "@/pages/PaidSearchPage";
+import ComparePage from "@/pages/Compare";
 import SettingsPage from "@/pages/SettingsPage";
 import RevenueCatSettingsPage from "@/pages/RevenueCatSettingsPage";
 import RevenueCatEntitlementsPage from "@/pages/RevenueCatEntitlementsPage";
@@ -43,6 +44,7 @@ export default function App() {
           <Route path="apps/:id/aso-check" element={<AsoCheckPage />} />
           <Route path="apps/:id/clash" element={<AppClashPage />} />
           <Route path="apps/:id/paid-search" element={<PaidSearchPage />} />
+          <Route path="apps/:id/compare" element={<ComparePage />} />
           <Route
             path="apps/:id/revenuecat"
             element={<Navigate to="entitlements" replace />}

@@ -23,6 +23,7 @@ dependencies = [
     "PyJWT",
     "anthropic>=0.45.0",
     "fastmcp>=2.0",
+    "pillow>=10",
 ]
 
 [project.urls]

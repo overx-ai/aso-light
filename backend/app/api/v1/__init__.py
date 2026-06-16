@@ -8,6 +8,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.availability import router as availability_router
 from app.api.v1.clash import router as clash_router
 from app.api.v1.clone import router as clone_router
+from app.api.v1.cpp import router as cpp_router
 from app.api.v1.credentials import router as credentials_router
 from app.api.v1.export import router as export_router
 from app.api.v1.growth import router as growth_router
@@ -22,6 +23,7 @@ from app.api.v1.presets import router as presets_router
 from app.api.v1.pricing import router as pricing_router
 from app.api.v1.revenuecat import router as revenuecat_router
 from app.api.v1.reviews import router as reviews_router
+from app.api.v1.screenshots import router as screenshots_router
 from app.api.v1.territories import router as territories_router
 from app.api.v1.tokens import router as tokens_router
 from app.api.v1.visibility import router as visibility_router
@@ -46,6 +48,8 @@ router.include_router(growth_router, prefix="/apps", tags=["growth"])
 router.include_router(keyword_intel_router, prefix="/apps", tags=["keyword-intel"])
 router.include_router(aso_check_router, prefix="/apps", tags=["aso-check"])
 router.include_router(clash_router, prefix="/apps", tags=["clash"])
+router.include_router(screenshots_router, prefix="/apps", tags=["screenshots"])
+router.include_router(cpp_router, prefix="/apps", tags=["cpp"])
 router.include_router(keywords_router, tags=["keywords"])
 router.include_router(metadata_keywords_router, prefix="/keywords", tags=["keywords"])
 router.include_router(territories_router, prefix="/territories", tags=["territories"])

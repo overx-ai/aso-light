@@ -171,8 +171,6 @@ export const queryKeys = {
     ["visibility-snapshots", appId, watchId] as const,
   visibilitySov: (appId: number, days: number) =>
     ["visibility-sov", appId, days] as const,
-  growthRecommendations: (appId: number) =>
-    ["growth-recommendations", appId] as const,
 };
 
 // ---- Credential Hooks ----

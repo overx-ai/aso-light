@@ -51,6 +51,7 @@ from app.schemas.asa import (
     PaidOrganicJoinRow,
 )
 from app.services.asa import campaigns as asa_campaigns
+from app.services.asa import cpp_ads as asa_cpp_ads
 from app.services.asa.client import ASAClient
 from app.services.asa.errors import ASAAPIError
 from app.services.asa.joins import (
@@ -100,6 +101,24 @@ async def _campaign_owned_by_user(
     )).scalar_one()
     cred = await _own_credential_for_user(org.credential_id, session)
     return camp, org, cred
+
+
+async def _ad_group_owned_by_user(
+    ad_group_id: int, session: AsyncSession,
+) -> tuple[ASAAdGroup, ASACampaign, ASAOrg, ASACredential]:
+    """Resolve an ad group and verify the full auth chain.
+
+    Returns the (ad_group, campaign, org, credential) tuple. Raises
+    :class:`ToolError` if the ad group does not exist or is not reachable by
+    the current user.
+    """
+    ag = (await session.execute(
+        select(ASAAdGroup).where(ASAAdGroup.id == ad_group_id)
+    )).scalar_one_or_none()
+    if ag is None:
+        raise ToolError("Ad group not found")
+    camp, org, cred = await _campaign_owned_by_user(ag.campaign_id, session)
+    return ag, camp, org, cred
 
 
 # ---------------------------------------------------------------------------
@@ -601,6 +620,108 @@ async def remove_negative_keyword(negative_keyword_id: int) -> dict:
             await client.aclose()
         await session.delete(n)
         return {"deleted": True, "id": negative_keyword_id}
+
+
+# ---------------------------------------------------------------------------
+# Custom Product Page ads (CPP ↔ ad group wiring)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="asa.list_cpp_ads")
+async def list_cpp_ads(ad_group_id: int) -> list[dict[str, Any]]:
+    """List the Ads in an ad group (each carries its Custom Product Page link).
+
+    Inspect the returned Ads' creative reference to see which Custom Product
+    Page (if any) the ad group currently serves. Returns the raw ASA ``Ad``
+    resources — there is no local Ad model.
+    """
+    async with session_scope() as session:
+        ag, camp, org, cred = await _ad_group_owned_by_user(
+            ad_group_id, session,
+        )
+        client = await ASAClient.from_credential(cred)
+        try:
+            return await asa_cpp_ads.list_ads(
+                client,
+                org_id=org.asa_org_id,
+                campaign_id=camp.asa_campaign_id,
+                adgroup_id=ag.asa_ad_group_id,
+            )
+        except ASAAPIError as exc:
+            raise ToolError(f"ASA rejected listing ads: {exc.message}") from exc
+        finally:
+            await client.aclose()
+
+
+@mcp.tool(name="asa.assign_cpp")
+async def assign_cpp(
+    ad_group_id: int, cpp_id: str, name: str,
+) -> dict[str, Any]:
+    """Attach a Custom Product Page to an ad group by creating an Ad.
+
+    Creates an ASA Ad in the ad group whose creative references the ASC
+    ``appCustomProductPage`` id, so the ad group serves that tailored page.
+
+    Args:
+        ad_group_id: The local ASA ad group id.
+        cpp_id: The ASC ``appCustomProductPage`` id to serve.
+        name: A human-readable name for the new Ad.
+
+    Returns the created ASA ``Ad`` resource.
+    """
+    if not cpp_id.strip():
+        raise ToolError("cpp_id must be non-empty")
+    if not name.strip():
+        raise ToolError("name must be non-empty")
+    async with session_scope() as session:
+        ag, camp, org, cred = await _ad_group_owned_by_user(
+            ad_group_id, session,
+        )
+        client = await ASAClient.from_credential(cred)
+        try:
+            return await asa_cpp_ads.assign_cpp(
+                client,
+                org_id=org.asa_org_id,
+                campaign_id=camp.asa_campaign_id,
+                adgroup_id=ag.asa_ad_group_id,
+                cpp_id=cpp_id,
+                name=name,
+            )
+        except ASAAPIError as exc:
+            raise ToolError(f"ASA rejected the CPP assign: {exc.message}") from exc
+        finally:
+            await client.aclose()
+
+
+@mcp.tool(name="asa.unassign_cpp")
+async def unassign_cpp(ad_group_id: int, ad_id: int) -> dict:
+    """Detach a Custom Product Page from an ad group by deleting its Ad.
+
+    Args:
+        ad_group_id: The local ASA ad group id.
+        ad_id: The ASA (Apple-side) Ad id to delete (from
+            :tool:`asa.list_cpp_ads`).
+
+    The ad group falls back to the default product page (or a remaining Ad).
+    """
+    async with session_scope() as session:
+        ag, camp, org, cred = await _ad_group_owned_by_user(
+            ad_group_id, session,
+        )
+        client = await ASAClient.from_credential(cred)
+        try:
+            await asa_cpp_ads.unassign_cpp(
+                client,
+                org_id=org.asa_org_id,
+                campaign_id=camp.asa_campaign_id,
+                adgroup_id=ag.asa_ad_group_id,
+                ad_id=ad_id,
+            )
+        except ASAAPIError as exc:
+            raise ToolError(f"ASA rejected the CPP unassign: {exc.message}") from exc
+        finally:
+            await client.aclose()
+        return {"deleted": True, "ad_id": ad_id}
 
 
 # ---------------------------------------------------------------------------
