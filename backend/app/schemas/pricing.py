@@ -179,6 +179,18 @@ class PricePreviewItem(BaseModel):
     would_be_skipped: bool = False
 
 
+class PricePreviewSkippedItem(BaseModel):
+    """A territory excluded from a preview because no price could be computed.
+
+    Distinguishes "could not compute" (e.g. ``missing_fx_rate``) from a
+    territory that simply needs no change, so the UI can surface it.
+    """
+
+    territory_code: str
+    territory_name: str
+    reason: str
+
+
 class PricePreviewResponse(BaseModel):
     """Full preview of suggested prices across all territories."""
 
@@ -187,6 +199,7 @@ class PricePreviewResponse(BaseModel):
     index_type: str
     base_price: float
     items: list[PricePreviewItem]
+    skipped_territories: list[PricePreviewSkippedItem] = []
 
 
 class PriceApplyItem(BaseModel):
@@ -235,6 +248,7 @@ class PriceApplyResponse(BaseModel):
     errors: list[str] = []
     skipped_items: list[PriceApplySkippedItem] = []
     intro_offer_synced: bool = False  # True if intro_offer config was applied
+    intro_offer_failed: int = 0  # Per-territory intro-offer create/delete failures
     intro_offer_error: str | None = None
 
 
@@ -300,6 +314,7 @@ class IAPPricePreviewResponse(BaseModel):
     index_type: str
     base_price: float
     items: list[PricePreviewItem]
+    skipped_territories: list[PricePreviewSkippedItem] = []
 
 
 # ------------------------------------------------------------------

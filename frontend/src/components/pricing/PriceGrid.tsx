@@ -177,7 +177,16 @@ function buildRows(
 
 function formatPrice(value: number | null, currency: string): string {
   if (value === null) return "-";
-  return `${currency} ${value.toFixed(2)}`;
+  try {
+    // Intl picks the right fraction digits per currency (0 for JPY/KRW,
+    // 3 for KWD/BHD), so we never render "JPY 1200.00".
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency,
+    }).format(value);
+  } catch {
+    return `${currency} ${value.toFixed(2)}`;
+  }
 }
 
 type SortableField = keyof PriceGridRow;
@@ -262,10 +271,22 @@ export default function PriceGrid({
     ],
   );
 
-  const missingCount = useMemo(
-    () => rows.filter((r) => r.is_missing_price).length,
-    [rows],
-  );
+  // Single pass over rows for the summary badges, rather than re-filtering
+  // the list once per badge on every render.
+  const counts = useMemo(() => {
+    let missing = 0;
+    let withChanges = 0;
+    let skipped = 0;
+    let manual = 0;
+    for (const r of rows) {
+      if (r.is_missing_price) missing += 1;
+      if (r.has_change && !r.would_be_skipped) withChanges += 1;
+      if (r.would_be_skipped) skipped += 1;
+      if (r.is_manual) manual += 1;
+    }
+    return { missing, withChanges, skipped, manual };
+  }, [rows]);
+  const missingCount = counts.missing;
 
   const filteredRows = useMemo(() => {
     let filtered = rows;
@@ -316,26 +337,19 @@ export default function PriceGrid({
               {missingCount} missing
             </Badge>
           )}
-          {hasPreview &&
-            rows.filter((r) => r.has_change && !r.would_be_skipped).length >
-              0 && (
-              <Badge size="lg" variant="light" color="yellow">
-                {
-                  rows.filter((r) => r.has_change && !r.would_be_skipped)
-                    .length
-                }{" "}
-                with changes
-              </Badge>
-            )}
-          {hasPreview &&
-            rows.filter((r) => r.would_be_skipped).length > 0 && (
-              <Badge size="lg" variant="light" color="orange">
-                {rows.filter((r) => r.would_be_skipped).length} skipped
-              </Badge>
-            )}
-          {rows.filter((r) => r.is_manual).length > 0 && (
+          {hasPreview && counts.withChanges > 0 && (
+            <Badge size="lg" variant="light" color="yellow">
+              {counts.withChanges} with changes
+            </Badge>
+          )}
+          {hasPreview && counts.skipped > 0 && (
+            <Badge size="lg" variant="light" color="orange">
+              {counts.skipped} skipped
+            </Badge>
+          )}
+          {counts.manual > 0 && (
             <Badge size="lg" variant="light" color="grape">
-              {rows.filter((r) => r.is_manual).length} manual
+              {counts.manual} manual
             </Badge>
           )}
         </Group>

@@ -136,12 +136,19 @@ export interface PricePreviewItem {
   would_be_skipped: boolean;
 }
 
+export interface PricePreviewSkippedItem {
+  territory_code: string;
+  territory_name: string;
+  reason: string;
+}
+
 export interface PricePreviewResponse {
   subscription_id: number;
   subscription_name: string;
   index_type: string;
   base_price: number;
   items: PricePreviewItem[];
+  skipped_territories?: PricePreviewSkippedItem[];
 }
 
 export interface PriceApplyItem {
@@ -175,6 +182,7 @@ export interface PriceApplyResponse {
   errors: string[];
   skipped_items: PriceApplySkippedItem[];
   intro_offer_synced?: boolean;
+  intro_offer_failed?: number;
   intro_offer_error?: string | null;
 }
 
@@ -219,6 +227,7 @@ export interface IAPPricePreviewResponse {
   index_type: string;
   base_price: number;
   items: PricePreviewItem[];
+  skipped_territories?: PricePreviewSkippedItem[];
 }
 
 // ---- Localization Types ----

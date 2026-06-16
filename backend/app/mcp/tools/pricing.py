@@ -23,10 +23,6 @@ from sqlalchemy.orm import selectinload
 from app.api.v1._deps import _get_asc_client_for_app
 from app.api.v1.pricing import (
     ALPHA3_TO_ALPHA2,
-    SAFETY_LABEL,
-    SAFETY_MAX_DOWN,
-    SAFETY_MAX_UP,
-    _apply_charming,
     _build_preview_item,
     _bulk_sync_localizations,
     _get_territory_map,
@@ -43,7 +39,6 @@ from app.api.v1.pricing import (
 from app.data.territories import ALPHA2_TO_ALPHA3
 from app.mcp.context import resolve_app, session_scope
 from app.mcp.server import mcp
-from app.models.economic_index import EconomicIndex
 from app.models.iap import IAPPrice, InAppPurchase
 from app.models.subscription import (
     Subscription,
@@ -74,6 +69,7 @@ from app.schemas.pricing import (
     PricePreviewItem,
     PricePreviewRequest,
     PricePreviewResponse,
+    PricePreviewSkippedItem,
     PriceResolveRequest,
     PriceResolveResponse,
     ReviewScreenshotResponse,
@@ -94,6 +90,8 @@ from app.services.asc.pricing import ASCPricingService
 from app.services.export.csv import CSVExportService
 from app.services.export.excel import ExcelExportService
 from app.services.pricing.currency import effective_currency
+from app.services.pricing.preview import build_preview_items
+from app.services.pricing.safety import safety_skip_item
 
 logger = logging.getLogger(__name__)
 
@@ -132,33 +130,6 @@ async def _get_verified_subscription_group(group_id, app_id, session):
     except HTTPException as exc:
         raise ToolError(str(exc.detail)) from exc
 
-
-
-def _safety_skip_item(
-    territory_code: str,
-    *,
-    current_price: float | None,
-    new_price: float,
-    force: bool,
-) -> PriceApplySkippedItem | None:
-    """Return a skip record if the new price exceeds the ±50% safety band, else None."""
-    if force or current_price is None or current_price <= 0:
-        return None
-    if not (
-        new_price > current_price * SAFETY_MAX_UP
-        or new_price < current_price * SAFETY_MAX_DOWN
-    ):
-        return None
-    diff_pct = round(((new_price - current_price) / current_price) * 100, 2)
-    return PriceApplySkippedItem(
-        territory_code=territory_code,
-        reason=(
-            f"Price change {diff_pct:+}% exceeds safety limit ({SAFETY_LABEL})"
-        ),
-        current_price=current_price,
-        new_price=new_price,
-        diff_percent=diff_pct,
-    )
 
 
 # ==================================================================
@@ -892,177 +863,6 @@ async def sync_subscription_price_points(
         )
 
 
-def _preview_via_index(
-    base_price: float,
-    base_index_value: float,
-    territories: list,
-    index_by_territory: dict[int, float],
-    price_points_by_territory: dict[str, list[dict]],
-    current_price_by_territory: dict[int, Any],
-    charming_mode: str,
-) -> list[PricePreviewItem]:
-    items: list[PricePreviewItem] = []
-    for territory in territories:
-        territory_index = index_by_territory.get(territory.id)
-        if territory_index is None:
-            continue
-        currency = effective_currency(
-            territory, price_points_by_territory.get(territory.code),
-        )
-        suggested = base_price * (territory_index / base_index_value)
-        suggested = _apply_charming(suggested, charming_mode, currency)
-        items.append(_build_preview_item(
-            territory=territory,
-            currency_code=currency,
-            suggested=suggested,
-            current_price_by_territory=current_price_by_territory,
-            price_points_by_territory=price_points_by_territory,
-        ))
-    return items
-
-
-def _finalize_suggested(
-    raw_decimal: Any,
-    *,
-    territory: Any,
-    currency: str,
-    apply_vat_flag: bool,
-    charming_mode: str,
-) -> float:
-    """Apply optional VAT and either smart rounding or _apply_charming."""
-    from app.services.pricing.currency_rounding import apply_currency_rounding
-    from app.services.pricing.vat import apply_vat
-
-    if apply_vat_flag and territory.vat_rate and territory.vat_rate > 0:
-        raw_decimal = apply_vat(raw_decimal, territory.vat_rate)
-    if charming_mode == "smart":
-        return float(apply_currency_rounding(raw_decimal, currency))
-    return _apply_charming(float(raw_decimal), charming_mode, currency)
-
-
-async def _preview_via_exchange_rate(
-    body: PricePreviewRequest,
-    territory_map: dict,
-    all_territories: list,
-    price_points_by_territory: dict[str, list[dict]],
-    current_price_by_territory: dict[int, Any],
-) -> list[PricePreviewItem]:
-    """Compute preview items using direct FX rates from the rate-cache API."""
-    from decimal import Decimal
-
-    from app.core.config import settings
-    from app.services.rates import RateCacheClient, RateCacheError
-
-    base_territory = territory_map.get(body.base_territory_code)
-    if base_territory is None:
-        raise ToolError(
-            f"Base territory '{body.base_territory_code}' not found"
-        )
-    base_currency = effective_currency(
-        base_territory,
-        price_points_by_territory.get(base_territory.code),
-    )
-    try:
-        rate_client = RateCacheClient(settings.RATE_CACHE_API_URL)
-        rates = await rate_client.get_rates(base=base_currency)
-    except RateCacheError as exc:
-        raise ToolError(f"Failed to fetch exchange rates: {exc}")
-
-    items: list[PricePreviewItem] = []
-    for territory in all_territories:
-        currency = effective_currency(
-            territory, price_points_by_territory.get(territory.code),
-        )
-        if currency == base_currency:
-            rate = 1.0
-        else:
-            rate = rates.get(currency)
-            if rate is None:
-                continue
-        raw = Decimal(str(body.base_price)) * Decimal(str(rate))
-        suggested = _finalize_suggested(
-            raw,
-            territory=territory,
-            currency=currency,
-            apply_vat_flag=body.apply_vat,
-            charming_mode=body.charming_mode,
-        )
-        items.append(_build_preview_item(
-            territory=territory,
-            currency_code=currency,
-            suggested=suggested,
-            current_price_by_territory=current_price_by_territory,
-            price_points_by_territory=price_points_by_territory,
-        ))
-    return items
-
-
-async def _preview_via_gdp_brackets(
-    body: PricePreviewRequest,
-    session,
-    all_territories: list,
-    price_points_by_territory: dict[str, list[dict]],
-    current_price_by_territory: dict[int, Any],
-) -> list[PricePreviewItem]:
-    """Compute preview items using GDP brackets + USD-denominated tier prices."""
-    from decimal import Decimal
-
-    from app.core.config import settings
-    from app.services.pricing.gdp_brackets import assign_tier
-    from app.services.rates import RateCacheClient, RateCacheError
-
-    assert body.gdp_config is not None
-    gdp_indices_result = await session.execute(
-        select(EconomicIndex).where(
-            EconomicIndex.index_type == "gdp_per_capita_ppp"
-        )
-    )
-    gdp_by_territory_id = {
-        idx.territory_id: idx.value
-        for idx in gdp_indices_result.scalars().all()
-    }
-    try:
-        rate_client = RateCacheClient(settings.RATE_CACHE_API_URL)
-        rates = await rate_client.get_rates(base="USD")
-    except RateCacheError as exc:
-        raise ToolError(f"Failed to fetch exchange rates: {exc}")
-
-    items: list[PricePreviewItem] = []
-    for territory in all_territories:
-        tier = assign_tier(
-            territory.code,
-            gdp_by_territory_id.get(territory.id),
-            body.gdp_config,
-        )
-        tier_price_usd = body.gdp_config.tier_prices_usd[tier]
-        currency = effective_currency(
-            territory, price_points_by_territory.get(territory.code),
-        )
-        if currency == "USD":
-            rate = Decimal("1")
-        else:
-            rate_value = rates.get(currency)
-            if rate_value is None:
-                continue
-            rate = Decimal(str(rate_value))
-        raw = tier_price_usd * rate
-        suggested = _finalize_suggested(
-            raw,
-            territory=territory,
-            currency=currency,
-            apply_vat_flag=body.apply_vat,
-            charming_mode=body.charming_mode,
-        )
-        items.append(_build_preview_item(
-            territory=territory,
-            currency_code=currency,
-            suggested=suggested,
-            current_price_by_territory=current_price_by_territory,
-            price_points_by_territory=price_points_by_territory,
-        ))
-    return items
-
-
 async def _preview_items(
     body: PricePreviewRequest,
     session,
@@ -1070,54 +870,18 @@ async def _preview_items(
     all_territories: list,
     price_points_by_territory: dict[str, list[dict]],
     current_price_by_territory: dict[int, Any],
-) -> list[PricePreviewItem]:
-    """Dispatch to the right preview branch based on ``index_type``."""
-    if body.index_type == "exchange_rate":
-        return await _preview_via_exchange_rate(
-            body=body,
-            territory_map=territory_map,
-            all_territories=all_territories,
-            price_points_by_territory=price_points_by_territory,
-            current_price_by_territory=current_price_by_territory,
-        )
-    if body.index_type == "gdp_brackets":
-        return await _preview_via_gdp_brackets(
-            body=body,
-            session=session,
-            all_territories=all_territories,
-            price_points_by_territory=price_points_by_territory,
-            current_price_by_territory=current_price_by_territory,
-        )
-    indices_result = await session.execute(
-        select(EconomicIndex).where(
-            EconomicIndex.index_type == body.index_type
-        )
-    )
-    index_by_territory = {
-        idx.territory_id: idx.value
-        for idx in indices_result.scalars().all()
-    }
-    base_territory = territory_map.get(body.base_territory_code)
-    if base_territory is None:
-        raise ToolError(
-            f"Base territory '{body.base_territory_code}' not found"
-        )
-    base_index_value = index_by_territory.get(base_territory.id)
-    if base_index_value is None or base_index_value == 0:
-        raise ToolError(
-            f"No {body.index_type} index data for territory "
-            f"'{body.base_territory_code}'"
-        )
-    return _preview_via_index(
-        base_price=body.base_price,
-        base_index_value=base_index_value,
-        territories=all_territories,
-        index_by_territory=index_by_territory,
+) -> tuple[list[PricePreviewItem], list[PricePreviewSkippedItem]]:
+    """Compute preview items + skipped territories via the shared builder."""
+    return await build_preview_items(
+        body=body,
+        session=session,
+        territory_map=territory_map,
+        all_territories=all_territories,
         price_points_by_territory=price_points_by_territory,
         current_price_by_territory=current_price_by_territory,
-        charming_mode=body.charming_mode,
+        build_item=_build_preview_item,
+        raise_error=lambda message: ToolError(message),
     )
-
 
 @mcp.tool(name="pricing.preview_subscription_prices")
 async def preview_subscription_prices(
@@ -1157,7 +921,7 @@ async def preview_subscription_prices(
             if cached is not None:
                 price_points_by_territory[territory.code] = cached
 
-        preview_items = await _preview_items(
+        preview_items, skipped_territories = await _preview_items(
             body=body,
             session=session,
             territory_map=territory_map,
@@ -1172,6 +936,7 @@ async def preview_subscription_prices(
             index_type=body.index_type,
             base_price=body.base_price,
             items=preview_items,
+            skipped_territories=skipped_territories,
         )
 
 
@@ -1291,7 +1056,7 @@ async def apply_subscription_prices(
                     )
                     continue
 
-                skip = _safety_skip_item(
+                skip = safety_skip_item(
                     tc,
                     current_price=current_price,
                     new_price=new_price,
@@ -1318,7 +1083,6 @@ async def apply_subscription_prices(
             intro_offer_applied = 0
             intro_offer_failed = 0
             intro_offer_kept = 0
-            intro_offer_deleted = 0
 
             if body.intro_offer is not None:
                 try:
@@ -1421,12 +1185,11 @@ async def apply_subscription_prices(
                                 return False
 
                     if to_delete_ids:
-                        delete_results = await asyncio.gather(
+                        # Fire the deletes for their side effect; the count
+                        # isn't surfaced in the MCP response.
+                        await asyncio.gather(
                             *[_delete_one(oid) for oid in to_delete_ids],
                             return_exceptions=False,
-                        )
-                        intro_offer_deleted = sum(
-                            1 for ok in delete_results if ok
                         )
                     if to_create_alpha2:
                         create_results = await asyncio.gather(
@@ -1458,6 +1221,7 @@ async def apply_subscription_prices(
             errors=errors,
             skipped_items=skipped_items,
             intro_offer_synced=intro_offer_synced,
+            intro_offer_failed=intro_offer_failed,
             intro_offer_error=intro_offer_error,
         )
 
@@ -1963,7 +1727,7 @@ async def preview_iap_prices(
             if cached is not None:
                 price_points_by_territory[territory.code] = cached
 
-        preview_items = await _preview_items(
+        preview_items, skipped_territories = await _preview_items(
             body=body,
             session=session,
             territory_map=territory_map,
@@ -1978,6 +1742,7 @@ async def preview_iap_prices(
             index_type=body.index_type,
             base_price=body.base_price,
             items=preview_items,
+            skipped_territories=skipped_territories,
         )
 
 
@@ -2024,6 +1789,16 @@ async def apply_iap_prices(
             select(IAPPrice).where(IAPPrice.iap_id == iap.id)
         )
         current_prices = current_prices_result.scalars().all()
+
+        # Apple replaces the ENTIRE iapPriceSchedule on every apply; with
+        # no cached prices the preserve loop can't re-add untouched
+        # territories, so a partial apply would reset them all.
+        if not current_prices:
+            raise ToolError(
+                "Sync IAP prices before applying — the schedule replace "
+                "would reset untouched territories."
+            )
+
         territory_map = await _get_territory_map(session)
         territory_by_id = {t.id: t for t in territory_map.values()}
 
@@ -2080,7 +1855,7 @@ async def apply_iap_prices(
                 )
                 continue
 
-            skip = _safety_skip_item(
+            skip = safety_skip_item(
                 tc,
                 current_price=current_price,
                 new_price=new_price,
@@ -2096,7 +1871,11 @@ async def apply_iap_prices(
                 "price_point_id": item.price_point_id,
             })
 
+        # Preserve untouched manual territories (Apple replaces the whole
+        # schedule). ``submitted_count`` is the user-facing applied total;
+        # preserved entries are padding, not changes the user requested.
         submitted_codes = {entry["territory_code"] for entry in price_entries}
+        submitted_count = len(price_entries)
         for p in current_prices:
             territory = territory_by_id.get(p.territory_id)
             if territory is None or territory.code in submitted_codes:
@@ -2116,9 +1895,9 @@ async def apply_iap_prices(
                         iap_id=iap.asc_iap_id,
                         price_entries=price_entries,
                     )
-                    applied = len(price_entries)
+                    applied = submitted_count
                 except ASCAPIError as exc:
-                    failed += len(price_entries)
+                    failed += submitted_count
                     errors.append(f"Batch apply failed: {exc.message}")
 
         return PriceApplyResponse(

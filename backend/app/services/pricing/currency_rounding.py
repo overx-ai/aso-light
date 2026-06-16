@@ -5,14 +5,14 @@ with +-10% flexibility to find the best candidate.
 """
 
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 
 @dataclass(frozen=True)
 class CurrencyProfile:
     """Defines rounding behavior for a currency."""
 
-    decimals: int  # 0 or 2
+    decimals: int  # 0, 2, or 3
     # List of (threshold, step, suffix) tuples sorted by threshold ascending.
     # For a price >= threshold, round to nearest `step` then add `suffix`.
     # Example for JPY: [(0, 10, -10), (10000, 100, -100)]
@@ -45,6 +45,16 @@ _RUB = CurrencyProfile(
     decimals=2,
     decimal_suffix="0.00",
     min_price="1.00",
+)
+
+# 3-decimal (minor unit 1000) currencies: KWD, BHD, OMR, JOD, TND.
+# ISO-4217 mandates three fractional digits. Apple's tier ladder for
+# these uses a trailing .x99 (e.g. 0.499, 0.999, 1.999) — mirror the
+# .99-style charm one place further right.
+_STANDARD_3DP = CurrencyProfile(
+    decimals=3,
+    decimal_suffix="0.999",
+    min_price="0.999",
 )
 
 # JPY, TWD: round to 10s, trailing 90 (990, 1490, 2990)
@@ -135,10 +145,12 @@ CURRENCY_PROFILES: dict[str, CurrencyProfile] = {
     "GHS": _STANDARD_99,
     "TZS": _STANDARD_99,
     "ILS": _STANDARD_99,
-    "JOD": _STANDARD_99,
-    "KWD": _STANDARD_99,
-    "BHD": _STANDARD_99,
-    "OMR": _STANDARD_99,
+    # 3-decimal (minor unit 1000) currencies
+    "KWD": _STANDARD_3DP,
+    "BHD": _STANDARD_3DP,
+    "OMR": _STANDARD_3DP,
+    "JOD": _STANDARD_3DP,
+    "TND": _STANDARD_3DP,
     # ARS
     "ARS": _ARS,
     # BRL
@@ -176,6 +188,13 @@ CURRENCY_PROFILES: dict[str, CurrencyProfile] = {
 
 DEFAULT_PROFILE = _STANDARD_99
 
+# Quantization step per decimal-place count, used by the fallback path.
+_QUANTUM_BY_DECIMALS: dict[int, Decimal] = {
+    0: Decimal("1"),
+    2: Decimal("0.01"),
+    3: Decimal("0.001"),
+}
+
 
 def _get_tier(price: Decimal, profile: CurrencyProfile) -> tuple[int, int]:
     """Get the (step, suffix) for the price's magnitude tier."""
@@ -186,6 +205,19 @@ def _get_tier(price: Decimal, profile: CurrencyProfile) -> tuple[int, int]:
     return step, suffix
 
 
+def _round_to_step(price: Decimal, step: int) -> int:
+    """Round ``price`` to the nearest multiple of ``step`` (ROUND_HALF_UP).
+
+    Uses Decimal arithmetic so large 0-decimal prices (KRW/VND millions)
+    don't lose a step to float rounding error.
+    """
+    if step <= 0:
+        return int(price)
+    step_dec = Decimal(step)
+    multiples = (price / step_dec).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return int(multiples * step_dec)
+
+
 def _generate_nice_candidates(
     price: Decimal,
     profile: CurrencyProfile,
@@ -193,12 +225,12 @@ def _generate_nice_candidates(
     """Generate candidate 'nice' prices around the raw price."""
     candidates: list[Decimal] = []
 
-    if profile.decimals == 2:
+    if profile.decimals in (2, 3):
         suffix = Decimal(profile.decimal_suffix)
         if profile.tiers:
-            # Tiered 2-decimal: use step sizes for larger currencies (ARS, etc.)
+            # Tiered fractional: use step sizes for larger currencies (ARS, etc.)
             step, _ = _get_tier(price, profile)
-            base_rounded = int(int(price) / step + 0.5) * step
+            base_rounded = _round_to_step(price, step)
             for offset_mult in range(-5, 6):
                 candidate_int = base_rounded + offset_mult * step
                 if candidate_int < 0:
@@ -215,7 +247,7 @@ def _generate_nice_candidates(
     else:
         # Zero-decimal currencies
         step, suffix_offset = _get_tier(price, profile)
-        base_rounded = int(int(price) / step + 0.5) * step
+        base_rounded = _round_to_step(price, step)
         for offset_mult in range(-5, 6):
             candidate = base_rounded + offset_mult * step
             if candidate <= 0:
@@ -263,9 +295,7 @@ def apply_currency_rounding(
         if above_min:
             return min(above_min, key=lambda c: abs(c - price))
         return max(
-            price.quantize(
-                Decimal("1") if profile.decimals == 0 else Decimal("0.01")
-            ),
+            price.quantize(_QUANTUM_BY_DECIMALS[profile.decimals]),
             min_price,
         )
 

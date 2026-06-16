@@ -15,8 +15,6 @@ from sqlalchemy.orm import selectinload
 from app.api.v1._deps import _get_asc_client_for_app, _get_verified_app
 from app.core.security import get_current_user
 from app.db.session import get_session
-from app.models.app import App
-from app.models.economic_index import EconomicIndex
 from app.models.iap import IAPPrice, InAppPurchase
 from app.models.subscription import (
     Subscription,
@@ -69,6 +67,11 @@ from app.services.asc.errors import ASCAPIError
 from app.services.asc.price_point_cache import PricePointCache
 from app.services.asc.pricing import ASCPricingService
 from app.services.pricing.currency import effective_currency
+from app.services.pricing.preview import build_preview_items
+from app.services.pricing.safety import (
+    exceeds_safety_band,
+    safety_skip_item,
+)
 
 # Reverse map: Apple territory IDs are alpha-3 (USA, GBR, ARE), our DB
 # stores alpha-2 (US, GB, AE). Use this when parsing JSON:API responses
@@ -77,13 +80,6 @@ ALPHA3_TO_ALPHA2: dict[str, str] = {v: k for k, v in ALPHA2_TO_ALPHA3.items()}
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# Safety band: skip territories where the new price differs from the
-# current price by more than this fraction in either direction.
-SAFETY_BAND_PCT = 0.50
-SAFETY_MAX_UP = 1.0 + SAFETY_BAND_PCT
-SAFETY_MAX_DOWN = 1.0 - SAFETY_BAND_PCT
-SAFETY_LABEL = f"±{int(SAFETY_BAND_PCT * 100)}%"
 
 
 # ------------------------------------------------------------------
@@ -622,202 +618,16 @@ async def preview_subscription_prices(
         if cached is not None:
             price_points_by_territory[territory.code] = cached
 
-    preview_items: list[PricePreviewItem] = []
-
-    if body.index_type == "exchange_rate":
-        # --- Exchange rate branch: use live FX rates ---
-        from decimal import Decimal
-
-        from app.core.config import settings
-        from app.services.pricing.currency_rounding import apply_currency_rounding
-        from app.services.pricing.vat import apply_vat
-        from app.services.rates import RateCacheClient, RateCacheError
-
-        # Determine base currency from base territory
-        base_territory = territory_map.get(body.base_territory_code)
-        if base_territory is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Base territory '{body.base_territory_code}' not found",
-            )
-        base_currency = effective_currency(
-            base_territory, price_points_by_territory.get(base_territory.code),
-        )
-
-        try:
-            rate_client = RateCacheClient(settings.RATE_CACHE_API_URL)
-            rates = await rate_client.get_rates(base=base_currency)
-        except RateCacheError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch exchange rates: {exc}",
-            )
-
-        for territory in all_territories:
-            currency = effective_currency(
-                territory, price_points_by_territory.get(territory.code),
-            )
-            # Rate for the base currency itself is 1.0
-            if currency == base_currency:
-                rate = 1.0
-            else:
-                rate = rates.get(currency)
-                if rate is None:
-                    continue
-
-            suggested_decimal = Decimal(str(body.base_price)) * Decimal(str(rate))
-
-            # Apply VAT if requested
-            if body.apply_vat and territory.vat_rate and territory.vat_rate > 0:
-                suggested_decimal = apply_vat(
-                    suggested_decimal, territory.vat_rate
-                )
-
-            # Apply smart currency rounding or charming
-            if body.charming_mode == "smart":
-                suggested_decimal = apply_currency_rounding(
-                    suggested_decimal, currency
-                )
-                suggested = float(suggested_decimal)
-            else:
-                suggested = _apply_charming(
-                    float(suggested_decimal), body.charming_mode, currency
-                )
-
-            preview_items.append(_build_preview_item(
-                territory=territory,
-                currency_code=currency,
-                suggested=suggested,
-                current_price_by_territory=current_price_by_territory,
-                price_points_by_territory=price_points_by_territory,
-            ))
-    elif body.index_type == "gdp_brackets":
-        # --- GDP-bracket branch: tier per territory, absolute USD per tier ---
-        from decimal import Decimal
-
-        from app.core.config import settings
-        from app.services.pricing.currency_rounding import apply_currency_rounding
-        from app.services.pricing.gdp_brackets import assign_tier
-        from app.services.pricing.vat import apply_vat
-        from app.services.rates import RateCacheClient, RateCacheError
-
-        assert body.gdp_config is not None  # validator enforced
-
-        gdp_indices_result = await session.execute(
-            select(EconomicIndex).where(
-                EconomicIndex.index_type == "gdp_per_capita_ppp"
-            )
-        )
-        gdp_by_territory_id: dict[int, float] = {
-            idx.territory_id: idx.value for idx in gdp_indices_result.scalars().all()
-        }
-
-        try:
-            rate_client = RateCacheClient(settings.RATE_CACHE_API_URL)
-            rates = await rate_client.get_rates(base="USD")
-        except RateCacheError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch exchange rates: {exc}",
-            )
-
-        for territory in all_territories:
-            tier = assign_tier(
-                territory.code,
-                gdp_by_territory_id.get(territory.id),
-                body.gdp_config,
-            )
-            tier_price_usd = body.gdp_config.tier_prices_usd[tier]
-
-            currency = effective_currency(
-                territory, price_points_by_territory.get(territory.code),
-            )
-            if currency == "USD":
-                rate = Decimal("1")
-            else:
-                rate_value = rates.get(currency)
-                if rate_value is None:
-                    continue
-                rate = Decimal(str(rate_value))
-
-            suggested_decimal = tier_price_usd * rate
-
-            if body.apply_vat and territory.vat_rate and territory.vat_rate > 0:
-                suggested_decimal = apply_vat(
-                    suggested_decimal, territory.vat_rate
-                )
-
-            if body.charming_mode == "smart":
-                suggested_decimal = apply_currency_rounding(
-                    suggested_decimal, currency
-                )
-                suggested = float(suggested_decimal)
-            else:
-                suggested = _apply_charming(
-                    float(suggested_decimal), body.charming_mode, currency
-                )
-
-            preview_items.append(_build_preview_item(
-                territory=territory,
-                currency_code=currency,
-                suggested=suggested,
-                current_price_by_territory=current_price_by_territory,
-                price_points_by_territory=price_points_by_territory,
-            ))
-    else:
-        # --- Economic index branch (ppp, bigmac, netflix, etc.) ---
-        # Load economic indices for the requested type
-        indices_result = await session.execute(
-            select(EconomicIndex).where(
-                EconomicIndex.index_type == body.index_type
-            )
-        )
-        indices = indices_result.scalars().all()
-
-        # Build territory_id -> index value map
-        index_by_territory: dict[int, float] = {
-            idx.territory_id: idx.value for idx in indices
-        }
-
-        # Find base territory index value
-        base_territory = territory_map.get(body.base_territory_code)
-        if base_territory is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Base territory '{body.base_territory_code}' not found",
-            )
-        base_index_value = index_by_territory.get(base_territory.id)
-        if base_index_value is None or base_index_value == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"No {body.index_type} index data for territory "
-                    f"'{body.base_territory_code}'"
-                ),
-            )
-
-        for territory in all_territories:
-            territory_index = index_by_territory.get(territory.id)
-            if territory_index is None:
-                continue
-
-            currency = effective_currency(
-                territory, price_points_by_territory.get(territory.code),
-            )
-            suggested = body.base_price * (territory_index / base_index_value)
-
-            # Apply charming price
-            suggested = _apply_charming(
-                suggested, body.charming_mode, currency,
-            )
-
-            preview_items.append(_build_preview_item(
-                territory=territory,
-                currency_code=currency,
-                suggested=suggested,
-                current_price_by_territory=current_price_by_territory,
-                price_points_by_territory=price_points_by_territory,
-            ))
+    preview_items, skipped_territories = await build_preview_items(
+        body=body,
+        session=session,
+        territory_map=territory_map,
+        all_territories=all_territories,
+        price_points_by_territory=price_points_by_territory,
+        current_price_by_territory=current_price_by_territory,
+        build_item=_build_preview_item,
+        raise_error=_preview_error,
+    )
 
     return PricePreviewResponse(
         subscription_id=subscription.id,
@@ -825,6 +635,22 @@ async def preview_subscription_prices(
         index_type=body.index_type,
         base_price=body.base_price,
         items=preview_items,
+        skipped_territories=skipped_territories,
+    )
+
+
+def _preview_error(message: str) -> HTTPException:
+    """Map a shared-preview error message to the right HTTP status.
+
+    Upstream FX-rate failures are a bad gateway (502); everything else is
+    a client error (400, e.g. unknown base territory or missing index).
+    """
+    if message.startswith("Failed to fetch exchange rates"):
+        return HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=message,
+        )
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST, detail=message,
     )
 
 
@@ -868,10 +694,7 @@ def _build_preview_item(
     would_be_skipped = (
         current_price is not None
         and current_price > 0
-        and (
-            compare_price > current_price * SAFETY_MAX_UP
-            or compare_price < current_price * SAFETY_MAX_DOWN
-        )
+        and exceeds_safety_band(current_price, compare_price)
     )
 
     return PricePreviewItem(
@@ -885,30 +708,6 @@ def _build_preview_item(
         diff_percent=diff_percent,
         would_be_skipped=would_be_skipped,
     )
-
-
-def _apply_charming(price: float, mode: str, currency_code: str = "USD") -> float:
-    """Apply charming price adjustment.
-
-    Args:
-        price: Raw calculated price.
-        mode: One of "none", "99", "95", "smart".
-        currency_code: ISO 4217 currency code (used for "smart" mode).
-
-    Returns:
-        Adjusted price.
-    """
-    if mode == "smart":
-        from decimal import Decimal
-
-        from app.services.pricing.currency_rounding import apply_currency_rounding
-
-        return float(apply_currency_rounding(Decimal(str(price)), currency_code))
-    if mode in ("99", ".99"):
-        return float(int(price)) + 0.99 if price > 1 else price
-    if mode in ("95", ".95"):
-        return float(int(price)) + 0.95 if price > 1 else price
-    return price
 
 
 # ------------------------------------------------------------------
@@ -1070,34 +869,18 @@ async def apply_subscription_prices(
             # Safety check: skip if change exceeds ±50% (unless item.force).
             # ``new_price`` is guaranteed non-None here (the unknown-id
             # branch above ``continue``s).
-            if (
-                not item.force
-                and current_price is not None
-                and current_price > 0
-                and (
-                    new_price > current_price * SAFETY_MAX_UP
-                    or new_price < current_price * SAFETY_MAX_DOWN
-                )
-            ):
-                diff_pct = round(
-                    ((new_price - current_price) / current_price) * 100, 2
-                )
+            skip = safety_skip_item(
+                tc,
+                current_price=current_price,
+                new_price=new_price,
+                force=item.force,
+            )
+            if skip is not None:
                 skipped += 1
-                skipped_items.append(
-                    PriceApplySkippedItem(
-                        territory_code=tc,
-                        reason=(
-                            f"Price change {diff_pct:+}% exceeds "
-                            f"safety limit ({SAFETY_LABEL})"
-                        ),
-                        current_price=current_price,
-                        new_price=new_price,
-                        diff_percent=diff_pct,
-                    )
-                )
+                skipped_items.append(skip)
                 logger.info(
-                    "Skipped %s: +%.1f%% (%.2f → %.2f)",
-                    tc, diff_pct, current_price, new_price,
+                    "Skipped %s: %+.1f%% (%.2f → %.2f)",
+                    tc, skip.diff_percent, skip.current_price, skip.new_price,
                 )
                 continue
 
@@ -1299,6 +1082,7 @@ async def apply_subscription_prices(
         errors=errors,
         skipped_items=skipped_items,
         intro_offer_synced=intro_offer_synced,
+        intro_offer_failed=intro_offer_failed,
         intro_offer_error=intro_offer_error,
     )
 
@@ -1646,193 +1430,16 @@ async def preview_iap_prices(
         if cached is not None:
             price_points_by_territory[territory.code] = cached
 
-    preview_items: list[PricePreviewItem] = []
-
-    if body.index_type == "exchange_rate":
-        from decimal import Decimal
-
-        from app.core.config import settings
-        from app.services.pricing.currency_rounding import apply_currency_rounding
-        from app.services.pricing.vat import apply_vat
-        from app.services.rates import RateCacheClient, RateCacheError
-
-        base_territory = territory_map.get(body.base_territory_code)
-        if base_territory is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Base territory '{body.base_territory_code}' not found",
-            )
-        base_currency = effective_currency(
-            base_territory, price_points_by_territory.get(base_territory.code),
-        )
-
-        try:
-            rate_client = RateCacheClient(settings.RATE_CACHE_API_URL)
-            rates = await rate_client.get_rates(base=base_currency)
-        except RateCacheError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch exchange rates: {exc}",
-            )
-
-        for territory in all_territories:
-            currency = effective_currency(
-                territory, price_points_by_territory.get(territory.code),
-            )
-            if currency == base_currency:
-                rate = 1.0
-            else:
-                rate = rates.get(currency)
-                if rate is None:
-                    continue
-
-            suggested_decimal = Decimal(str(body.base_price)) * Decimal(str(rate))
-
-            if body.apply_vat and territory.vat_rate and territory.vat_rate > 0:
-                suggested_decimal = apply_vat(
-                    suggested_decimal, territory.vat_rate
-                )
-
-            if body.charming_mode == "smart":
-                suggested_decimal = apply_currency_rounding(
-                    suggested_decimal, currency
-                )
-                suggested = float(suggested_decimal)
-            else:
-                suggested = _apply_charming(
-                    float(suggested_decimal), body.charming_mode, currency
-                )
-
-            preview_items.append(_build_preview_item(
-                territory=territory,
-                currency_code=currency,
-                suggested=suggested,
-                current_price_by_territory=current_price_by_territory,
-                price_points_by_territory=price_points_by_territory,
-            ))
-    elif body.index_type == "gdp_brackets":
-        # --- GDP-bracket branch (mirrors subscription preview) ---
-        from decimal import Decimal
-
-        from app.core.config import settings
-        from app.services.pricing.currency_rounding import apply_currency_rounding
-        from app.services.pricing.gdp_brackets import assign_tier
-        from app.services.pricing.vat import apply_vat
-        from app.services.rates import RateCacheClient, RateCacheError
-
-        assert body.gdp_config is not None  # validator enforced
-
-        gdp_indices_result = await session.execute(
-            select(EconomicIndex).where(
-                EconomicIndex.index_type == "gdp_per_capita_ppp"
-            )
-        )
-        gdp_by_territory_id: dict[int, float] = {
-            idx.territory_id: idx.value
-            for idx in gdp_indices_result.scalars().all()
-        }
-
-        try:
-            rate_client = RateCacheClient(settings.RATE_CACHE_API_URL)
-            rates = await rate_client.get_rates(base="USD")
-        except RateCacheError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch exchange rates: {exc}",
-            )
-
-        for territory in all_territories:
-            tier = assign_tier(
-                territory.code,
-                gdp_by_territory_id.get(territory.id),
-                body.gdp_config,
-            )
-            tier_price_usd = body.gdp_config.tier_prices_usd[tier]
-
-            currency = effective_currency(
-                territory, price_points_by_territory.get(territory.code),
-            )
-            if currency == "USD":
-                rate = Decimal("1")
-            else:
-                rate_value = rates.get(currency)
-                if rate_value is None:
-                    continue
-                rate = Decimal(str(rate_value))
-
-            suggested_decimal = tier_price_usd * rate
-
-            if body.apply_vat and territory.vat_rate and territory.vat_rate > 0:
-                suggested_decimal = apply_vat(
-                    suggested_decimal, territory.vat_rate,
-                )
-
-            if body.charming_mode == "smart":
-                suggested_decimal = apply_currency_rounding(
-                    suggested_decimal, currency,
-                )
-                suggested = float(suggested_decimal)
-            else:
-                suggested = _apply_charming(
-                    float(suggested_decimal), body.charming_mode, currency,
-                )
-
-            preview_items.append(_build_preview_item(
-                territory=territory,
-                currency_code=currency,
-                suggested=suggested,
-                current_price_by_territory=current_price_by_territory,
-                price_points_by_territory=price_points_by_territory,
-            ))
-    else:
-        indices_result = await session.execute(
-            select(EconomicIndex).where(
-                EconomicIndex.index_type == body.index_type
-            )
-        )
-        indices = indices_result.scalars().all()
-
-        index_by_territory: dict[int, float] = {
-            idx.territory_id: idx.value for idx in indices
-        }
-
-        base_territory = territory_map.get(body.base_territory_code)
-        if base_territory is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Base territory '{body.base_territory_code}' not found",
-            )
-        base_index_value = index_by_territory.get(base_territory.id)
-        if base_index_value is None or base_index_value == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"No {body.index_type} index data for territory "
-                    f"'{body.base_territory_code}'"
-                ),
-            )
-
-        for territory in all_territories:
-            territory_index = index_by_territory.get(territory.id)
-            if territory_index is None:
-                continue
-
-            currency = effective_currency(
-                territory, price_points_by_territory.get(territory.code),
-            )
-            suggested = body.base_price * (territory_index / base_index_value)
-
-            suggested = _apply_charming(
-                suggested, body.charming_mode, currency,
-            )
-
-            preview_items.append(_build_preview_item(
-                territory=territory,
-                currency_code=currency,
-                suggested=suggested,
-                current_price_by_territory=current_price_by_territory,
-                price_points_by_territory=price_points_by_territory,
-            ))
+    preview_items, skipped_territories = await build_preview_items(
+        body=body,
+        session=session,
+        territory_map=territory_map,
+        all_territories=all_territories,
+        price_points_by_territory=price_points_by_territory,
+        current_price_by_territory=current_price_by_territory,
+        build_item=_build_preview_item,
+        raise_error=_preview_error,
+    )
 
     return IAPPricePreviewResponse(
         iap_id=iap.id,
@@ -1840,6 +1447,7 @@ async def preview_iap_prices(
         index_type=body.index_type,
         base_price=body.base_price,
         items=preview_items,
+        skipped_territories=skipped_territories,
     )
 
 
@@ -1923,6 +1531,20 @@ async def apply_iap_prices(
         select(IAPPrice).where(IAPPrice.iap_id == iap.id)
     )
     current_prices = current_prices_result.scalars().all()
+
+    # Apple replaces the ENTIRE iapPriceSchedule on every apply. The
+    # preserve loop below can only re-add territories we already have a
+    # cached price_point_id for; with no cache, a partial apply would
+    # silently reset every untouched territory to auto-equalization.
+    if not current_prices:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Sync IAP prices before applying — the schedule replace "
+                "would reset untouched territories."
+            ),
+        )
+
     territory_map = await _get_territory_map(session)
     territory_by_id = {t.id: t for t in territory_map.values()}
 
@@ -1987,34 +1609,19 @@ async def apply_iap_prices(
             continue
 
         # Safety check: skip if change exceeds ±50% (unless item.force)
-        if (
-            not item.force
-            and current_price is not None
-            and current_price > 0
-            and (
-                new_price > current_price * SAFETY_MAX_UP
-                or new_price < current_price * SAFETY_MAX_DOWN
-            )
-        ):
-            diff_pct = round(
-                ((new_price - current_price) / current_price) * 100, 2
-            )
+        skip = safety_skip_item(
+            tc,
+            current_price=current_price,
+            new_price=new_price,
+            force=item.force,
+        )
+        if skip is not None:
             skipped += 1
-            skipped_items.append(
-                PriceApplySkippedItem(
-                    territory_code=tc,
-                    reason=(
-                        f"Price change {diff_pct:+}% exceeds "
-                        f"safety limit ({SAFETY_LABEL})"
-                    ),
-                    current_price=current_price,
-                    new_price=new_price,
-                    diff_percent=diff_pct,
-                )
-            )
+            skipped_items.append(skip)
             logger.info(
                 "Skipped IAP %s territory %s: %+.1f%% (%.2f -> %.2f)",
-                iap_id, tc, diff_pct, current_price, new_price,
+                iap_id, tc, skip.diff_percent, skip.current_price,
+                skip.new_price,
             )
             continue
 
@@ -2027,8 +1634,10 @@ async def apply_iap_prices(
     # not in the new manualPrices list reverts to auto-equalization.
     # Preserve previously-manual territories that the user didn't touch
     # (and ensure the base territory is always present — Apple rejects
-    # the schedule otherwise).
+    # the schedule otherwise). ``submitted_count`` is the user-facing
+    # ``applied`` total; preserved territories are padding, not changes.
     submitted_codes = {entry["territory_code"] for entry in price_entries}
+    submitted_count = len(price_entries)
     for p in current_prices:
         territory = territory_by_id.get(p.territory_id)
         if territory is None or territory.code in submitted_codes:
@@ -2049,9 +1658,9 @@ async def apply_iap_prices(
                     iap_id=iap.asc_iap_id,
                     price_entries=price_entries,
                 )
-                applied = len(price_entries)
+                applied = submitted_count
             except ASCAPIError as exc:
-                failed += len(price_entries)
+                failed += submitted_count
                 errors.append(f"Batch apply failed: {exc.message}")
                 logger.warning(
                     "Failed to apply IAP prices for iap %s (status %d): %s | "
@@ -2110,7 +1719,6 @@ def _parse_intro_offer(item: dict) -> IntroOfferResponse:
     ``{"resource": <offer>, "included": [<territory|pricePoint>]}``.
     """
     resource = item["resource"]
-    included = item.get("included", []) or []
     attrs = resource.get("attributes", {})
     rels = resource.get("relationships", {}) or {}
 
