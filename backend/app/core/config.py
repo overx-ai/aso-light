@@ -1,12 +1,23 @@
-from pydantic import field_validator
+from cryptography.fernet import Fernet
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings
+
+# Known placeholder values shipped as defaults. Rejected at startup so a prod
+# deploy that forgets to override them fails fast instead of issuing forgeable
+# JWTs / encrypting .p8 keys under a guessable secret.
+_SECRET_PLACEHOLDERS = frozenset(
+    {
+        "change-me-in-production",
+        "change-me-jwt-secret",
+    }
+)
+_MIN_SECRET_LENGTH = 32
 
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./aso_light.db"
     SECRET_KEY: str = "change-me-in-production"
     JWT_SECRET_KEY: str = "change-me-jwt-secret"
-    JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     FERNET_KEY: str = ""
@@ -27,6 +38,34 @@ class Settings(BaseSettings):
         "env_file": ".env",
         "env_file_encoding": "utf-8",
     }
+
+    @field_validator("SECRET_KEY", "JWT_SECRET_KEY")
+    @classmethod
+    def reject_weak_secret(cls, v: str, info: ValidationInfo) -> str:
+        if not v or v in _SECRET_PLACEHOLDERS:
+            raise ValueError(
+                f"{info.field_name} is unset or uses a known placeholder; "
+                "set a strong, unique value (>= 32 chars)."
+            )
+        if len(v) < _MIN_SECRET_LENGTH:
+            raise ValueError(
+                f"{info.field_name} must be at least {_MIN_SECRET_LENGTH} characters."
+            )
+        return v
+
+    @field_validator("FERNET_KEY")
+    @classmethod
+    def require_valid_fernet_key(cls, v: str) -> str:
+        if not v:
+            raise ValueError(
+                "FERNET_KEY is required; generate one with "
+                "Fernet.generate_key().decode()."
+            )
+        try:
+            Fernet(v.encode())
+        except (ValueError, TypeError) as exc:
+            raise ValueError("FERNET_KEY is not a valid Fernet key.") from exc
+        return v
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

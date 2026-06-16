@@ -30,6 +30,10 @@ if _TEST_DB_PATH.exists():
     _TEST_DB_PATH.unlink()
 
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TEST_DB_PATH}"
-os.environ.setdefault("SECRET_KEY", "test-secret-not-for-prod")
-os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret-not-for-prod")
+# Throwaway secrets for the test process. These must satisfy the production
+# fail-fast validators in app.core.config (>= 32 chars, not a placeholder, and
+# a structurally valid Fernet key), so the full suite still constructs
+# Settings() at import time.
+os.environ.setdefault("SECRET_KEY", "test-secret-not-for-prod-0123456789abcdef")
+os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret-not-for-prod-0123456789abcdef")
 os.environ.setdefault("FERNET_KEY", Fernet.generate_key().decode())

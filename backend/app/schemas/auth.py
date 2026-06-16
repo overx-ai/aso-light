@@ -10,7 +10,9 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=8)
+    # bcrypt silently truncates input past 72 bytes; cap the length so two long
+    # passwords sharing a 72-byte prefix can't be set and verify as equal.
+    password: str = Field(min_length=8, max_length=72)
     name: str = Field(min_length=1)
 
 
