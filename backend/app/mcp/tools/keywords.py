@@ -14,7 +14,7 @@ from fastmcp.exceptions import ToolError
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.mcp.context import resolve_app, session_scope
+from app.mcp.context import get_user_id, resolve_app, session_scope
 from app.mcp.server import mcp
 from app.models.competitor import CompetitorApp
 from app.models.keyword import Keyword, KeywordRanking, KeywordTracking
@@ -92,7 +92,7 @@ async def _list_tracked_keywords(
             from app.services.asa.joins import paid_organic_join
 
             paid = await paid_organic_join(
-                session=session, app_id=app_id, days=30,
+                session=session, app_id=app_id, user_id=get_user_id(), days=30,
             )
             paid_by_term = {p["term"].lower(): p for p in paid}
             for row in rows:

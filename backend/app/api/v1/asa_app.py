@@ -5,11 +5,11 @@ identically to other per-app routers (pricing, metadata, reviews, etc.).
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1._deps import _get_verified_app
@@ -20,10 +20,8 @@ from app.models.asa import (
     ASACampaign,
     ASACredential,
     ASAKeyword,
-    ASAMetricDaily,
     ASANegativeKeyword,
     ASAOrg,
-    ASASearchTerm,
 )
 from app.schemas.asa import (
     AddNegativeKeywordsRequest,
@@ -37,6 +35,7 @@ from app.schemas.asa import (
     PaidOrganicJoinRow,
 )
 from app.services.asa import campaigns as asa_campaigns
+from app.services.asa.analytics import performance_rows, search_term_report_rows
 from app.services.asa.client import ASAClient
 from app.services.asa.errors import ASAAPIError
 from app.services.asa.joins import (
@@ -46,6 +45,63 @@ from app.services.asa.joins import (
 )
 
 router = APIRouter()
+
+
+async def _verify_campaign_for_app(
+    campaign_id: int, app: Any, session: AsyncSession,
+) -> ASACampaign:
+    """Resolve a campaign and verify it belongs to ``app`` (404 otherwise)."""
+    camp = (await session.execute(
+        select(ASACampaign).where(ASACampaign.id == campaign_id)
+    )).scalar_one_or_none()
+    if camp is None or camp.app_adam_id != app.asc_app_id:
+        raise HTTPException(404, "Campaign not found for this app")
+    return camp
+
+
+async def _verify_ad_group_for_app(
+    ad_group_id: int, app: Any, session: AsyncSession,
+) -> ASAAdGroup:
+    """Resolve an ad group and verify it belongs to ``app`` (404 otherwise).
+
+    Mirrors the campaign/ad-group ownership pattern used elsewhere in this
+    router: ad group -> campaign -> app_adam_id must equal the verified app's
+    ``asc_app_id``.
+    """
+    ag = (await session.execute(
+        select(ASAAdGroup).where(ASAAdGroup.id == ad_group_id)
+    )).scalar_one_or_none()
+    if ag is None:
+        raise HTTPException(404, "Ad group not found for this app")
+    camp = (await session.execute(
+        select(ASACampaign).where(ASACampaign.id == ag.campaign_id)
+    )).scalar_one_or_none()
+    if camp is None or camp.app_adam_id != app.asc_app_id:
+        raise HTTPException(404, "Ad group not found for this app")
+    return ag
+
+
+async def _owned_org_credential_for_campaign(
+    camp: ASACampaign, user_id: int, session: AsyncSession,
+) -> tuple[ASAOrg, ASACredential]:
+    """Resolve the (org, credential) behind a campaign, owned by ``user_id``.
+
+    Mirrors the mutation auth chain (campaign -> org -> credential) shared by
+    the negative-keyword add/remove routes. Raises 403 if the org's credential
+    is not owned by the caller.
+    """
+    org = (await session.execute(
+        select(ASAOrg).where(ASAOrg.id == camp.org_id)
+    )).scalar_one()
+    cred = (await session.execute(
+        select(ASACredential).where(
+            ASACredential.id == org.credential_id,
+            ASACredential.user_id == user_id,
+        )
+    )).scalar_one_or_none()
+    if cred is None:
+        raise HTTPException(403, "Org not owned by user")
+    return org, cred
 
 
 # ---------------------------------------------------------------------------
@@ -85,11 +141,7 @@ async def list_ad_groups_for_campaign(
 ) -> list[ASAAdGroupOut]:
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
-    camp = (await session.execute(
-        select(ASACampaign).where(ASACampaign.id == campaign_id)
-    )).scalar_one_or_none()
-    if camp is None or camp.app_adam_id != app.asc_app_id:
-        raise HTTPException(404, "Campaign not found for this app")
+    await _verify_campaign_for_app(campaign_id, app, session)
     rows = (await session.execute(
         select(ASAAdGroup).where(ASAAdGroup.campaign_id == campaign_id)
         .order_by(ASAAdGroup.name)
@@ -142,11 +194,7 @@ async def list_negative_keywords(
     if (campaign_id is None) == (ad_group_id is None):
         raise HTTPException(400, "Provide exactly one of campaign_id or ad_group_id")
     if campaign_id is not None:
-        camp = (await session.execute(
-            select(ASACampaign).where(ASACampaign.id == campaign_id)
-        )).scalar_one_or_none()
-        if camp is None or camp.app_adam_id != app.asc_app_id:
-            raise HTTPException(404, "Campaign not found for this app")
+        await _verify_campaign_for_app(campaign_id, app, session)
         stmt = select(ASANegativeKeyword).where(
             ASANegativeKeyword.campaign_id == campaign_id,
         )
@@ -185,7 +233,9 @@ async def paid_organic_join_route(
 ) -> list[PaidOrganicJoinRow]:
     user_id = int(current_user["user_id"])
     await _get_verified_app(app_id, user_id, session)
-    rows = await paid_organic_join(session=session, app_id=app_id, days=days)
+    rows = await paid_organic_join(
+        session=session, app_id=app_id, user_id=user_id, days=days,
+    )
     return [PaidOrganicJoinRow(**r) for r in rows]
 
 
@@ -197,61 +247,28 @@ async def search_term_report_route(
     app_id: int,
     days: int = Query(30, ge=1, le=90),
     ad_group_id: int | None = None,
-    min_impressions: int | None = None,
+    min_impressions: int | None = Query(None, ge=0),
     current_user: dict[str, Any] = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ASASearchTermReportOut:
+    """Search-term performance rollup (single-currency rows) over a window."""
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
-    cutoff = date.today() - timedelta(days=days)
-    stmt = (
-        select(
-            ASASearchTerm.id,
-            ASASearchTerm.text,
-            ASASearchTerm.match_type,
-            ASASearchTerm.ad_group_id,
-            func.sum(ASAMetricDaily.impressions).label("imp"),
-            func.sum(ASAMetricDaily.taps).label("taps"),
-            func.sum(ASAMetricDaily.installs).label("ins"),
-            func.sum(ASAMetricDaily.spend_amount).label("spend"),
-            func.max(ASAMetricDaily.spend_currency).label("currency"),
-        )
-        .join(
-            ASAMetricDaily,
-            (ASAMetricDaily.dim_kind == "SEARCH_TERM")
-            & (ASAMetricDaily.dim_id == ASASearchTerm.id)
-            & (ASAMetricDaily.date >= cutoff)
-            & (ASAMetricDaily.app_adam_id == app.asc_app_id),
-        )
-        .group_by(
-            ASASearchTerm.id, ASASearchTerm.text,
-            ASASearchTerm.match_type, ASASearchTerm.ad_group_id,
-        )
-    )
     if ad_group_id is not None:
-        stmt = stmt.where(ASASearchTerm.ad_group_id == ad_group_id)
-    if min_impressions is not None:
-        stmt = stmt.having(func.sum(ASAMetricDaily.impressions) >= min_impressions)
-    rows = (await session.execute(stmt)).all()
+        await _verify_ad_group_for_app(ad_group_id, app, session)
+    cutoff, rows = await search_term_report_rows(
+        session=session,
+        user_id=user_id,
+        days=days,
+        ad_group_id=ad_group_id,
+        min_impressions=min_impressions,
+    )
     return ASASearchTermReportOut(
         time_range={
             "start": cutoff.isoformat(),
             "end": date.today().isoformat(),
         },
-        rows=[
-            {
-                "search_term_id": r.id,
-                "text": r.text,
-                "match_type": r.match_type,
-                "ad_group_id": r.ad_group_id,
-                "impressions": int(r.imp or 0),
-                "taps": int(r.taps or 0),
-                "installs": int(r.ins or 0),
-                "spend": float(r.spend or 0),
-                "spend_currency": r.currency,
-            }
-            for r in rows
-        ],
+        rows=rows,
     )
 
 
@@ -267,44 +284,24 @@ async def performance_report(
     current_user: dict[str, Any] = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ASAPerformanceReportOut:
+    """Raw daily metric rows for one app at one grain (the client rolls these up)."""
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
-    cutoff = date.today() - timedelta(days=days)
-    stmt = (
-        select(ASAMetricDaily)
-        .where(
-            ASAMetricDaily.app_adam_id == app.asc_app_id,
-            ASAMetricDaily.dim_kind == grain,
-            ASAMetricDaily.date >= cutoff,
-        )
-        .order_by(ASAMetricDaily.date.desc())
+    cutoff, rows = await performance_rows(
+        session=session,
+        user_id=user_id,
+        app_adam_id=app.asc_app_id,
+        grain=grain,
+        days=days,
+        storefront=storefront,
     )
-    if storefront:
-        stmt = stmt.where(ASAMetricDaily.storefront == storefront)
-    rows = (await session.execute(stmt)).scalars().all()
     return ASAPerformanceReportOut(
         grain=grain,
         time_range={
             "start": cutoff.isoformat(),
             "end": date.today().isoformat(),
         },
-        rows=[
-            ASAMetricRow(
-                dim_kind=r.dim_kind, dim_id=r.dim_id,
-                app_adam_id=r.app_adam_id, date=r.date,
-                storefront=r.storefront,
-                impressions=r.impressions, taps=r.taps,
-                installs=r.installs, new_downloads=r.new_downloads,
-                redownloads=r.redownloads,
-                spend_amount=r.spend_amount,
-                spend_currency=r.spend_currency,
-                avg_cpa_amount=r.avg_cpa_amount,
-                avg_cpt_amount=r.avg_cpt_amount,
-                ttr=r.ttr,
-                conversion_rate=r.conversion_rate,
-            )
-            for r in rows
-        ],
+        rows=[ASAMetricRow.model_validate(r) for r in rows],
     )
 
 
@@ -322,7 +319,8 @@ async def insights_organic_candidates(
     user_id = int(current_user["user_id"])
     await _get_verified_app(app_id, user_id, session)
     return await suggest_organic_keywords_to_track(
-        session=session, app_id=app_id, days=days, min_taps=min_taps,
+        session=session, app_id=app_id, user_id=user_id, days=days,
+        min_taps=min_taps,
     )
 
 
@@ -341,7 +339,7 @@ async def insights_negative_candidates(
     user_id = int(current_user["user_id"])
     await _get_verified_app(app_id, user_id, session)
     return await suggest_negative_candidates(
-        session=session, app_id=app_id, days=days,
+        session=session, app_id=app_id, user_id=user_id, days=days,
         min_spend=min_spend, max_conv_rate=max_conv_rate,
     )
 
@@ -385,17 +383,7 @@ async def add_negative_keywords(
     if camp.app_adam_id != app.asc_app_id:
         raise HTTPException(403, "Campaign does not belong to this app")
 
-    org = (await session.execute(
-        select(ASAOrg).where(ASAOrg.id == camp.org_id)
-    )).scalar_one()
-    cred = (await session.execute(
-        select(ASACredential).where(
-            ASACredential.id == org.credential_id,
-            ASACredential.user_id == user_id,
-        )
-    )).scalar_one_or_none()
-    if cred is None:
-        raise HTTPException(403, "Org not owned by user")
+    org, cred = await _owned_org_credential_for_campaign(camp, user_id, session)
 
     client = await ASAClient.from_credential(cred)
     try:
@@ -469,17 +457,7 @@ async def remove_negative_keyword(
     if camp.app_adam_id != app.asc_app_id:
         raise HTTPException(403, "Negative does not belong to this app")
 
-    org = (await session.execute(
-        select(ASAOrg).where(ASAOrg.id == camp.org_id)
-    )).scalar_one()
-    cred = (await session.execute(
-        select(ASACredential).where(
-            ASACredential.id == org.credential_id,
-            ASACredential.user_id == user_id,
-        )
-    )).scalar_one_or_none()
-    if cred is None:
-        raise HTTPException(403, "Org not owned by user")
+    org, cred = await _owned_org_credential_for_campaign(camp, user_id, session)
 
     client = await ASAClient.from_credential(cred)
     try:

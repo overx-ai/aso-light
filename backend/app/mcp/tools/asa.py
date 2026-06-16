@@ -3,23 +3,21 @@
 Mirrors the REST surface in ``app.api.v1.asa[_app]`` but as 15 LLM-facing
 MCP tools. Auth chain runs through :func:`resolve_app` for app-scoped
 tools and a local :func:`_own_credential_for_user` for credential-scoped
-tools. Every :class:`HTTPException` from the REST helpers is caught and
-converted via :func:`_http_to_tool_error`; every :class:`ASAAPIError`
-from network calls is wrapped to a :class:`ToolError` carrying only the
-human-readable message.
+tools. :func:`resolve_app` already converts the REST helpers'
+:class:`HTTPException`s into :class:`ToolError`s; every :class:`ASAAPIError`
+from network calls is likewise wrapped to a :class:`ToolError` carrying only
+the human-readable message.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from typing import Any, Literal
 
-from fastapi import HTTPException
 from fastmcp.exceptions import ToolError
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.mcp.context import (
-    _http_to_tool_error,
     get_user_id,
     resolve_app,
     session_scope,
@@ -30,10 +28,8 @@ from app.models.asa import (
     ASACampaign,
     ASACredential,
     ASAKeyword,
-    ASAMetricDaily,
     ASANegativeKeyword,
     ASAOrg,
-    ASASearchTerm,
 )
 from app.schemas.asa import (
     ASAAdGroupOut,
@@ -52,6 +48,7 @@ from app.schemas.asa import (
 )
 from app.services.asa import campaigns as asa_campaigns
 from app.services.asa import cpp_ads as asa_cpp_ads
+from app.services.asa.analytics import performance_rows, search_term_report_rows
 from app.services.asa.client import ASAClient
 from app.services.asa.errors import ASAAPIError
 from app.services.asa.joins import (
@@ -63,8 +60,14 @@ from app.services.asa.sync import run_sync
 
 
 # ---------------------------------------------------------------------------
-# Local auth helpers
+# Local validation + auth helpers
 # ---------------------------------------------------------------------------
+
+
+def _validate_days(days: int) -> None:
+    """Reject out-of-range report windows (mirrors the REST ``Query`` bounds)."""
+    if days < 1 or days > 90:
+        raise ToolError("days must be between 1 and 90")
 
 
 async def _own_credential_for_user(
@@ -203,10 +206,7 @@ async def list_campaigns(
         user_id = get_user_id()
         stmt = select(ASACampaign)
         if app_id is not None:
-            try:
-                app = await resolve_app(app_id, session)
-            except HTTPException as exc:
-                raise _http_to_tool_error(exc) from exc
+            app = await resolve_app(app_id, session)
             stmt = stmt.where(ASACampaign.app_adam_id == app.asc_app_id)
         if org_id is not None:
             stmt = stmt.where(ASACampaign.org_id == org_id)
@@ -313,27 +313,19 @@ async def performance_report(
     days: int = 30,
     storefront: str | None = None,
 ) -> ASAPerformanceReportOut:
-    """Aggregated daily performance metrics over a window at one grain."""
-    if days < 1 or days > 90:
-        raise ToolError("days must be between 1 and 90")
+    """Raw daily performance rows over a window at one grain (the client rolls these up)."""
+    _validate_days(days)
     async with session_scope() as session:
-        try:
-            app = await resolve_app(app_id, session)
-        except HTTPException as exc:
-            raise _http_to_tool_error(exc) from exc
-        cutoff = date.today() - timedelta(days=days)
-        stmt = (
-            select(ASAMetricDaily)
-            .where(
-                ASAMetricDaily.app_adam_id == app.asc_app_id,
-                ASAMetricDaily.dim_kind == grain,
-                ASAMetricDaily.date >= cutoff,
-            )
-            .order_by(ASAMetricDaily.date.desc())
+        user_id = get_user_id()
+        app = await resolve_app(app_id, session)
+        cutoff, rows = await performance_rows(
+            session=session,
+            user_id=user_id,
+            app_adam_id=app.asc_app_id,
+            grain=grain,
+            days=days,
+            storefront=storefront,
         )
-        if storefront:
-            stmt = stmt.where(ASAMetricDaily.storefront == storefront)
-        rows = (await session.execute(stmt)).scalars().all()
         return ASAPerformanceReportOut(
             grain=grain,
             time_range={
@@ -357,66 +349,23 @@ async def search_term_report(
     (:tool:`asa.suggest_organic_keywords_to_track`) or to add as negatives
     (:tool:`asa.suggest_negative_candidates`).
     """
-    if days < 1 or days > 90:
-        raise ToolError("days must be between 1 and 90")
+    _validate_days(days)
     async with session_scope() as session:
-        try:
-            app = await resolve_app(app_id, session)
-        except HTTPException as exc:
-            raise _http_to_tool_error(exc) from exc
-        cutoff = date.today() - timedelta(days=days)
-        stmt = (
-            select(
-                ASASearchTerm.id,
-                ASASearchTerm.text,
-                ASASearchTerm.match_type,
-                ASASearchTerm.ad_group_id,
-                func.sum(ASAMetricDaily.impressions).label("imp"),
-                func.sum(ASAMetricDaily.taps).label("taps"),
-                func.sum(ASAMetricDaily.installs).label("ins"),
-                func.sum(ASAMetricDaily.spend_amount).label("spend"),
-                func.max(ASAMetricDaily.spend_currency).label("currency"),
-            )
-            .join(
-                ASAMetricDaily,
-                (ASAMetricDaily.dim_kind == "SEARCH_TERM")
-                & (ASAMetricDaily.dim_id == ASASearchTerm.id)
-                & (ASAMetricDaily.date >= cutoff)
-                & (ASAMetricDaily.app_adam_id == app.asc_app_id),
-            )
-            .group_by(
-                ASASearchTerm.id,
-                ASASearchTerm.text,
-                ASASearchTerm.match_type,
-                ASASearchTerm.ad_group_id,
-            )
+        user_id = get_user_id()
+        await resolve_app(app_id, session)
+        cutoff, rows = await search_term_report_rows(
+            session=session,
+            user_id=user_id,
+            days=days,
+            ad_group_id=ad_group_id,
+            min_impressions=min_impressions,
         )
-        if ad_group_id is not None:
-            stmt = stmt.where(ASASearchTerm.ad_group_id == ad_group_id)
-        if min_impressions is not None:
-            stmt = stmt.having(
-                func.sum(ASAMetricDaily.impressions) >= min_impressions,
-            )
-        rows = (await session.execute(stmt)).all()
         return ASASearchTermReportOut(
             time_range={
                 "start": cutoff.isoformat(),
                 "end": date.today().isoformat(),
             },
-            rows=[
-                {
-                    "search_term_id": r.id,
-                    "text": r.text,
-                    "match_type": r.match_type,
-                    "ad_group_id": r.ad_group_id,
-                    "impressions": int(r.imp or 0),
-                    "taps": int(r.taps or 0),
-                    "installs": int(r.ins or 0),
-                    "spend": float(r.spend or 0),
-                    "spend_currency": r.currency,
-                }
-                for r in rows
-            ],
+            rows=rows,
         )
 
 
@@ -429,15 +378,12 @@ async def paid_organic_join_tool(
     Tracked terms with no matching ASA keyword return zeros in the
     ``paid_*_30d`` columns. Useful for diagnosing paid+organic coverage gaps.
     """
-    if days < 1 or days > 90:
-        raise ToolError("days must be between 1 and 90")
+    _validate_days(days)
     async with session_scope() as session:
-        try:
-            await resolve_app(app_id, session)
-        except HTTPException as exc:
-            raise _http_to_tool_error(exc) from exc
+        user_id = get_user_id()
+        await resolve_app(app_id, session)
         rows = await paid_organic_join(
-            session=session, app_id=app_id, days=days,
+            session=session, app_id=app_id, user_id=user_id, days=days,
         )
         return [PaidOrganicJoinRow(**r) for r in rows]
 
@@ -456,17 +402,15 @@ async def suggest_organic(
     Surfaces ASA-driven discovery: terms users actually typed and tapped on
     in paid that you should consider tracking as organic.
     """
-    if days < 1 or days > 90:
-        raise ToolError("days must be between 1 and 90")
+    _validate_days(days)
     if min_taps < 1:
         raise ToolError("min_taps must be >= 1")
     async with session_scope() as session:
-        try:
-            await resolve_app(app_id, session)
-        except HTTPException as exc:
-            raise _http_to_tool_error(exc) from exc
+        user_id = get_user_id()
+        await resolve_app(app_id, session)
         return await suggest_organic_keywords_to_track(
-            session=session, app_id=app_id, days=days, min_taps=min_taps,
+            session=session, app_id=app_id, user_id=user_id, days=days,
+            min_taps=min_taps,
         )
 
 
@@ -478,20 +422,18 @@ async def suggest_negatives(
     max_conv_rate: float = 0.005,
 ) -> list[dict[str, Any]]:
     """Search terms with high spend and low conversion — negative-keyword candidates."""
-    if days < 1 or days > 90:
-        raise ToolError("days must be between 1 and 90")
+    _validate_days(days)
     if min_spend < 0:
         raise ToolError("min_spend must be >= 0")
     if not 0 <= max_conv_rate <= 1:
         raise ToolError("max_conv_rate must be between 0 and 1")
     async with session_scope() as session:
-        try:
-            await resolve_app(app_id, session)
-        except HTTPException as exc:
-            raise _http_to_tool_error(exc) from exc
+        user_id = get_user_id()
+        await resolve_app(app_id, session)
         return await suggest_negative_candidates(
             session=session,
             app_id=app_id,
+            user_id=user_id,
             days=days,
             min_spend=min_spend,
             max_conv_rate=max_conv_rate,

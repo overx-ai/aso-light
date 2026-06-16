@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.mcp.context import resolve_app, session_scope
+from app.mcp.context import get_user_id, resolve_app, session_scope
 from app.mcp.server import mcp
 from app.models.keyword import KeywordTracking
 from app.models.metadata import AppMetadataLocalization
@@ -79,7 +79,9 @@ async def aso_check_tool(app_id: int) -> AsoCheckOut:
 
         from app.services.asa.joins import paid_organic_join
 
-        paid = await paid_organic_join(session=session, app_id=app_id, days=30)
+        paid = await paid_organic_join(
+            session=session, app_id=app_id, user_id=get_user_id(), days=30,
+        )
         paid_coverage = (
             PaidCoverage(
                 tracked_with_paid=[

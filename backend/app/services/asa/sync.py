@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -77,11 +78,21 @@ def _start_date(cred: ASACredential, full_backfill: bool) -> date:
     return max(cred.last_synced_at.date() - timedelta(days=1), earliest)
 
 
+def _dec(value: Any) -> Decimal | None:
+    """Coerce an Apple-supplied numeric (often a string) to Decimal, or None.
+
+    Apple returns money/rate amounts as strings; ``Decimal(str(v))`` avoids the
+    binary-float rounding that ``float()`` would introduce.
+    """
+    return Decimal(str(value)) if value is not None else None
+
+
 def _record_metric(
     *,
     dim_kind: str,
     dim_id: int,
     app_adam_id: str,
+    credential_id: int,
     granularity_row: dict[str, Any],
 ) -> dict[str, Any]:
     """Build one ASAMetricDaily upsert dict from a granularity entry."""
@@ -89,6 +100,7 @@ def _record_metric(
         "dim_kind": dim_kind,
         "dim_id": dim_id,
         "app_adam_id": app_adam_id,
+        "credential_id": credential_id,
         "date": date.fromisoformat(granularity_row["date"]),
         "storefront": granularity_row.get("countryOrRegion"),
         "impressions": int(granularity_row.get("impressions") or 0),
@@ -96,12 +108,14 @@ def _record_metric(
         "installs": int(granularity_row.get("installs") or 0),
         "new_downloads": int(granularity_row.get("newDownloads") or 0),
         "redownloads": int(granularity_row.get("redownloads") or 0),
-        "spend_amount": float((granularity_row.get("localSpend") or {}).get("amount") or 0),
+        "spend_amount": Decimal(
+            str((granularity_row.get("localSpend") or {}).get("amount") or 0)
+        ),
         "spend_currency": (granularity_row.get("localSpend") or {}).get("currency") or "USD",
-        "avg_cpa_amount": (granularity_row.get("avgCPA") or {}).get("amount"),
-        "avg_cpt_amount": (granularity_row.get("avgCPT") or {}).get("amount"),
-        "ttr": granularity_row.get("ttr"),
-        "conversion_rate": granularity_row.get("conversionRate"),
+        "avg_cpa_amount": _dec((granularity_row.get("avgCPA") or {}).get("amount")),
+        "avg_cpt_amount": _dec((granularity_row.get("avgCPT") or {}).get("amount")),
+        "ttr": _dec(granularity_row.get("ttr")),
+        "conversion_rate": _dec(granularity_row.get("conversionRate")),
     }
 
 
@@ -415,6 +429,7 @@ async def run_sync(
                             dim_kind="CAMPAIGN",
                             dim_id=local.id,
                             app_adam_id=local.app_adam_id,
+                            credential_id=cred.id,
                             granularity_row=gp,
                         ))
                 metrics_total += await _upsert_metrics(session, payload)
@@ -452,6 +467,7 @@ async def run_sync(
                                 dim_kind="AD_GROUP",
                                 dim_id=local.id,
                                 app_adam_id=camp.app_adam_id,
+                                credential_id=cred.id,
                                 granularity_row=gp,
                             ))
                     metrics_total += await _upsert_metrics(session, payload)
@@ -492,6 +508,7 @@ async def run_sync(
                                     dim_kind="KEYWORD",
                                     dim_id=local.id,
                                     app_adam_id=camp.app_adam_id,
+                                    credential_id=cred.id,
                                     granularity_row=gp,
                                 ))
                         metrics_total += await _upsert_metrics(session, payload)
@@ -537,6 +554,7 @@ async def run_sync(
                                     dim_kind="SEARCH_TERM",
                                     dim_id=existing.id,
                                     app_adam_id=camp.app_adam_id,
+                                    credential_id=cred.id,
                                     granularity_row=gp,
                                 )
                                 for gp in (r.get("granularity") or [])

@@ -3318,7 +3318,8 @@ export type ASASearchTermReportRow = {
   impressions: number;
   taps: number;
   installs: number;
-  spend: number;
+  // Decimal serialized as a string (matches paid_spend_30d convention).
+  spend: string;
   spend_currency: string | null;
 };
 
@@ -3348,10 +3349,12 @@ export type ASANegativeCandidate = {
   search_term_id: number;
   text: string;
   ad_group_id: number;
-  spend: number;
+  // Decimal fields serialized as strings by the backend.
+  spend: string;
+  spend_currency: string;
   taps: number;
   installs: number;
-  conversion_rate: number;
+  conversion_rate: string;
 };
 
 const asaCredKey = ["asa", "credentials"] as const;

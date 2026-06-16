@@ -326,6 +326,14 @@ class ASAMetricDaily(TimestampMixin, Base):
     dim_kind: Mapped[str] = mapped_column(String(16))  # CAMPAIGN|AD_GROUP|KEYWORD|SEARCH_TERM
     dim_id: Mapped[int] = mapped_column(index=True)
     app_adam_id: Mapped[str] = mapped_column(String(32), index=True)
+    # Tenant-scoping: ties each metric row to the credential (and thus user)
+    # that synced it. Nullable so backfill can't fail on orphan rows; analytics
+    # queries fail closed on NULL (a NULL-credential row is invisible to all).
+    credential_id: Mapped[int | None] = mapped_column(
+        ForeignKey("asa_credentials.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     date: Mapped[date] = mapped_column(Date)
     storefront: Mapped[str | None] = mapped_column(String(8), nullable=True)
     impressions: Mapped[int] = mapped_column(default=0)

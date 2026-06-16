@@ -27,6 +27,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.app import App
 from app.models.asa import ASAAdGroup, ASACampaign, ASAMetricDaily, ASASearchTerm
+from app.models.credential import ASCCredential
+from app.services.asa.analytics import owned_credential_ids
 from app.services.keyword_intel.base import KeywordIntel, KeywordIntelProvider
 
 
@@ -88,6 +90,21 @@ class ASASearchTermsProvider(KeywordIntelProvider):
             return []
         adam_id = app.asc_app_id
 
+        # Scope metrics to the app owner's own ASA credentials. ``app_adam_id``
+        # is a shared Apple id, so two tenants advertising the same store app
+        # collide on it; without this filter one tenant's SEARCH_TERM metrics
+        # (their real user search queries + spend signals) would leak to the
+        # other via keyword-intel refresh (C1). Mirrors asa_recommendations.py.
+        owner_id = (
+            await session.execute(
+                select(ASCCredential.user_id).where(
+                    ASCCredential.id == app.credential_id
+                )
+            )
+        ).scalar_one_or_none()
+        if owner_id is None:
+            return []
+
         cutoff: date = (datetime.now(timezone.utc) - timedelta(days=days)).date()
 
         # Pull every metric row for SEARCH_TERM grain since the cutoff for
@@ -111,6 +128,7 @@ class ASASearchTermsProvider(KeywordIntelProvider):
                 ASAMetricDaily.dim_kind == "SEARCH_TERM",
                 ASAMetricDaily.app_adam_id == adam_id,
                 ASAMetricDaily.date >= cutoff,
+                ASAMetricDaily.credential_id.in_(owned_credential_ids(owner_id)),
             )
         )
         rows = (await session.execute(stmt)).all()

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from app.core.security import encrypt_value, hash_password
 from app.db.base import Base
@@ -43,10 +44,10 @@ async def _ensure_schema() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
-async def _seed_world(session) -> tuple[int, str, int]:
+async def _seed_world(session) -> tuple[int, str, int, int, int]:
     """Seed user → ASC cred → App with asc_app_id, plus ASA cred/org/campaign/ad_group.
 
-    Returns (app_id, asc_app_id, ad_group_id).
+    Returns (app_id, asc_app_id, ad_group_id, user_id, asa_credential_id).
     """
     suffix = uuid.uuid4().hex[:8]
     user = User(
@@ -118,7 +119,7 @@ async def _seed_world(session) -> tuple[int, str, int]:
     )
     session.add(ag)
     await session.flush()
-    return app.id, asc_app_id, ag.id
+    return app.id, asc_app_id, ag.id, user.id, asa_cred.id
 
 
 async def _ensure_territory(session, code: str = "US") -> int:
@@ -168,7 +169,7 @@ def test_paid_organic_join_merges_paid_and_organic():
     async def go():
         await _ensure_schema()
         async with async_session_factory() as session:
-            app_id, asc_app_id, ag_id = await _seed_world(session)
+            app_id, asc_app_id, ag_id, user_id, cred_id = await _seed_world(session)
             terr_id = await _ensure_territory(session)
             kw = ASAKeyword(
                 ad_group_id=ag_id,
@@ -185,6 +186,7 @@ def test_paid_organic_join_merges_paid_and_organic():
                     dim_kind="KEYWORD",
                     dim_id=kw.id,
                     app_adam_id=asc_app_id,
+                    credential_id=cred_id,
                     date=today,
                     impressions=1000,
                     taps=100,
@@ -203,7 +205,7 @@ def test_paid_organic_join_merges_paid_and_organic():
             )
             await session.commit()
             return await paid_organic_join(
-                session=session, app_id=app_id, days=30,
+                session=session, app_id=app_id, user_id=user_id, days=30,
             )
 
     rows = asyncio.run(go())
@@ -218,7 +220,7 @@ def test_suggest_organic_keywords_to_track_filters_min_taps_and_existing():
     async def go():
         await _ensure_schema()
         async with async_session_factory() as session:
-            app_id, asc_app_id, ag_id = await _seed_world(session)
+            app_id, asc_app_id, ag_id, user_id, cred_id = await _seed_world(session)
             terr_id = await _ensure_territory(session)
             high = ASASearchTerm(
                 ad_group_id=ag_id, text="winning term",
@@ -238,21 +240,21 @@ def test_suggest_organic_keywords_to_track_filters_min_taps_and_existing():
             session.add(
                 ASAMetricDaily(
                     dim_kind="SEARCH_TERM", dim_id=high.id,
-                    app_adam_id=asc_app_id, date=today,
+                    app_adam_id=asc_app_id, credential_id=cred_id, date=today,
                     taps=50, installs=5, spend_amount=20, spend_currency="USD",
                 )
             )
             session.add(
                 ASAMetricDaily(
                     dim_kind="SEARCH_TERM", dim_id=low.id,
-                    app_adam_id=asc_app_id, date=today,
+                    app_adam_id=asc_app_id, credential_id=cred_id, date=today,
                     taps=5, installs=0, spend_amount=2, spend_currency="USD",
                 )
             )
             session.add(
                 ASAMetricDaily(
                     dim_kind="SEARCH_TERM", dim_id=already.id,
-                    app_adam_id=asc_app_id, date=today,
+                    app_adam_id=asc_app_id, credential_id=cred_id, date=today,
                     taps=80, installs=8, spend_amount=40, spend_currency="USD",
                 )
             )
@@ -262,7 +264,8 @@ def test_suggest_organic_keywords_to_track_filters_min_taps_and_existing():
             )
             await session.commit()
             return await suggest_organic_keywords_to_track(
-                session=session, app_id=app_id, days=30, min_taps=20,
+                session=session, app_id=app_id, user_id=user_id, days=30,
+                min_taps=20,
             )
 
     out = asyncio.run(go())
@@ -276,7 +279,7 @@ def test_suggest_negative_candidates_low_conv_high_spend():
     async def go():
         await _ensure_schema()
         async with async_session_factory() as session:
-            app_id, asc_app_id, ag_id = await _seed_world(session)
+            app_id, asc_app_id, ag_id, user_id, cred_id = await _seed_world(session)
             wasteful = ASASearchTerm(
                 ad_group_id=ag_id, text="wasteful term",
                 match_type="BROAD", source="SEARCHTERM",
@@ -287,19 +290,20 @@ def test_suggest_negative_candidates_low_conv_high_spend():
             session.add(
                 ASAMetricDaily(
                     dim_kind="SEARCH_TERM", dim_id=wasteful.id,
-                    app_adam_id=asc_app_id, date=today,
+                    app_adam_id=asc_app_id, credential_id=cred_id, date=today,
                     taps=1000, installs=2,
                     spend_amount=200, spend_currency="USD",
                 )
             )
             await session.commit()
             return await suggest_negative_candidates(
-                session=session, app_id=app_id, days=30,
+                session=session, app_id=app_id, user_id=user_id, days=30,
                 min_spend=10.0, max_conv_rate=0.005,
             )
 
     out = asyncio.run(go())
     assert any(r["text"] == "wasteful term" for r in out)
     rec = next(r for r in out if r["text"] == "wasteful term")
-    assert rec["spend"] >= 10.0
-    assert rec["conversion_rate"] <= 0.005
+    assert rec["spend"] >= 10  # Decimal compares fine against int
+    assert rec["spend_currency"] == "USD"  # M5: currency now returned
+    assert rec["conversion_rate"] <= Decimal("0.005")

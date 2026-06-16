@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import {
   Alert,
   Badge,
+  Box,
   Button,
   Container,
   Group,
@@ -83,6 +84,18 @@ function NoASAState() {
     <Alert color="blue" icon={<IconAlertCircle size={16} />}>
       <Text size="sm">
         Connect Apple Search Ads in <strong>Settings</strong> to see paid data.
+      </Text>
+    </Alert>
+  );
+}
+
+// ----- Error state shown when an analytics query fails (vs. genuinely empty) -----
+
+function ErrorState({ message }: { message?: string }) {
+  return (
+    <Alert color="red" icon={<IconAlertCircle size={16} />}>
+      <Text size="sm">
+        {message ?? "Couldn't load paid data. Please try again."}
       </Text>
     </Alert>
   );
@@ -176,6 +189,10 @@ function OverviewTab({ appId }: { appId: number }) {
     );
   }
 
+  if (perf.isError) {
+    return <ErrorState message="Couldn't load paid performance data." />;
+  }
+
   return (
     <Stack gap="md">
       <Group gap="md" wrap="wrap">
@@ -259,6 +276,11 @@ function OverviewTab({ appId }: { appId: number }) {
           <Text size="xs" c="dimmed" px="md" mb="xs">
             Search terms with high paid taps that you don't track organically yet.
           </Text>
+          {organicCandidates.isError && (
+            <Box px="md" pb="xs">
+              <ErrorState message="Couldn't load organic-tracking candidates." />
+            </Box>
+          )}
           <DataTable<ASAOrganicCandidate>
             withTableBorder={false}
             striped
@@ -311,6 +333,11 @@ function OverviewTab({ appId }: { appId: number }) {
           <Text size="xs" c="dimmed" px="md" mb="xs">
             Search terms with paid spend but very low conversion — consider blocking.
           </Text>
+          {negativeCandidates.isError && (
+            <Box px="md" pb="xs">
+              <ErrorState message="Couldn't load negative-keyword candidates." />
+            </Box>
+          )}
           <DataTable<ASANegativeCandidate>
             withTableBorder={false}
             striped
@@ -325,14 +352,14 @@ function OverviewTab({ appId }: { appId: number }) {
                 title: "Spend",
                 width: 90,
                 textAlign: "right" as const,
-                render: (r) => formatMoney(r.spend, null),
+                render: (r) => formatMoney(r.spend, r.spend_currency),
               },
               {
                 accessor: "conversion_rate",
                 title: "CR",
                 width: 70,
                 textAlign: "right" as const,
-                render: (r) => `${(r.conversion_rate * 100).toFixed(2)}%`,
+                render: (r) => `${(parseFloat(r.conversion_rate) * 100).toFixed(2)}%`,
               },
               {
                 accessor: "actions",
@@ -744,6 +771,10 @@ function SearchTermsTab({ appId }: { appId: number }) {
         />
       </Group>
 
+      {report.isError && (
+        <ErrorState message="Couldn't load search-term data." />
+      )}
+
       <Paper withBorder radius="md">
         <DataTable<ASASearchTermReportRow>
           withTableBorder={false}
@@ -860,14 +891,8 @@ function NegativesTab({ appId }: { appId: number }) {
 
   const adGroups = useASAAdGroups(appId, campaignId ? Number(campaignId) : 0);
 
-  const scopeId =
-    scope === "CAMPAIGN"
-      ? campaignId
-        ? Number(campaignId)
-        : null
-      : adGroupId
-        ? Number(adGroupId)
-        : null;
+  const activeScopeRaw = scope === "CAMPAIGN" ? campaignId : adGroupId;
+  const scopeId = activeScopeRaw ? Number(activeScopeRaw) : null;
 
   const negatives = useASANegativeKeywords(appId, scope, scopeId);
   const addNegatives = useAddNegativeKeywords();
