@@ -21,6 +21,7 @@ import { DataTable } from "mantine-datatable";
 import {
   IconAlertCircle,
   IconChartBar,
+  IconDownload,
   IconPlayerPlay,
   IconPlus,
   IconTrash,
@@ -29,12 +30,17 @@ import {
   useAddVisibilityWatch,
   useApp,
   useDeleteVisibilityWatch,
+  useExportCompetitorSites,
   usePollVisibilityWatch,
   useVisibilityAnomalies,
   useVisibilitySov,
   useVisibilityWatches,
 } from "@/lib/hooks";
-import type { AnomalyKind, VisibilityWatchOut } from "@/types";
+import type {
+  AnomalyKind,
+  CompetitorSiteOut,
+  VisibilityWatchOut,
+} from "@/types";
 import VisibilityDrawer from "@/components/visibility/VisibilityDrawer";
 
 const ANOMALY_BADGE: Record<
@@ -74,6 +80,61 @@ const COUNTRY_OPTIONS = [
   { value: "ca", label: "CA" },
 ];
 
+const CSV_HEADERS = [
+  "name",
+  "seller",
+  "website",
+  "app_store_url",
+  "keywords",
+] as const;
+
+/** RFC-4180-style escaping plus spreadsheet formula-injection neutralization.
+ * App/seller names come from the external iTunes API, so a field starting with
+ * = + - @ (or tab/CR) is prefixed with a single quote to stop Excel/Sheets from
+ * evaluating it as a formula on open; then quoted if it contains a comma, quote,
+ * or newline. */
+function csvEscape(value: string): string {
+  const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+}
+
+function buildCsv(items: CompetitorSiteOut[]): string {
+  const rows = items.map((it) =>
+    [
+      it.name,
+      it.seller ?? "",
+      it.website ?? "",
+      it.app_store_url ?? "",
+      it.keywords.join("; "),
+    ]
+      .map(csvEscape)
+      .join(","),
+  );
+  return [CSV_HEADERS.join(","), ...rows].join("\n");
+}
+
+/** Lower-case, collapse non-alphanumerics to hyphens for a safe filename. */
+function sanitizeFilename(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "app"
+  );
+}
+
+function downloadCsv(filename: string, csv: string): void {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 export default function VisibilityPage() {
   const { id } = useParams<{ id: string }>();
   const appId = id ? Number(id) : 0;
@@ -85,6 +146,7 @@ export default function VisibilityPage() {
   const addMutation = useAddVisibilityWatch(appId);
   const deleteMutation = useDeleteVisibilityWatch(appId);
   const pollMutation = usePollVisibilityWatch(appId);
+  const exportMutation = useExportCompetitorSites(appId);
 
   const [newText, setNewText] = useState("");
   const [newCountry, setNewCountry] = useState("us");
@@ -120,12 +182,33 @@ export default function VisibilityPage() {
     setDrawerOpen(true);
   };
 
+  const handleExportSites = () => {
+    exportMutation.mutate(undefined, {
+      onSuccess: (items) => {
+        const base = sanitizeFilename(app?.name ?? "app");
+        downloadCsv(`${base}-competitor-sites.csv`, buildCsv(items));
+      },
+    });
+  };
+
   return (
     <Container size="xl">
       <div style={{ marginBottom: "var(--mantine-spacing-md)" }}>
-        <Group gap="sm" align="center">
-          <IconChartBar size={22} />
-          <Title order={2}>{app?.name ?? "App"} — Keyword Visibility</Title>
+        <Group justify="space-between" align="center" wrap="nowrap">
+          <Group gap="sm" align="center">
+            <IconChartBar size={22} />
+            <Title order={2}>{app?.name ?? "App"} — Keyword Visibility</Title>
+          </Group>
+          <Button
+            leftSection={<IconDownload size={14} />}
+            variant="light"
+            size="xs"
+            onClick={handleExportSites}
+            loading={exportMutation.isPending}
+            disabled={watches.length === 0}
+          >
+            Export sites (CSV)
+          </Button>
         </Group>
         <Text c="dimmed" size="sm" mt={4}>
           Track who shows up in iTunes search for the keywords you care about.

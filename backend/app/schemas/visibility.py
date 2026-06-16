@@ -105,3 +105,19 @@ class WatchAnomaliesOut(BaseModel):
 
 class AnomaliesOut(BaseModel):
     items: list[WatchAnomaliesOut]
+
+
+# ---- Competitor developer sites ----
+
+
+class CompetitorSiteOut(BaseModel):
+    track_id: str
+    name: str
+    seller: str | None = None
+    website: str | None = None
+    app_store_url: str | None = None
+    keywords: list[str] = []
+
+
+class CompetitorSitesOut(BaseModel):
+    items: list[CompetitorSiteOut]

@@ -767,6 +767,19 @@ export interface AnomaliesOut {
   items: WatchAnomaliesOut[];
 }
 
+export interface CompetitorSiteOut {
+  track_id: string;
+  name: string;
+  seller: string | null;
+  website: string | null;
+  app_store_url: string | null;
+  keywords: string[];
+}
+
+export interface CompetitorSitesOut {
+  items: CompetitorSiteOut[];
+}
+
 // ---- ASO Check ----
 
 export type AsoIssueSeverity = "error" | "warning" | "info";

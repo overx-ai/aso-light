@@ -20,6 +20,8 @@ from app.models.visibility import (
 from app.schemas.visibility import (
     AnomaliesOut,
     AnomalyOut,
+    CompetitorSiteOut,
+    CompetitorSitesOut,
     FullSovOut,
     SnapshotListOut,
     SovOut,
@@ -31,6 +33,7 @@ from app.schemas.visibility import (
     is_known_storefront,
 )
 from app.services.visibility.anomaly import detect_anomalies
+from app.services.visibility.competitors import collect_competitor_sites
 from app.services.visibility.poller import poll_watch
 from app.services.visibility.queries import (
     compute_sov_for_watch,
@@ -337,3 +340,51 @@ async def share_of_voice(
             )
         )
     return FullSovOut(items=items)
+
+
+# ----------------------------------------------------------------------
+# Competitor developer sites
+# ----------------------------------------------------------------------
+
+
+@router.get(
+    "/{app_id}/visibility/competitors", response_model=CompetitorSitesOut,
+)
+async def competitor_sites(
+    app_id: int,
+    watch_id: int | None = Query(default=None),
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> CompetitorSitesOut:
+    """Export the developer websites of competitor apps that appear in this
+    app's visibility watches.
+
+    Pulls the distinct competitor apps from each watch's latest snapshot and
+    enriches them (developer website + App Store URL) via a single batched
+    iTunes lookup. Pass ``watch_id`` to scope the export to one watch.
+    """
+    user_id = int(current_user["user_id"])
+    await _get_verified_app(app_id, user_id, session)
+
+    if watch_id is not None:
+        watches = [await _load_watch(session, app_id, watch_id)]
+    else:
+        stmt = select(KeywordVisibilityWatch).where(
+            KeywordVisibilityWatch.app_id == app_id,
+        )
+        watches = list((await session.execute(stmt)).scalars().all())
+
+    try:
+        sites = await collect_competitor_sites(session, watches=watches)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — never leak raw tracebacks
+        logger.exception("competitor_sites failed for app_id=%s", app_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not collect competitor sites.",
+        ) from exc
+
+    return CompetitorSitesOut(
+        items=[CompetitorSiteOut(**s) for s in sites],
+    )

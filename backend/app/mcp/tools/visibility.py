@@ -24,6 +24,8 @@ from app.models.visibility import (
 from app.schemas.visibility import (
     AnomaliesOut,
     AnomalyOut,
+    CompetitorSiteOut,
+    CompetitorSitesOut,
     FullSovOut,
     SnapshotListOut,
     SovOut,
@@ -35,6 +37,7 @@ from app.schemas.visibility import (
     is_known_storefront,
 )
 from app.services.visibility.anomaly import detect_anomalies
+from app.services.visibility.competitors import collect_competitor_sites
 from app.services.visibility.poller import poll_watch as poll_watch_service
 from app.services.visibility.queries import (
     compute_sov_for_watch,
@@ -306,3 +309,44 @@ async def get_sov(app_id: int, days: int = 30) -> FullSovOut:
                 )
             )
         return FullSovOut(items=items)
+
+
+# ---------------------------------------------------------------------------
+# Competitor developer sites
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="visibility.competitor_sites")
+async def competitor_sites(
+    app_id: int,
+    watch_id: int | None = None,
+) -> CompetitorSitesOut:
+    """Export the developer websites of competitor apps appearing in an app's
+    visibility watches.
+
+    Collects the distinct competitor apps from each watch's latest snapshot and
+    enriches them with developer website + App Store URL via a single batched
+    iTunes lookup. Pass ``watch_id`` to scope the export to one watch.
+    """
+    async with session_scope() as session:
+        await resolve_app(app_id, session)
+
+        if watch_id is not None:
+            watches = [await _load_watch(session, app_id, watch_id)]
+        else:
+            stmt = select(KeywordVisibilityWatch).where(
+                KeywordVisibilityWatch.app_id == app_id,
+            )
+            watches = list((await session.execute(stmt)).scalars().all())
+
+        try:
+            sites = await collect_competitor_sites(session, watches=watches)
+        except ToolError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never leak raw tracebacks
+            logger.exception("competitor_sites failed for app_id=%s", app_id)
+            raise ToolError("Could not collect competitor sites.") from exc
+
+        return CompetitorSitesOut(
+            items=[CompetitorSiteOut(**s) for s in sites],
+        )

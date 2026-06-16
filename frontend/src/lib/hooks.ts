@@ -90,6 +90,8 @@ import type {
   VisibilitySnapshotOut,
   VisibilitySnapshotListOut,
   VisibilityWatchCreate,
+  CompetitorSiteOut,
+  CompetitorSitesOut,
   FullSovOut,
   GrowthRecommendationsOut,
 } from "@/types";
@@ -3121,6 +3123,30 @@ export function usePollVisibilityWatch(appId: number) {
       notifications.show({
         title: "Poll failed",
         message: ascErrorMessage(error, "Could not poll iTunes."),
+        color: "red",
+      });
+    },
+  });
+}
+
+// On-demand export: a click-triggered live iTunes lookup, so a mutation (not a
+// query) keeps it from auto-running on page load. Returns the enriched rows for
+// the caller to turn into a CSV download.
+export function useExportCompetitorSites(appId: number) {
+  return useMutation({
+    mutationFn: async (
+      watchId?: number,
+    ): Promise<CompetitorSiteOut[]> => {
+      const response = await api.get<CompetitorSitesOut>(
+        `/apps/${appId}/visibility/competitors`,
+        watchId != null ? { params: { watch_id: watchId } } : undefined,
+      );
+      return response.data.items;
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Export failed",
+        message: ascErrorMessage(error, "Could not collect competitor sites."),
         color: "red",
       });
     },
