@@ -82,14 +82,6 @@ def _step(name: str, status: str = "pending", **extra: Any) -> dict:
     return out
 
 
-def _alpha2(alpha3: str) -> str | None:
-    """Reverse ALPHA2_TO_ALPHA3 lookup. None if not in our table."""
-    for a2, a3 in ALPHA2_TO_ALPHA3.items():
-        if a3 == alpha3:
-            return a2
-    return None
-
-
 def _decode_offer_id(offer_id: str) -> dict[str, Any]:
     """Decode Apple's opaque introductory-offer ID.
 
@@ -641,6 +633,7 @@ class SubscriptionCloner:
         # accepts CREATE / GET_INSTANCE. Posting a fresh record with an
         # empty territory list replaces the existing availability,
         # taking the source off sale (existing subscribers keep access).
+        archive_status = "skipped"
         if scope.get("auto_archive", True):
             steps.append(_step("archive_source", "running"))
             try:
@@ -649,6 +642,7 @@ class SubscriptionCloner:
                     available_alpha3_codes=[],
                     available_in_new_territories=False,
                 )
+                archive_status = "done"
                 steps[-1] = _step(
                     "archive_source", "done",
                     detail=(
@@ -657,6 +651,7 @@ class SubscriptionCloner:
                     ),
                 )
             except ASCAPIError as exc:
+                archive_status = "failed"
                 steps[-1] = _step(
                     "archive_source", "failed", detail=str(exc),
                 )
@@ -668,6 +663,7 @@ class SubscriptionCloner:
             "target_asc_id": new_asc_id,
             "target_local_id": new_local.id if new_local else None,
             "subscription_period": period,
+            "archive_status": archive_status,
         }
 
 
@@ -909,7 +905,11 @@ class IAPCloner:
                 steps[-1] = _step("screenshot", "failed", detail=str(exc))
                 errors.append(f"screenshot: {exc}")
 
-        # Step 6: archive source by clearing its price schedule
+        # Step 6: archive source.
+        # Apple exposes no IAP-archive API, so the old IAP stays live in
+        # the App Store. The operator must remove it from the next App
+        # Version submission manually; ``archive_status="skipped"`` lets
+        # the finalize surface that warning.
         if scope.get("auto_archive", True):
             steps.append(_step(
                 "archive_source", "skipped",
@@ -924,6 +924,7 @@ class IAPCloner:
             "errors": errors,
             "target_asc_id": new_asc_id,
             "target_local_id": new_local.id if new_local else None,
+            "archive_status": "skipped",
         }
 
 

@@ -223,10 +223,16 @@ class IntroOfferApplyConfig(BaseModel):
 
 
 class PriceApplyRequest(BaseModel):
-    """Request body for applying prices to a subscription."""
+    """Request body for applying prices to a subscription or IAP."""
 
     items: list[PriceApplyItem]
     intro_offer: IntroOfferApplyConfig | None = None
+    # IAP-only: alpha-2 territory whose price acts as Apple's master
+    # fallback for any territory the schedule omits. Apple rejects the
+    # whole ``inAppPurchasePriceSchedule`` when the baseTerritory has no
+    # manual price, so the IAP apply path ensures it is present in the
+    # submitted ``manualPrices``. Ignored by the subscription apply path.
+    base_territory_code: str = "US"
 
 
 class PriceApplySkippedItem(BaseModel):
@@ -344,6 +350,10 @@ class LocalizationResponse(BaseModel):
     locale: str
     name: str
     description: str
+    # ASC localization state (PREPARE_FOR_SUBMISSION, REJECTED, APPROVED,
+    # ...). ``_parse_localization`` already supplies it; surfacing it here
+    # powers the documented REJECTED-recovery filter in the UI.
+    state: str | None = None
 
 
 class BulkLocalizationRequest(BaseModel):
@@ -353,11 +363,18 @@ class BulkLocalizationRequest(BaseModel):
 
 
 class BulkLocalizationResponse(BaseModel):
-    """Result of a bulk localization sync."""
+    """Result of a bulk localization sync.
+
+    ``failed`` / ``errors`` isolate per-locale ASC failures so one bad
+    locale no longer aborts the whole batch (mirrors the per-territory
+    error collection in ``apply_*_prices``).
+    """
 
     created: int
     updated: int
     localizations: list[LocalizationResponse]
+    failed: int = 0
+    errors: list[str] = []
 
 
 class PriceResolveRequest(BaseModel):
@@ -519,9 +536,14 @@ class IntroOfferResponse(BaseModel):
 
     id: str
     territory_code: str | None
-    offer_mode: IntroOfferMode
-    duration: IntroOfferDuration
-    number_of_periods: int
+    # Apple occasionally returns an intro-offer resource with a missing or
+    # unrecognized offerMode/duration (e.g. list responses that omit
+    # attributes). Widen to ``| None`` so a read never 500s with a
+    # ResponseValidationError; the create path still validates strictly
+    # via ``IntroOfferCreate``.
+    offer_mode: IntroOfferMode | None = None
+    duration: IntroOfferDuration | None = None
+    number_of_periods: int = 1
     price_point_id: str | None = None
     start_date: date | None = None
     end_date: date | None = None

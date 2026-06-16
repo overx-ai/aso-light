@@ -16,7 +16,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.api.v1._deps import _get_asc_client_for_app, _get_verified_app
 from app.core.security import get_current_user
@@ -38,7 +37,6 @@ from app.services.asc.clone import (
     SubscriptionCloner,
     next_versioned_product_id,
 )
-from app.services.asc.errors import ASCAPIError
 from app.services.asc.pricing import ASCPricingService
 from app.services.revenuecat.client import RevenueCatClient
 from app.services.revenuecat.errors import RevenueCatAPIError
@@ -60,6 +58,14 @@ _PERIOD_TO_ISO: dict[str, str] = {
     "THREE_MONTHS": "P3M",
     "SIX_MONTHS": "P6M",
     "ONE_YEAR": "P1Y",
+}
+
+# ASC inAppPurchaseType -> RevenueCat product_type. Shared by the REST
+# clone_iap route and the MCP swap.iap tool so the mapping lives once.
+_IAP_TYPE_TO_RC: dict[str, str] = {
+    "CONSUMABLE": "consumable",
+    "NON_CONSUMABLE": "non_consumable",
+    "NON_RENEWING_SUBSCRIPTION": "non_renewable",
 }
 
 
@@ -151,13 +157,122 @@ def _normalize_steps(raw: Any) -> list[dict]:
 
 
 def _overall_status(asc_errs: list[str], rc_errs: list[str]) -> str:
-    if asc_errs and not rc_errs:
-        return "partial"
-    if rc_errs and not asc_errs:
-        return "partial"
-    if asc_errs and rc_errs:
+    """``partial`` if either side reported errors, else ``done``."""
+    if asc_errs or rc_errs:
         return "partial"
     return "done"
+
+
+ARCHIVE_INCOMPLETE_WARNING = (
+    "ASC archive incomplete — verify the old product is off sale before "
+    "relying on the swap."
+)
+IAP_STILL_LIVE_WARNING = (
+    "Old IAP is still live in the App Store — remove it from your next App "
+    "Version submission manually; keep honoring it server-side until then."
+)
+
+
+def _swap_warnings(source_kind: str, archive_status: str | None) -> list[str]:
+    """Operator-facing warnings derived from the ASC archive outcome.
+
+    Distinguishes a true archive failure (subscription) and the
+    Apple-can't-archive-an-IAP case from a cosmetic partial, so the
+    operator is never told "all good" while the old product is still on
+    sale (A-I2 / A-I3).
+    """
+    warnings: list[str] = []
+    if source_kind == "iap":
+        # Apple has no IAP-archive API: the old IAP always stays live.
+        if archive_status in {"skipped", "failed", None}:
+            warnings.append(IAP_STILL_LIVE_WARNING)
+    elif archive_status in {"failed", "skipped"}:
+        warnings.append(ARCHIVE_INCOMPLETE_WARNING)
+    return warnings
+
+
+async def finalize_swap(
+    *,
+    op: CloneOperation,
+    app: App,
+    user_id: int,
+    session: AsyncSession,
+    swap_revenuecat: bool,
+    old_product_id: str,
+    new_product_id: str,
+    product_type: str,
+    display_name: str,
+    asc_errs: list[str],
+    source_kind: str,
+    archive_status: str | None,
+    subscription_period: str | None = None,
+) -> dict[str, Any]:
+    """Run the optional RC swap and finalize the CloneOperation row.
+
+    Single source of truth for the "set target_asc_id is already done →
+    run RC swap → compute status → set completed_at → derive swap-health
+    flags + warnings" sequence shared by REST ``clone_subscription`` /
+    ``clone_iap`` and the MCP ``swap.*`` finalize.
+
+    ``op.target_asc_id``/``op.asc_steps_json`` must already be populated
+    from the cloner result. Mutates ``op`` (status, error log, RC steps,
+    completed_at). Returns the health flags + warnings so each caller can
+    shape its own response (REST ``CloneOperationOut`` vs MCP
+    ``SwapResponse``).
+    """
+    rc_errs: list[str] = []
+    rc_cred = await _get_rc_credential(app, user_id, session)
+    rc_connected = rc_cred is not None
+
+    if swap_revenuecat and op.target_asc_id and rc_cred is not None:
+        async with RevenueCatClient.from_credential(rc_cred) as rc_client:
+            swap = RevenueCatProductSwap(rc_client, rc_cred.rc_app_id)
+            try:
+                swap_result = await swap.swap(
+                    old_store_id=old_product_id,
+                    new_store_id=new_product_id,
+                    product_type=product_type,
+                    subscription_period=subscription_period,
+                    display_name=display_name,
+                )
+                op.revenuecat_steps_json = _normalize_steps(
+                    swap_result.get("steps"),
+                )
+                rc_errs = swap_result.get("errors") or []
+            except RevenueCatAPIError as exc:
+                rc_errs = [f"swap: {exc}"]
+                op.revenuecat_steps_json = [
+                    {"name": "swap", "status": "failed", "detail": str(exc)},
+                ]
+
+    warnings = _swap_warnings(source_kind, archive_status)
+
+    if op.target_asc_id is None:
+        op.status = "failed"
+    else:
+        op.status = _overall_status(asc_errs, rc_errs)
+    op.error_log_json = (
+        asc_errs + [f"revenuecat: {e}" for e in rc_errs] + warnings
+    )
+    if op.status in {"done", "partial"}:
+        op.completed_at = datetime.now(timezone.utc)
+    await session.flush()
+    await session.refresh(op)
+
+    # A-I1: ``rc_swap_ok`` must reflect ASC health, not just RC. If the
+    # ASC archive failed, the OLD product is still on sale and the iOS
+    # "no change required" path must NOT be claimed.
+    rc_swap_ok = (
+        rc_connected
+        and not rc_errs
+        and not asc_errs
+        and op.target_asc_id is not None
+    )
+    return {
+        "rc_connected": rc_connected,
+        "rc_swap_ok": rc_swap_ok,
+        "warnings": warnings,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -389,44 +504,25 @@ async def clone_subscription(
 
     op.target_asc_id = result.get("target_asc_id")
     op.asc_steps_json = result.get("steps") or []
-    op.error_log_json = result.get("errors") or []
-    asc_errs = list(op.error_log_json)
+    asc_errs = list(result.get("errors") or [])
 
-    rc_errs: list[str] = []
-    if body.swap_revenuecat and op.target_asc_id:
-        rc_cred = await _get_rc_credential(app, user_id, session)
-        if rc_cred is not None:
-            async with RevenueCatClient.from_credential(rc_cred) as rc_client:
-                swap = RevenueCatProductSwap(rc_client, rc_cred.rc_app_id)
-                try:
-                    swap_result = await swap.swap(
-                        old_store_id=sub.product_id,
-                        new_store_id=body.new_product_id,
-                        product_type="subscription",
-                        subscription_period=_PERIOD_TO_ISO.get(
-                            result.get("subscription_period", ""),
-                        ),
-                        display_name=body.new_name or sub.name,
-                    )
-                    op.revenuecat_steps_json = _normalize_steps(
-                        swap_result.get("steps"),
-                    )
-                    rc_errs = swap_result.get("errors") or []
-                except RevenueCatAPIError as exc:
-                    rc_errs = [f"swap: {exc}"]
-                    op.revenuecat_steps_json = [
-                        {"name": "swap", "status": "failed", "detail": str(exc)},
-                    ]
-
-    if op.target_asc_id is None:
-        op.status = "failed"
-    else:
-        op.status = _overall_status(asc_errs, rc_errs)
-    op.error_log_json = asc_errs + [f"revenuecat: {e}" for e in rc_errs]
-    if op.status in {"done", "partial"}:
-        op.completed_at = datetime.now(timezone.utc)
-    await session.flush()
-    await session.refresh(op)
+    await finalize_swap(
+        op=op,
+        app=app,
+        user_id=user_id,
+        session=session,
+        swap_revenuecat=body.swap_revenuecat,
+        old_product_id=sub.product_id,
+        new_product_id=body.new_product_id,
+        product_type="subscription",
+        display_name=body.new_name or sub.name,
+        asc_errs=asc_errs,
+        source_kind="subscription",
+        archive_status=result.get("archive_status"),
+        subscription_period=_PERIOD_TO_ISO.get(
+            result.get("subscription_period", ""),
+        ),
+    )
     return _row_to_out(op)
 
 
@@ -484,45 +580,20 @@ async def clone_iap(
     op.asc_steps_json = result.get("steps") or []
     asc_errs = list(result.get("errors") or [])
 
-    rc_errs: list[str] = []
-    if body.swap_revenuecat and op.target_asc_id:
-        rc_cred = await _get_rc_credential(app, user_id, session)
-        if rc_cred is not None:
-            iap_type_to_rc = {
-                "CONSUMABLE": "consumable",
-                "NON_CONSUMABLE": "non_consumable",
-                "NON_RENEWING_SUBSCRIPTION": "non_renewable",
-            }
-            async with RevenueCatClient.from_credential(rc_cred) as rc_client:
-                swap = RevenueCatProductSwap(rc_client, rc_cred.rc_app_id)
-                try:
-                    swap_result = await swap.swap(
-                        old_store_id=iap.product_id,
-                        new_store_id=body.new_product_id,
-                        product_type=iap_type_to_rc.get(
-                            iap.iap_type, "non_consumable",
-                        ),
-                        display_name=body.new_name or iap.name,
-                    )
-                    op.revenuecat_steps_json = _normalize_steps(
-                        swap_result.get("steps"),
-                    )
-                    rc_errs = swap_result.get("errors") or []
-                except RevenueCatAPIError as exc:
-                    rc_errs = [f"swap: {exc}"]
-                    op.revenuecat_steps_json = [
-                        {"name": "swap", "status": "failed", "detail": str(exc)},
-                    ]
-
-    if op.target_asc_id is None:
-        op.status = "failed"
-    else:
-        op.status = _overall_status(asc_errs, rc_errs)
-    op.error_log_json = asc_errs + [f"revenuecat: {e}" for e in rc_errs]
-    if op.status in {"done", "partial"}:
-        op.completed_at = datetime.now(timezone.utc)
-    await session.flush()
-    await session.refresh(op)
+    await finalize_swap(
+        op=op,
+        app=app,
+        user_id=user_id,
+        session=session,
+        swap_revenuecat=body.swap_revenuecat,
+        old_product_id=iap.product_id,
+        new_product_id=body.new_product_id,
+        product_type=_IAP_TYPE_TO_RC.get(iap.iap_type, "non_consumable"),
+        display_name=body.new_name or iap.name,
+        asc_errs=asc_errs,
+        source_kind="iap",
+        archive_status=result.get("archive_status"),
+    )
     return _row_to_out(op)
 
 
@@ -595,7 +666,8 @@ async def retry_clone_operation(
     partially succeeded.
     """
     user_id = int(current_user["user_id"])
-    app = await _get_verified_app(app_id, user_id, session)
+    # Ownership gate — raises 404 if the user does not own the app.
+    await _get_verified_app(app_id, user_id, session)
 
     res = await session.execute(
         select(CloneOperation).where(

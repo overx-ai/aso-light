@@ -9,17 +9,14 @@ tailored subset based on the actual swap outcome.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1._deps import _get_asc_client_for_app
 from app.api.v1.clone import (
+    _IAP_TYPE_TO_RC,
     _PERIOD_TO_ISO,
-    _get_rc_credential,
-    _normalize_steps,
-    _overall_status,
     _row_to_out,
+    finalize_swap,
 )
 from app.mcp.context import (
     get_user_id,
@@ -39,9 +36,6 @@ from app.services.asc.clone import (
     next_versioned_product_id,
 )
 from app.services.asc.pricing import ASCPricingService
-from app.services.revenuecat.client import RevenueCatClient
-from app.services.revenuecat.errors import RevenueCatAPIError
-from app.services.revenuecat.swap import RevenueCatProductSwap
 
 IOS_DOC_PATH = "docs/006-product-swap-ios-integration.md"
 TRANSITION_NOTE = (
@@ -56,15 +50,23 @@ def _ios_checklist(
     rc_connected: bool,
     rc_swap_ok: bool,
     target_asc_id: str | None,
+    warnings: list[str] | None = None,
 ) -> list[str]:
-    """Compose the iOS-side checklist from the swap outcome."""
+    """Compose the iOS-side checklist from the swap outcome.
+
+    ``warnings`` (ASC archive incomplete / old IAP still live) are
+    surfaced first and prominently, so the operator is never told "no
+    iOS change required" while the OLD product is still on sale.
+    """
+    warnings = warnings or []
     if target_asc_id is None:
         return [
+            *warnings,
             "Swap did not produce a new ASC product — do not change iOS yet.",
             "Re-run the swap or inspect the failed steps before touching the app.",
         ]
 
-    items: list[str] = []
+    items: list[str] = list(warnings)
     if rc_connected and rc_swap_ok:
         items += [
             "PATH 1 (RC + offerings): no iOS code change required if your app "
@@ -114,10 +116,13 @@ def _to_swap_response(
     rc_connected: bool,
     rc_swap_ok: bool,
     target_asc_id: str | None,
+    warnings: list[str],
 ) -> SwapResponse:
     return SwapResponse(
         **op_out_dict,
-        ios_checklist=_ios_checklist(rc_connected, rc_swap_ok, target_asc_id),
+        ios_checklist=_ios_checklist(
+            rc_connected, rc_swap_ok, target_asc_id, warnings,
+        ),
         ios_doc_url=IOS_DOC_PATH,
         transition_window_note=TRANSITION_NOTE,
     )
@@ -135,50 +140,39 @@ async def _finalize_swap(
     product_type: str,
     display_name: str,
     asc_errs: list[str],
+    source_kind: str,
+    archive_status: str | None,
     subscription_period: str | None = None,
 ) -> SwapResponse:
-    """Run the optional RC swap, finalize op status/timestamps, and build the
-    SwapResponse. Shared by both ``swap.subscription_product`` and ``swap.iap``."""
-    rc_errs: list[str] = []
-    rc_cred = await _get_rc_credential(app, user_id, session)
-    rc_connected = rc_cred is not None
+    """Finalize the swap and build the :class:`SwapResponse`.
 
-    if swap_revenuecat and op.target_asc_id and rc_cred is not None:
-        async with RevenueCatClient.from_credential(rc_cred) as rc_client:
-            rc_swap = RevenueCatProductSwap(rc_client, rc_cred.rc_app_id)
-            try:
-                swap_result = await rc_swap.swap(
-                    old_store_id=old_product_id,
-                    new_store_id=new_product_id,
-                    product_type=product_type,
-                    subscription_period=subscription_period,
-                    display_name=display_name,
-                )
-                op.revenuecat_steps_json = _normalize_steps(
-                    swap_result.get("steps"),
-                )
-                rc_errs = swap_result.get("errors") or []
-            except RevenueCatAPIError as exc:
-                rc_errs = [f"swap: {exc}"]
-                op.revenuecat_steps_json = [
-                    {"name": "swap", "status": "failed", "detail": str(exc)},
-                ]
-
-    if op.target_asc_id is None:
-        op.status = "failed"
-    else:
-        op.status = _overall_status(asc_errs, rc_errs)
-    op.error_log_json = asc_errs + [f"revenuecat: {e}" for e in rc_errs]
-    if op.status in {"done", "partial"}:
-        op.completed_at = datetime.now(timezone.utc)
-    await session.flush()
-    await session.refresh(op)
+    Delegates the RC swap + status/timestamp/health computation to the
+    shared :func:`app.api.v1.clone.finalize_swap` so the A-I1/A-I2/A-I3
+    fixes live in one place; this only shapes the MCP-specific
+    ``SwapResponse`` (checklist + doc + transition note) at the edge.
+    """
+    health = await finalize_swap(
+        op=op,
+        app=app,
+        user_id=user_id,
+        session=session,
+        swap_revenuecat=swap_revenuecat,
+        old_product_id=old_product_id,
+        new_product_id=new_product_id,
+        product_type=product_type,
+        display_name=display_name,
+        asc_errs=asc_errs,
+        source_kind=source_kind,
+        archive_status=archive_status,
+        subscription_period=subscription_period,
+    )
 
     return _to_swap_response(
         op_out_dict=_row_to_out(op).model_dump(),
-        rc_connected=rc_connected,
-        rc_swap_ok=rc_connected and not rc_errs and op.target_asc_id is not None,
+        rc_connected=health["rc_connected"],
+        rc_swap_ok=health["rc_swap_ok"],
         target_asc_id=op.target_asc_id,
+        warnings=health["warnings"],
     )
 
 
@@ -245,8 +239,7 @@ async def swap_subscription_product(
 
         op.target_asc_id = result.get("target_asc_id")
         op.asc_steps_json = result.get("steps") or []
-        op.error_log_json = result.get("errors") or []
-        asc_errs = list(op.error_log_json)
+        asc_errs = list(result.get("errors") or [])
 
         return await _finalize_swap(
             op=op,
@@ -259,6 +252,8 @@ async def swap_subscription_product(
             product_type="subscription",
             display_name=new_name or sub.name,
             asc_errs=asc_errs,
+            source_kind="subscription",
+            archive_status=result.get("archive_status"),
             subscription_period=_PERIOD_TO_ISO.get(
                 result.get("subscription_period", ""),
             ),
@@ -324,12 +319,6 @@ async def swap_iap(
         op.asc_steps_json = result.get("steps") or []
         asc_errs = list(result.get("errors") or [])
 
-        iap_type_to_rc = {
-            "CONSUMABLE": "consumable",
-            "NON_CONSUMABLE": "non_consumable",
-            "NON_RENEWING_SUBSCRIPTION": "non_renewable",
-        }
-
         return await _finalize_swap(
             op=op,
             app=app,
@@ -338,9 +327,11 @@ async def swap_iap(
             swap_revenuecat=swap_revenuecat,
             old_product_id=iap.product_id,
             new_product_id=new_product_id,
-            product_type=iap_type_to_rc.get(iap.iap_type, "non_consumable"),
+            product_type=_IAP_TYPE_TO_RC.get(iap.iap_type, "non_consumable"),
             display_name=new_name or iap.name,
             asc_errs=asc_errs,
+            source_kind="iap",
+            archive_status=result.get("archive_status"),
         )
 
 

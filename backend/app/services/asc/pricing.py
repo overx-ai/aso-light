@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.services.asc.errors import ASCAPIError
+from app.services.asc.errors import ASCAPIError, ChildResourceNotFoundError
 
 if TYPE_CHECKING:
     from app.services.asc.client import ASCClient
@@ -19,6 +19,79 @@ class ASCPricingService:
 
     def __init__(self, client: ASCClient):
         self.client = client
+
+    # ------------------------------------------------------------------
+    # Child-membership guards (IDOR protection)
+    #
+    # The REST/MCP handlers verify the PARENT (subscription / IAP /
+    # group) belongs to the caller's app, then pass a raw child id
+    # straight to ASC. Within one Apple team that lets a user owning
+    # parent A mutate parent B's child by authorizing against A. Each
+    # helper below re-lists the parent's children and asserts the child
+    # id is a member before any mutate/delete, raising
+    # ``ChildResourceNotFoundError`` (mapped to 404 / ToolError) on a
+    # mismatch. The extra ASC GET is acceptable on write paths.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _assert_member(
+        child_id: str, member_ids: set[str], not_found_message: str,
+    ) -> None:
+        """Raise ``ChildResourceNotFoundError`` unless ``child_id`` is a member.
+
+        Shared core of the four membership guards: each lists its parent's
+        children (using the per-child-type list method) and passes the set
+        of child ids here. Keeping this tiny and synchronous lets every
+        guard read as "list children → assert membership → 404/ToolError".
+        """
+        if child_id not in member_ids:
+            raise ChildResourceNotFoundError(not_found_message)
+
+    async def assert_subscription_localization(
+        self, subscription_id: str, localization_id: str,
+    ) -> None:
+        """Assert ``localization_id`` belongs to ``subscription_id``."""
+        existing = await self.list_subscription_localizations(subscription_id)
+        self._assert_member(
+            localization_id,
+            {item["id"] for item in existing},
+            "Localization not found for this subscription",
+        )
+
+    async def assert_iap_localization(
+        self, iap_id: str, localization_id: str,
+    ) -> None:
+        """Assert ``localization_id`` belongs to ``iap_id``."""
+        existing = await self.list_iap_localizations(iap_id)
+        self._assert_member(
+            localization_id,
+            {item["id"] for item in existing},
+            "Localization not found for this in-app purchase",
+        )
+
+    async def assert_subscription_group_localization(
+        self, group_id: str, localization_id: str,
+    ) -> None:
+        """Assert ``localization_id`` belongs to ``group_id``."""
+        existing = await self.list_subscription_group_localizations(group_id)
+        self._assert_member(
+            localization_id,
+            {item["id"] for item in existing},
+            "Localization not found for this subscription group",
+        )
+
+    async def assert_subscription_intro_offer(
+        self, subscription_id: str, offer_id: str,
+    ) -> None:
+        """Assert ``offer_id`` belongs to ``subscription_id``."""
+        existing = await self.list_subscription_introductory_offers(
+            subscription_id
+        )
+        self._assert_member(
+            offer_id,
+            {entry["resource"]["id"] for entry in existing},
+            "Introductory offer not found for this subscription",
+        )
 
     # ------------------------------------------------------------------
     # Subscription Groups
@@ -483,7 +556,6 @@ class ASCPricingService:
         )
         raw = await http.get(url)
         if raw.status_code >= 400:
-            from app.services.asc.errors import ASCAPIError
             body = raw.json() if raw.content else {"errors": []}
             raise ASCAPIError(raw.status_code, body)
 
@@ -796,7 +868,6 @@ class ASCPricingService:
 
         raw = await http.get(url)
         if raw.status_code >= 400:
-            from app.services.asc.errors import ASCAPIError
             body = raw.json() if raw.content else {"errors": []}
             raise ASCAPIError(raw.status_code, body)
 

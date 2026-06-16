@@ -34,6 +34,7 @@ from app.api.v1.pricing import (
     _parse_localization,
     _parse_screenshot,
     _resolve_app_target_territories,
+    _resolve_iap_base_territory,
     _unique_territories,
 )
 from app.data.territories import ALPHA2_TO_ALPHA3
@@ -84,7 +85,7 @@ from app.schemas.pricing import (
     SubscriptionUpdate,
     SyncPricesResponse,
 )
-from app.services.asc.errors import ASCAPIError
+from app.services.asc.errors import ASCAPIError, ChildResourceNotFoundError
 from app.services.asc.price_point_cache import PricePointCache
 from app.services.asc.pricing import ASCPricingService
 from app.services.export.csv import CSVExportService
@@ -350,14 +351,21 @@ async def update_subscription_group_localization(
     body = GroupLocalizationUpdate(name=name, custom_app_name=custom_app_name)
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
-        await _get_verified_subscription_group(group_id, app.id, session)
+        group = await _get_verified_subscription_group(
+            group_id, app.id, session
+        )
 
         async with await _get_asc_client_for_app(app, session) as client:
             pricing_service = ASCPricingService(client)
             try:
+                await pricing_service.assert_subscription_group_localization(
+                    group.asc_group_id, localization_id,
+                )
                 result = await pricing_service.update_subscription_group_localization(
                     localization_id, body.name, body.custom_app_name,
                 )
+            except ChildResourceNotFoundError as exc:
+                raise ToolError(str(exc))
             except ASCAPIError as exc:
                 raise _asc_error(exc)
 
@@ -371,14 +379,21 @@ async def delete_subscription_group_localization(
     """Delete a subscriptionGroupLocalization."""
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
-        await _get_verified_subscription_group(group_id, app.id, session)
+        group = await _get_verified_subscription_group(
+            group_id, app.id, session
+        )
 
         async with await _get_asc_client_for_app(app, session) as client:
             pricing_service = ASCPricingService(client)
             try:
+                await pricing_service.assert_subscription_group_localization(
+                    group.asc_group_id, localization_id,
+                )
                 await pricing_service.delete_subscription_group_localization(
                     localization_id,
                 )
+            except ChildResourceNotFoundError as exc:
+                raise ToolError(str(exc))
             except ASCAPIError as exc:
                 raise _asc_error(exc)
         return {"deleted": True}
@@ -626,14 +641,21 @@ async def update_subscription_localization(
     body = LocalizationUpdate(name=name, description=description)
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
-        await _get_verified_subscription(subscription_id, app.id, session)
+        sub = await _get_verified_subscription(
+            subscription_id, app.id, session
+        )
 
         async with await _get_asc_client_for_app(app, session) as client:
             pricing_service = ASCPricingService(client)
             try:
+                await pricing_service.assert_subscription_localization(
+                    sub.asc_subscription_id, localization_id,
+                )
                 result = await pricing_service.update_subscription_localization(
                     localization_id, body.name, body.description,
                 )
+            except ChildResourceNotFoundError as exc:
+                raise ToolError(str(exc))
             except ASCAPIError as exc:
                 raise _asc_error(exc)
 
@@ -647,14 +669,21 @@ async def delete_subscription_localization(
     """Delete a subscription localization (recovery for REJECTED state)."""
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
-        await _get_verified_subscription(subscription_id, app.id, session)
+        sub = await _get_verified_subscription(
+            subscription_id, app.id, session
+        )
 
         async with await _get_asc_client_for_app(app, session) as client:
             pricing_service = ASCPricingService(client)
             try:
+                await pricing_service.assert_subscription_localization(
+                    sub.asc_subscription_id, localization_id,
+                )
                 await pricing_service.delete_subscription_localization(
                     localization_id,
                 )
+            except ChildResourceNotFoundError as exc:
+                raise ToolError(str(exc))
             except ASCAPIError as exc:
                 raise _asc_error(exc)
         return {"deleted": True}
@@ -1296,14 +1325,21 @@ async def delete_subscription_intro_offer(
     """Delete a subscription introductory offer."""
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
-        await _get_verified_subscription(subscription_id, app.id, session)
+        sub = await _get_verified_subscription(
+            subscription_id, app.id, session
+        )
 
         async with await _get_asc_client_for_app(app, session) as client:
             pricing_service = ASCPricingService(client)
             try:
+                await pricing_service.assert_subscription_intro_offer(
+                    sub.asc_subscription_id, offer_id,
+                )
                 await pricing_service.delete_subscription_introductory_offer(
                     offer_id
                 )
+            except ChildResourceNotFoundError as exc:
+                raise ToolError(str(exc))
             except ASCAPIError as exc:
                 raise _asc_error(exc)
         return {"deleted": True}
@@ -1480,14 +1516,19 @@ async def update_iap_localization(
     body = LocalizationUpdate(name=name, description=description)
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
-        await _get_verified_iap(iap_id, app.id, session)
+        iap = await _get_verified_iap(iap_id, app.id, session)
 
         async with await _get_asc_client_for_app(app, session) as client:
             pricing_service = ASCPricingService(client)
             try:
+                await pricing_service.assert_iap_localization(
+                    iap.asc_iap_id, localization_id,
+                )
                 result = await pricing_service.update_iap_localization(
                     localization_id, body.name, body.description,
                 )
+            except ChildResourceNotFoundError as exc:
+                raise ToolError(str(exc))
             except ASCAPIError as exc:
                 raise _asc_error(exc)
         return _parse_localization(result.get("data", result))
@@ -1887,13 +1928,18 @@ async def apply_iap_prices(
                 "price_point_id": p.price_point_id,
             })
 
-        if price_entries:
+        base_alpha3 = _resolve_iap_base_territory(
+            body.base_territory_code, price_entries,
+        )
+
+        if price_entries and base_alpha3 is not None:
             async with await _get_asc_client_for_app(app, session) as client:
                 pricing_service = ASCPricingService(client)
                 try:
                     await pricing_service.set_iap_price(
                         iap_id=iap.asc_iap_id,
                         price_entries=price_entries,
+                        base_territory_alpha3=base_alpha3,
                     )
                     applied = submitted_count
                 except ASCAPIError as exc:

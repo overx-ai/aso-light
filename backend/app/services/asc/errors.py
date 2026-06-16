@@ -10,6 +10,20 @@ class CredentialDecryptError(Exception):
     """
 
 
+class ChildResourceNotFoundError(Exception):
+    """A child resource id does not belong to its verified parent.
+
+    Raised by the membership-assertion helpers in
+    :mod:`app.services.asc.pricing` when a caller passes a
+    localization / intro-offer id that is not a child of the parent
+    (subscription / IAP / group) they authorized against. This is the
+    IDOR guard: the parent is owned by the caller, but the child must
+    also be proven to belong to that parent before any mutate/delete.
+
+    REST maps this to 404; MCP maps it to ``ToolError``.
+    """
+
+
 class ASCAPIError(Exception):
     """Error returned from the App Store Connect API."""
 

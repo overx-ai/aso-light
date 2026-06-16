@@ -1641,6 +1641,23 @@ function ascErrorMessage(error: unknown, fallback: string): string {
   );
 }
 
+/**
+ * Build a TanStack `onError` handler that shows a red toast with the given
+ * title and the ASC error detail (falling back to `fallback`).
+ *
+ * The clone and RevenueCat write-path mutations below share this exact
+ * shape; the per-hook title + fallback stay explicit at each call site.
+ */
+function ascErrorToast(title: string, fallback: string) {
+  return (error: unknown) => {
+    notifications.show({
+      title,
+      message: ascErrorMessage(error, fallback),
+      color: "red",
+    });
+  };
+}
+
 /** Shared notification copy for the simple ASC write-path mutations below. */
 interface NotifyCopy {
   successTitle: string;
@@ -1675,13 +1692,7 @@ function useNotifyingMutation<TVars, TData>(
         color: "green",
       });
     },
-    onError: (error) => {
-      notifications.show({
-        title: copy.errorTitle,
-        message: ascErrorMessage(error, copy.errorFallback),
-        color: "red",
-      });
-    },
+    onError: ascErrorToast(copy.errorTitle, copy.errorFallback),
   });
 }
 
@@ -2220,16 +2231,10 @@ export function useCloneSubOrIAP() {
         });
       }
     },
-    onError: (error) => {
-      notifications.show({
-        title: "Clone failed",
-        message: ascErrorMessage(
-          error,
-          "Could not start the clone. Check ASC credentials.",
-        ),
-        color: "red",
-      });
-    },
+    onError: ascErrorToast(
+      "Clone failed",
+      "Could not start the clone. Check ASC credentials.",
+    ),
   });
 }
 
@@ -2427,6 +2432,10 @@ export function useCreateRCEntitlement() {
         queryKey: queryKeys.rcEntitlements(variables.appId),
       });
     },
+    onError: ascErrorToast(
+      "Failed to create entitlement",
+      "Could not create the entitlement.",
+    ),
   });
 }
 
@@ -2449,6 +2458,10 @@ export function useUpdateRCEntitlement() {
         queryKey: queryKeys.rcEntitlements(variables.appId),
       });
     },
+    onError: ascErrorToast(
+      "Failed to update entitlement",
+      "Could not update the entitlement.",
+    ),
   });
 }
 
@@ -2466,6 +2479,10 @@ export function useArchiveRCEntitlement() {
         queryKey: queryKeys.rcEntitlements(variables.appId),
       });
     },
+    onError: ascErrorToast(
+      "Failed to archive entitlement",
+      "Could not archive the entitlement.",
+    ),
   });
 }
 
@@ -2488,6 +2505,10 @@ export function useAttachProductsToEntitlement() {
         queryKey: queryKeys.rcEntitlements(variables.appId),
       });
     },
+    onError: ascErrorToast(
+      "Failed to attach products",
+      "Could not attach products to the entitlement.",
+    ),
   });
 }
 
@@ -2510,6 +2531,10 @@ export function useDetachProductsFromEntitlement() {
         queryKey: queryKeys.rcEntitlements(variables.appId),
       });
     },
+    onError: ascErrorToast(
+      "Failed to detach products",
+      "Could not detach products from the entitlement.",
+    ),
   });
 }
 
@@ -2552,6 +2577,10 @@ export function useCreateRCOffering() {
         queryKey: queryKeys.rcOfferings(variables.appId),
       });
     },
+    onError: ascErrorToast(
+      "Failed to create offering",
+      "Could not create the offering.",
+    ),
   });
 }
 
@@ -2580,6 +2609,10 @@ export function useUpdateRCOffering() {
         queryKey: queryKeys.rcOfferings(variables.appId),
       });
     },
+    onError: ascErrorToast(
+      "Failed to update offering",
+      "Could not update the offering.",
+    ),
   });
 }
 
@@ -2597,6 +2630,10 @@ export function useArchiveRCOffering() {
         queryKey: queryKeys.rcOfferings(variables.appId),
       });
     },
+    onError: ascErrorToast(
+      "Failed to archive offering",
+      "Could not archive the offering.",
+    ),
   });
 }
 
@@ -2641,6 +2678,10 @@ export function useCreateRCPackage() {
         queryKey: queryKeys.rcOfferings(variables.appId),
       });
     },
+    onError: ascErrorToast(
+      "Failed to create package",
+      "Could not create the package.",
+    ),
   });
 }
 
@@ -2662,6 +2703,10 @@ export function useDeleteRCPackage() {
         queryKey: queryKeys.rcPackages(variables.appId, variables.offeringId),
       });
     },
+    onError: ascErrorToast(
+      "Failed to delete package",
+      "Could not delete the package.",
+    ),
   });
 }
 
@@ -2685,6 +2730,10 @@ export function useAttachProductsToPackage() {
         queryKey: queryKeys.rcPackages(variables.appId, variables.offeringId),
       });
     },
+    onError: ascErrorToast(
+      "Failed to attach products",
+      "Could not attach products to the package.",
+    ),
   });
 }
 
@@ -2708,6 +2757,10 @@ export function useDetachProductsFromPackage() {
         queryKey: queryKeys.rcPackages(variables.appId, variables.offeringId),
       });
     },
+    onError: ascErrorToast(
+      "Failed to detach products",
+      "Could not detach products from the package.",
+    ),
   });
 }
 

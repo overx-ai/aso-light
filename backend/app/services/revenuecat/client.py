@@ -137,20 +137,41 @@ class RevenueCatClient:
 
         while next_page:
             client = await self._get_client()
-            await self._throttle()
-            raw = await client.get(next_page)
-            if raw.status_code == 429:
-                retry_after = float(raw.headers.get("Retry-After", 1.0))
-                self._backoff_until = time.time() + retry_after
-                await asyncio.sleep(retry_after)
-                continue
-            if raw.status_code >= 400:
+            page = None
+            # Cap 429 retries like ``_request`` so a persistently rate-
+            # limited cursor page can't spin forever; surface a
+            # RevenueCatRateLimitError once the budget is exhausted.
+            for attempt in range(_MAX_RETRIES):
+                await self._throttle()
+                raw = await client.get(next_page)
+                if raw.status_code == 429:
+                    retry_after = float(
+                        raw.headers.get(
+                            "Retry-After", _BACKOFF_BASE * (2 ** attempt),
+                        )
+                    )
+                    self._backoff_until = time.time() + retry_after
+                    logger.warning(
+                        "RevenueCat rate limited during pagination, backing "
+                        "off %.1fs (attempt %d/%d)",
+                        retry_after, attempt + 1, _MAX_RETRIES,
+                    )
+                    await asyncio.sleep(retry_after)
+                    continue
+                if raw.status_code >= 400:
+                    try:
+                        body = raw.json()
+                    except Exception:
+                        body = raw.text or ""
+                    raise RevenueCatAPIError(raw.status_code, body)
+                page = raw.json()
+                break
+            else:
                 try:
                     body = raw.json()
                 except Exception:
                     body = raw.text or ""
-                raise RevenueCatAPIError(raw.status_code, body)
-            page = raw.json()
+                raise RevenueCatRateLimitError(body, retry_after=0)
             all_items.extend(page.get("items", []))
             next_page = page.get("next_page")
 

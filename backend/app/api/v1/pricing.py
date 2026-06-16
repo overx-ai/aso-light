@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, get_args
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from sqlalchemy import select
@@ -33,6 +33,8 @@ from app.schemas.pricing import (
     IAPPricesResponse,
     IAPResponse,
     IntroOfferCreate,
+    IntroOfferDuration,
+    IntroOfferMode,
     IntroOfferResponse,
     LocalizationCreate,
     LocalizationResponse,
@@ -63,7 +65,7 @@ from app.schemas.pricing import (
 from app.data.territories import ALPHA2_TO_ALPHA3
 from app.services.asc.availability import ASCAvailabilityService
 from app.services.asc.client import ASCClient
-from app.services.asc.errors import ASCAPIError
+from app.services.asc.errors import ASCAPIError, ChildResourceNotFoundError
 from app.services.asc.price_point_cache import PricePointCache
 from app.services.asc.pricing import ASCPricingService
 from app.services.pricing.currency import effective_currency
@@ -78,8 +80,36 @@ from app.services.pricing.safety import (
 # whose `territories` resource id is alpha-3.
 ALPHA3_TO_ALPHA2: dict[str, str] = {v: k for k, v in ALPHA2_TO_ALPHA3.items()}
 
+# Valid enum members (derived from the Literal types so they never drift)
+# used to defensively coerce unrecognized ASC intro-offer values to None.
+_INTRO_OFFER_MODES: frozenset[str] = frozenset(get_args(IntroOfferMode))
+_INTRO_OFFER_DURATIONS: frozenset[str] = frozenset(get_args(IntroOfferDuration))
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _resolve_iap_base_territory(
+    requested_alpha2: str, price_entries: list[dict],
+) -> str | None:
+    """Pick the alpha-3 baseTerritory for an IAP price schedule.
+
+    Apple rejects an ``inAppPurchasePriceSchedule`` whose ``baseTerritory``
+    has no manual price in the submission. Prefer the requested alpha-2
+    territory when it is both valid and present in ``price_entries``;
+    otherwise fall back to the first submitted territory that maps to an
+    alpha-3. Returns ``None`` only when no submitted territory maps (the
+    caller then skips the submit). Mirrors the IAP clone path.
+    """
+    final_codes = {entry["territory_code"] for entry in price_entries}
+    base_alpha3 = ALPHA2_TO_ALPHA3.get(requested_alpha2)
+    if base_alpha3 is not None and requested_alpha2 in final_codes:
+        return base_alpha3
+    for entry in price_entries:
+        code = entry["territory_code"]
+        if code in ALPHA2_TO_ALPHA3:
+            return ALPHA2_TO_ALPHA3[code]
+    return None
 
 
 # ------------------------------------------------------------------
@@ -1649,14 +1679,22 @@ async def apply_iap_prices(
             "price_point_id": p.price_point_id,
         })
 
+    # Apple's price schedule requires a ``baseTerritory`` with a manual
+    # price in the submission; derive it from the requested base (alpha-2),
+    # falling back to the first priced territory.
+    base_alpha3 = _resolve_iap_base_territory(
+        body.base_territory_code, price_entries,
+    )
+
     # Submit all accepted prices in a single batch via price schedule
-    if price_entries:
+    if price_entries and base_alpha3 is not None:
         async with await _get_asc_client_for_app(app, session) as client:
             pricing_service = ASCPricingService(client)
             try:
                 await pricing_service.set_iap_price(
                     iap_id=iap.asc_iap_id,
                     price_entries=price_entries,
+                    base_territory_alpha3=base_alpha3,
                 )
                 applied = submitted_count
             except ASCAPIError as exc:
@@ -1736,12 +1774,27 @@ def _parse_intro_offer(item: dict) -> IntroOfferResponse:
         # than leaking the alpha-3 — the schema contract is alpha-2.
         territory_a2 = ALPHA3_TO_ALPHA2.get(territory_id)
 
+    # Apple sometimes omits offerMode/duration on list responses and can
+    # send a non-numeric numberOfPeriods; coerce defensively so a read
+    # never raises a 500 ResponseValidationError. Unrecognized enum
+    # values fall through to ``None`` (the schema now allows it).
+    offer_mode = attrs.get("offerMode")
+    if offer_mode not in _INTRO_OFFER_MODES:
+        offer_mode = None
+    duration = attrs.get("duration")
+    if duration not in _INTRO_OFFER_DURATIONS:
+        duration = None
+    try:
+        number_of_periods = int(attrs.get("numberOfPeriods", 1))
+    except (TypeError, ValueError):
+        number_of_periods = 1
+
     return IntroOfferResponse(
         id=resource["id"],
         territory_code=territory_a2,
-        offer_mode=attrs.get("offerMode"),
-        duration=attrs.get("duration"),
-        number_of_periods=int(attrs.get("numberOfPeriods", 1)),
+        offer_mode=offer_mode,
+        duration=duration,
+        number_of_periods=number_of_periods,
         price_point_id=price_point_id,
         start_date=attrs.get("startDate"),
         end_date=attrs.get("endDate"),
@@ -1790,25 +1843,39 @@ async def _bulk_sync_localizations(
 
     created = 0
     updated = 0
+    failed = 0
+    errors: list[str] = []
     results: list[LocalizationResponse] = []
     matched_ids: set[str] = set()
 
+    # Per-locale isolation: a single ASC failure (e.g. a REJECTED locale
+    # that can't be PATCHed) must not abort the batch and discard the
+    # record of locales that already succeeded.
     for loc in requested:
         existing_item = (
             existing_by_exact.get(loc.locale)
             or existing_by_prefix.get(_normalize_locale(loc.locale))
         )
-        if existing_item is not None:
-            resource = await update_fn(
-                existing_item["id"],
-                loc.name,
-                loc.description,
-            )
-            matched_ids.add(existing_item["id"])
-            updated += 1
-        else:
-            resource = await create_fn(loc.locale, loc.name, loc.description)
-            created += 1
+        try:
+            if existing_item is not None:
+                resource = await update_fn(
+                    existing_item["id"],
+                    loc.name,
+                    loc.description,
+                )
+                matched_ids.add(existing_item["id"])
+                updated += 1
+            else:
+                resource = await create_fn(
+                    loc.locale, loc.name, loc.description,
+                )
+                created += 1
+        except ASCAPIError as exc:
+            failed += 1
+            errors.append(f"{loc.locale}: {exc.message}")
+            if existing_item is not None and existing_item.get("id"):
+                matched_ids.add(existing_item["id"])
+            continue
         results.append(_parse_localization(resource.get("data", resource)))
 
     # Include untouched existing localizations in the response
@@ -1820,6 +1887,8 @@ async def _bulk_sync_localizations(
         created=created,
         updated=updated,
         localizations=results,
+        failed=failed,
+        errors=errors,
     )
 
 
@@ -1907,15 +1976,24 @@ async def update_subscription_localization(
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
     # Verify subscription belongs to this app (authorization check)
-    await _get_verified_subscription(subscription_id, app.id, session)
+    subscription = await _get_verified_subscription(
+        subscription_id, app.id, session
+    )
 
     async with await _get_asc_client_for_app(app, session) as client:
         pricing_service = ASCPricingService(client)
         try:
+            await pricing_service.assert_subscription_localization(
+                subscription.asc_subscription_id, localization_id,
+            )
             result = await pricing_service.update_subscription_localization(
                 localization_id,
                 body.name,
                 body.description,
+            )
+        except ChildResourceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
             )
         except ASCAPIError as exc:
             raise HTTPException(
@@ -1987,13 +2065,22 @@ async def delete_subscription_localization(
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
     # Authorization: subscription must belong to this app.
-    await _get_verified_subscription(subscription_id, app.id, session)
+    subscription = await _get_verified_subscription(
+        subscription_id, app.id, session
+    )
 
     async with await _get_asc_client_for_app(app, session) as client:
         pricing_service = ASCPricingService(client)
         try:
+            await pricing_service.assert_subscription_localization(
+                subscription.asc_subscription_id, localization_id,
+            )
             await pricing_service.delete_subscription_localization(
                 localization_id,
+            )
+        except ChildResourceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
             )
         except ASCAPIError as exc:
             raise HTTPException(
@@ -2128,15 +2215,22 @@ async def update_iap_localization(
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
     # Verify IAP belongs to this app (authorization check)
-    await _get_verified_iap(iap_id, app.id, session)
+    iap = await _get_verified_iap(iap_id, app.id, session)
 
     async with await _get_asc_client_for_app(app, session) as client:
         pricing_service = ASCPricingService(client)
         try:
+            await pricing_service.assert_iap_localization(
+                iap.asc_iap_id, localization_id,
+            )
             result = await pricing_service.update_iap_localization(
                 localization_id,
                 body.name,
                 body.description,
+            )
+        except ChildResourceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
             )
         except ASCAPIError as exc:
             raise HTTPException(
@@ -2488,13 +2582,20 @@ async def update_subscription_group_localization(
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
     # Authorization: the group must belong to this app.
-    await _get_verified_subscription_group(group_id, app.id, session)
+    group = await _get_verified_subscription_group(group_id, app.id, session)
 
     async with await _get_asc_client_for_app(app, session) as client:
         pricing_service = ASCPricingService(client)
         try:
+            await pricing_service.assert_subscription_group_localization(
+                group.asc_group_id, localization_id,
+            )
             result = await pricing_service.update_subscription_group_localization(
                 localization_id, body.name, body.custom_app_name
+            )
+        except ChildResourceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
             )
         except ASCAPIError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
@@ -2523,13 +2624,20 @@ async def delete_subscription_group_localization(
     """
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
-    await _get_verified_subscription_group(group_id, app.id, session)
+    group = await _get_verified_subscription_group(group_id, app.id, session)
 
     async with await _get_asc_client_for_app(app, session) as client:
         pricing_service = ASCPricingService(client)
         try:
+            await pricing_service.assert_subscription_group_localization(
+                group.asc_group_id, localization_id,
+            )
             await pricing_service.delete_subscription_group_localization(
                 localization_id,
+            )
+        except ChildResourceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
             )
         except ASCAPIError as exc:
             raise HTTPException(
@@ -2769,11 +2877,18 @@ async def delete_subscription_intro_offer(
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
     # Authorization: the subscription must belong to this app.
-    await _get_verified_subscription(subscription_id, app.id, session)
+    sub = await _get_verified_subscription(subscription_id, app.id, session)
 
     async with await _get_asc_client_for_app(app, session) as client:
         pricing_service = ASCPricingService(client)
         try:
+            await pricing_service.assert_subscription_intro_offer(
+                sub.asc_subscription_id, offer_id,
+            )
             await pricing_service.delete_subscription_introductory_offer(offer_id)
+        except ChildResourceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+            )
         except ASCAPIError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
