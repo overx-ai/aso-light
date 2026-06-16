@@ -23,6 +23,7 @@
 | [011 - Apple Search Ads Analytics](011-apple-search-ads-analytics.md) | ASA ingest pipeline, KPI dashboard, REST + MCP tools, paid-organic join |
 | [012 - Growth Recommendations Advisor](012-growth-recommendations.md) | Cross-domain recommendation engine powering the Growth page |
 | [013 - Custom Product Pages + Visual Compare](013-custom-product-pages-and-visual-compare.md) | CPP CRUD + screenshot upload, Pillow before/after compositor, ASA→CPP ad-group wiring (`asa.assign_cpp` / `asa.unassign_cpp` / `asa.list_cpp_ads`) |
+| [014 - Reviews Module Security Findings](014-reviews-module-security-findings.md) | `/code` review-pass findings for Review Responses (cross-app IDOR, uncapped AI drafts, cap-signal + cache-namespace bugs) — report only, fixes paused pending the C1 ASC review→app linkage decision |
 
 ## Specs
 
