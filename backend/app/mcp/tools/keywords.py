@@ -14,6 +14,10 @@ from fastmcp.exceptions import ToolError
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app.api.v1.keywords import (
+    COMPETITOR_KEYWORD_CAP,
+    _compute_competitor_keyword_matrix,
+)
 from app.mcp.context import get_user_id, resolve_app, session_scope
 from app.mcp.server import mcp
 from app.models.competitor import CompetitorApp
@@ -33,7 +37,10 @@ from app.schemas.keyword import (
     SearchResult,
 )
 from app.services.keywords.cross_localization import get_cross_localization_table
-from app.services.keywords.itunes_search import ITunesSearchService
+from app.services.keywords.itunes_search import (
+    ITunesSearchService,
+    is_valid_track_id,
+)
 from app.services.keywords.suggestions import ITunesSuggestionsService
 from app.services.keywords.tracker import KeywordRankingTracker
 
@@ -348,8 +355,16 @@ async def add_competitor(
     name: str,
     bundle_id: str | None = None,
 ) -> CompetitorResponse:
-    """Register a competitor app to track."""
-    body = CompetitorCreate(asc_app_id=asc_app_id, name=name, bundle_id=bundle_id)
+    """Register a competitor app to track.
+
+    ``asc_app_id`` must be the numeric iTunes track ID — a non-numeric value can
+    never match in the competitor rank comparison and is rejected.
+    """
+    if not is_valid_track_id(asc_app_id):
+        raise ToolError("asc_app_id must be the numeric iTunes track ID")
+    body = CompetitorCreate(
+        asc_app_id=asc_app_id.strip(), name=name, bundle_id=bundle_id,
+    )
     async with session_scope() as session:
         await resolve_app(app_id, session)
         competitor = CompetitorApp(
@@ -400,38 +415,21 @@ async def _check_competitor_keywords(
         if competitor is None:
             raise ToolError("Competitor not found")
 
+        # Cap the external fan-out (one iTunes search per tracked keyword).
         trackings_result = await session.execute(
             select(KeywordTracking)
             .options(selectinload(KeywordTracking.keyword))
             .where(KeywordTracking.app_id == app_id)
+            .order_by(KeywordTracking.created_at.desc())
+            .limit(COMPETITOR_KEYWORD_CAP)
         )
         trackings = trackings_result.scalars().all()
         if not trackings:
             return []
 
-        search_service = ITunesSearchService()
-        results: list[CompetitorKeywordResult] = []
-        for tracking in trackings:
-            keyword_text = tracking.keyword.text
-            search_results = await search_service.search_apps(
-                keyword_text, country="us",
-            )
-            our_rank: int | None = None
-            comp_rank: int | None = None
-            for sr in search_results:
-                if sr["app_id"] == app.asc_app_id:
-                    our_rank = sr["position"]
-                if sr["app_id"] == competitor.asc_app_id:
-                    comp_rank = sr["position"]
-            results.append(
-                CompetitorKeywordResult(
-                    keyword_text=keyword_text,
-                    competitor_rank=comp_rank,
-                    our_rank=our_rank,
-                    territory_code="US",
-                )
-            )
-        return results
+        return await _compute_competitor_keyword_matrix(
+            list(trackings), app.asc_app_id, competitor.asc_app_id,
+        )
 
 
 @mcp.tool(name="keywords.list_competitor_keywords")
@@ -442,8 +440,9 @@ async def list_competitor_keywords(
     """For each tracked keyword of the app, report where the competitor and
     we currently rank in the iTunes US SERP.
 
-    NOTE: this endpoint runs an iTunes search per tracked keyword, so it may
-    take a few seconds for apps with many tracked keywords.
+    NOTE: this runs one iTunes search per tracked keyword (bounded concurrency),
+    capped at the 50 most recently added keywords. Apps with more tracked
+    keywords are truncated.
     """
     return await _check_competitor_keywords(app_id, competitor_id)
 

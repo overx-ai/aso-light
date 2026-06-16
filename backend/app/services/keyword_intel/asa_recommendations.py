@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.app import App
 from app.models.asa import ASAAdGroup, ASACampaign, ASACredential, ASAOrg
+from app.models.credential import ASCCredential
 from app.services.asa.client import ASAClient
 from app.services.asa.errors import ASAAPIError
 from app.services.keyword_intel.base import KeywordIntel, KeywordIntelProvider
@@ -51,7 +52,11 @@ def _normalize_popularity(raw: int | float | None) -> int | None:
         return None
     if v <= 0 or v > 100:
         return None
-    if v <= 5:
+    # 5 is ambiguous (top of the 1-5 dot scale vs floor of the 5-100 integer
+    # scale). Per the module docstring, the floor-pinned integer value (5)
+    # dominates in practice, so bias toward the integer interpretation:
+    # treat <5 as the dot scale, and 5+ as already-integer.
+    if v < 5:
         return v * 20
     return v
 
@@ -124,8 +129,6 @@ class ASARecommendationsProvider(KeywordIntelProvider):
 
         # Owner of the app is the user behind the ASC credential. ASA creds
         # are per-user, so find any ASA cred belonging to the same user.
-        from app.models.credential import ASCCredential
-
         owner_id = (
             await session.execute(
                 select(ASCCredential.user_id).where(
@@ -188,11 +191,14 @@ class ASARecommendationsProvider(KeywordIntelProvider):
                     if not keyword:
                         continue
                     raw_popularity = entry.get("popularity")
-                    popularity = _normalize_popularity(
+                    # Fall back to searchScore for normalization when popularity
+                    # is absent, but keep raw_popularity itself for raw_score.
+                    score_input = (
                         raw_popularity
                         if raw_popularity is not None
                         else entry.get("searchScore")
                     )
+                    popularity = _normalize_popularity(score_input)
                     bid = entry.get("bidAmount")
                     if not isinstance(bid, dict):
                         bid = {}

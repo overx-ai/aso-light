@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -12,11 +13,19 @@ from sqlalchemy.orm import selectinload
 from app.models.app import App
 from app.models.keyword import KeywordRanking, KeywordTracking
 from app.models.territory import Territory
+from app.services.keywords.concurrency import gather_bounded
 from app.services.keywords.itunes_search import ITunesSearchService
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TERRITORY_CODES = ["US"]
+
+# Hard cap on (keyword x territory) external calls per refresh, and the max
+# in-flight iTunes requests. Bounds the work done in-request while holding the
+# DB session. NOTE: a future background-task model (enqueue + poll) would be a
+# better home for this fan-out than an in-request loop.
+MAX_RANKING_CHECKS = 250
+_REFRESH_CONCURRENCY = 5
 
 
 class KeywordRankingTracker:
@@ -69,12 +78,13 @@ class KeywordRankingTracker:
         territories = territory_result.scalars().all()
         territory_id_map = {t.code: t.id for t in territories}
 
-        recorded = 0
-        now = datetime.now(timezone.utc)
-
+        # Build the bounded work list: (tracking_id, keyword_text, territory_id,
+        # country). Skip unknown territory codes once, up front. Cap the total
+        # number of external checks so one refresh can't fan out unboundedly
+        # while holding the DB session.
+        jobs: list[tuple[int, str, int, str]] = []
         for tracking in trackings:
             keyword_text = tracking.keyword.text
-
             for code in codes:
                 territory_id = territory_id_map.get(code)
                 if territory_id is None:
@@ -83,21 +93,49 @@ class KeywordRankingTracker:
                         code,
                     )
                     continue
-
-                rank = await self.search_service.get_app_rank(
-                    term=keyword_text,
-                    app_id=app.asc_app_id,
-                    country=code.lower(),
+                jobs.append(
+                    (tracking.id, keyword_text, territory_id, code.lower())
                 )
 
-                ranking = KeywordRanking(
-                    tracking_id=tracking.id,
+        if len(jobs) > MAX_RANKING_CHECKS:
+            logger.warning(
+                "Ranking refresh for app_id=%d truncated from %d to %d checks",
+                app_id, len(jobs), MAX_RANKING_CHECKS,
+            )
+            jobs = jobs[:MAX_RANKING_CHECKS]
+
+        if not jobs:
+            return 0
+
+        now = datetime.now(timezone.utc)
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            async def _rank(job: tuple[int, str, int, str]) -> int | None:
+                _, keyword_text, _, country = job
+                return await self.search_service.get_app_rank(
+                    term=keyword_text,
+                    app_id=app.asc_app_id,
+                    country=country,
+                    client=client,
+                )
+
+            ranks = await gather_bounded(
+                jobs, _rank, concurrency=_REFRESH_CONCURRENCY,
+            )
+
+        recorded = 0
+        for (tracking_id, _, territory_id, _), rank in zip(
+            jobs, ranks, strict=True,
+        ):
+            self.session.add(
+                KeywordRanking(
+                    tracking_id=tracking_id,
                     territory_id=territory_id,
                     rank=rank,
                     recorded_at=now,
                 )
-                self.session.add(ranking)
-                recorded += 1
+            )
+            recorded += 1
 
         await self.session.flush()
 

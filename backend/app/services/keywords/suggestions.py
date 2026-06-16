@@ -8,6 +8,8 @@ from typing import Any
 
 import httpx
 
+from app.services.keywords.throttle import itunes_throttle
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +31,7 @@ class ITunesSuggestionsService:
         if not term or not term.strip():
             return []
 
+        await itunes_throttle()
         async with httpx.AsyncClient(timeout=10.0) as client:
             try:
                 response = await client.get(

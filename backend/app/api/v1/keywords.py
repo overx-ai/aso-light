@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.v1._deps import _get_verified_app
+from app.core.ratelimit import rate_limit
 from app.core.security import get_current_user
 from app.db.session import get_session
 from app.models.competitor import CompetitorApp
@@ -29,9 +30,17 @@ from app.schemas.keyword import (
     SearchResult,
 )
 from app.services.keywords.cross_localization import get_cross_localization_table
-from app.services.keywords.itunes_search import ITunesSearchService
+from app.services.keywords.itunes_search import (
+    ITunesSearchService,
+    is_valid_track_id,
+)
 from app.services.keywords.suggestions import ITunesSuggestionsService
 from app.services.keywords.tracker import KeywordRankingTracker
+
+# Max tracked keywords scanned in one competitor SERP comparison. Each keyword
+# is a separate iTunes round-trip, so we cap the fan-out (bounded-concurrency
+# batch) and surface truncation in the response/docstring.
+COMPETITOR_KEYWORD_CAP = 50
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -81,9 +90,15 @@ def _build_tracking_response(
 async def get_suggestions(
     term: str = Query(..., min_length=1),
     locale: str = Query(default="en_us"),
-    _current_user: dict[str, Any] = Depends(get_current_user),
+    _current_user: dict[str, Any] = Depends(
+        rate_limit("keywords.suggestions", per_min=30),
+    ),
 ) -> list[KeywordSuggestion]:
-    """Get autocomplete suggestions from iTunes hints API."""
+    """Get autocomplete suggestions from iTunes hints API.
+
+    Rate-limited to 30 requests/minute per user: each call fetches Apple from
+    the shared backend IP.
+    """
     service = ITunesSuggestionsService()
     suggestions = await service.get_suggestions(term, locale)
     return [KeywordSuggestion(term=s) for s in suggestions]
@@ -93,9 +108,15 @@ async def get_suggestions(
 async def search_keywords(
     term: str = Query(..., min_length=1),
     country: str = Query(default="us"),
-    _current_user: dict[str, Any] = Depends(get_current_user),
+    _current_user: dict[str, Any] = Depends(
+        rate_limit("keywords.search", per_min=30),
+    ),
 ) -> list[SearchResult]:
-    """Search iTunes for apps matching a keyword term."""
+    """Search iTunes for apps matching a keyword term.
+
+    Rate-limited to 30 requests/minute per user: each call fetches Apple from
+    the shared backend IP.
+    """
     service = ITunesSearchService()
     results = await service.search_apps(term, country)
     return [SearchResult(**r) for r in results]
@@ -350,13 +371,23 @@ async def add_competitor(
     current_user: dict[str, Any] = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> CompetitorResponse:
-    """Add a competitor app to track."""
+    """Add a competitor app to track.
+
+    ``asc_app_id`` must be the numeric iTunes track ID — a non-numeric value can
+    never match in the competitor rank comparison and is rejected with 400.
+    """
     user_id = int(current_user["user_id"])
     await _get_verified_app(app_id, user_id, session)
 
+    if not is_valid_track_id(body.asc_app_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="asc_app_id must be the numeric iTunes track ID",
+        )
+
     competitor = CompetitorApp(
         app_id=app_id,
-        asc_app_id=body.asc_app_id,
+        asc_app_id=body.asc_app_id.strip(),
         name=body.name,
         bundle_id=body.bundle_id,
     )
@@ -409,7 +440,13 @@ async def check_competitor_keywords(
     current_user: dict[str, Any] = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[CompetitorKeywordResult]:
-    """Check where a competitor ranks for our tracked keywords."""
+    """Check where a competitor ranks for our tracked keywords.
+
+    Each tracked keyword is a separate iTunes search, so the fan-out is capped
+    at ``COMPETITOR_KEYWORD_CAP`` (50) keywords and run with bounded concurrency
+    over a single shared HTTP client. Apps with more tracked keywords are
+    truncated (the most recently added ``COMPETITOR_KEYWORD_CAP`` are checked).
+    """
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
 
@@ -427,33 +464,47 @@ async def check_competitor_keywords(
             detail="Competitor not found",
         )
 
-    # Get tracked keywords for this app
+    # Get tracked keywords for this app, capped to bound the external fan-out.
     trackings_result = await session.execute(
         select(KeywordTracking)
         .options(selectinload(KeywordTracking.keyword))
         .where(KeywordTracking.app_id == app_id)
+        .order_by(KeywordTracking.created_at.desc())
+        .limit(COMPETITOR_KEYWORD_CAP)
     )
     trackings = trackings_result.scalars().all()
 
     if not trackings:
         return []
 
+    return await _compute_competitor_keyword_matrix(
+        trackings, app.asc_app_id, competitor.asc_app_id,
+    )
+
+
+async def _compute_competitor_keyword_matrix(
+    trackings: list[KeywordTracking],
+    our_app_id: str,
+    competitor_app_id: str,
+) -> list[CompetitorKeywordResult]:
+    """Run the SERP comparison for each tracked keyword with bounded concurrency
+    over a single shared iTunes client. Shared by the REST endpoint and the MCP
+    tool so both honour the same cap + concurrency."""
     search_service = ITunesSearchService()
+    keyword_texts = [t.keyword.text for t in trackings]
+    batch = await search_service.search_apps_batch(
+        [(text, "us") for text in keyword_texts],
+    )
+
     results: list[CompetitorKeywordResult] = []
-
-    for tracking in trackings:
-        keyword_text = tracking.keyword.text
-        search_results = await search_service.search_apps(keyword_text, country="us")
-
+    for keyword_text, search_results in zip(keyword_texts, batch, strict=True):
         our_rank: int | None = None
         comp_rank: int | None = None
-
         for sr in search_results:
-            if sr["app_id"] == app.asc_app_id:
+            if sr["app_id"] == our_app_id:
                 our_rank = sr["position"]
-            if sr["app_id"] == competitor.asc_app_id:
+            if sr["app_id"] == competitor_app_id:
                 comp_rank = sr["position"]
-
         results.append(
             CompetitorKeywordResult(
                 keyword_text=keyword_text,
@@ -462,5 +513,4 @@ async def check_competitor_keywords(
                 territory_code="US",
             )
         )
-
     return results
