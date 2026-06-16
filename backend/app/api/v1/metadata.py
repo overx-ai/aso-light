@@ -28,7 +28,6 @@ from app.api.v1._deps import _get_asc_client_for_app, _get_verified_app
 from app.core.config import settings
 from app.core.security import get_current_user
 from app.db.session import get_session
-from app.models.app import App
 from app.models.keyword import KeywordTracking
 from app.models.metadata import AppMetadataLocalization, AppMetadataState
 from app.models.territory import Territory
@@ -62,6 +61,10 @@ from app.services.metadata.client import (
     MetadataNotEditableError,
 )
 from app.services.metadata.coloring import build_coverage_items
+from app.services.metadata.guard import (
+    FieldsNotEditableError,
+    assert_body_fields_editable,
+)
 from app.services.metadata.snapshot import MetadataSnapshotService
 from app.services.metadata.translate import (
     FIELD_CHAR_LIMITS as TRANSLATE_FIELD_LIMITS,
@@ -178,6 +181,30 @@ def _attrs_for_asc(kind: str, body: LocaleUpsertIn) -> dict[str, Any]:
             continue
         out[asc_key] = value
     return out
+
+
+async def _assert_editable_or_409(
+    session: AsyncSession,
+    app_id: int,
+    kind: str,
+    body: LocaleUpsertIn,
+) -> None:
+    """Enforce ``editable_fields`` server-side, mapping rejection to 409.
+
+    The single REST-side translation of :class:`FieldsNotEditableError` so the
+    create and update paths can never diverge. Only the fields the body
+    actually sets (intersected with the fields valid for ``kind``) are checked,
+    so app_info writes — which are always editable when an app_info exists —
+    pass through untouched.
+    """
+    try:
+        await assert_body_fields_editable(
+            session, app_id, kind, body.model_dump(exclude_unset=True).keys()
+        )
+    except FieldsNotEditableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc),
+        ) from exc
 
 
 # ------------------------------------------------------------------
@@ -362,6 +389,7 @@ async def create_locale(
         )
 
     attrs = _attrs_for_asc(kind, body)
+    await _assert_editable_or_409(session, app_id, kind, body)
 
     async with await _get_asc_client_for_app(app, session) as client:
         asc_meta = ASCMetadataService(client)
@@ -459,6 +487,8 @@ async def update_locale(
     if not attrs:
         # Nothing to patch — return the row unchanged.
         return AppMetadataLocalizationOut.model_validate(row)
+
+    await _assert_editable_or_409(session, app_id, kind, body)
 
     state = await _get_state_row(session, app_id)
     version_state = state.editable_version_state if state else None
@@ -660,7 +690,10 @@ async def translate_metadata(
             detail="All translation providers failed. Try again later.",
         ) from exc
 
-    # Cache rows are added inside ``translate_with_cache``; persist them.
+    # Each successful translation is committed durably inside
+    # ``translate_with_cache`` as it is produced (so a later item's failure
+    # cannot discard already-billed rows); this trailing commit is a harmless
+    # final flush of any remaining bookkeeping.
     await session.commit()
     return TranslateOut(items=items)
 

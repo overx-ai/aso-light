@@ -12,17 +12,34 @@ if TYPE_CHECKING:
 # State machine constants (exported so route layer can reuse)
 # ----------------------------------------------------------------------
 
+# Fully-editable version states: all version-scoped fields may be written.
+#
+# NOTE: ``appStoreState`` / ``appVersionState`` is API-version sensitive and
+# differs between tenants and ASC API versions. The strings below must be
+# verified against the live tenant. We deliberately FAIL CLOSED for any state
+# not listed in either set (treated as not editable) — see
+# ``_guard_version_localization_update`` and the snapshot's editable_fields
+# computation, which share these constants so they can never disagree.
+#
+# ``WAITING_FOR_REVIEW`` is intentionally NOT here: once a version is in review
+# the safe assumption is that only the live/promo path applies, so it falls
+# through to "not editable" rather than being treated as fully editable.
 EDITABLE_VERSION_STATES: frozenset[str] = frozenset({
     "PREPARE_FOR_SUBMISSION",
     "READY_FOR_REVIEW",
     "DEVELOPER_REJECTED",
     "REJECTED",
     "METADATA_REJECTED",
-    "WAITING_FOR_REVIEW",  # limited
 })
 
+# Live / locked states where ONLY ``promotional_text`` is mutable. Apple has
+# used several names for the live/post-approval lifecycle over time; we treat
+# all of them as promo-only so the snapshot's fallback fetch (which queries
+# these states) yields ``editable_fields == ["promotional_text"]``.
 READ_ONLY_VERSION_STATES_PROMO_ONLY: frozenset[str] = frozenset({
     "READY_FOR_SALE",
+    "READY_FOR_DISTRIBUTION",
+    "PENDING_DEVELOPER_RELEASE",
 })
 
 PROMO_ONLY_FIELDS_ON_LIVE: frozenset[str] = frozenset({"promotionalText"})

@@ -51,6 +51,10 @@ from app.services.metadata.client import (
     MetadataNotEditableError,
 )
 from app.services.metadata.coloring import build_coverage_items
+from app.services.metadata.guard import (
+    FieldsNotEditableError,
+    assert_body_fields_editable,
+)
 from app.services.metadata.snapshot import MetadataSnapshotService
 from app.services.metadata.translate import (
     TranslationQuotaExceededError,
@@ -68,6 +72,26 @@ def _kind_or_raise(kind: str) -> None:
         _validate_kind(kind)
     except HTTPException as exc:
         raise ToolError(str(exc.detail)) from exc
+
+
+async def _assert_editable_or_toolerror(
+    session: Any,
+    app_id: int,
+    kind: str,
+    body: LocaleUpsertIn,
+) -> None:
+    """Enforce ``editable_fields`` server-side, mapping rejection to ToolError.
+
+    The MCP-side mirror of the REST ``_assert_editable_or_409`` helper — same
+    field projection, same single enforcement point, different surface error
+    type so the two clients can never diverge.
+    """
+    try:
+        await assert_body_fields_editable(
+            session, app_id, kind, body.model_dump(exclude_unset=True).keys()
+        )
+    except FieldsNotEditableError as exc:
+        raise ToolError(str(exc)) from exc
 
 
 # ==================================================================
@@ -156,6 +180,7 @@ async def create_locale(
             )
 
         attrs = _attrs_for_asc(kind, body)
+        await _assert_editable_or_toolerror(session, app_id, kind, body)
 
         async with await _get_asc_client_for_app(app, session) as client:
             asc_meta = ASCMetadataService(client)
@@ -222,6 +247,8 @@ async def update_locale(
         attrs = _attrs_for_asc(kind, body)
         if not attrs:
             return AppMetadataLocalizationOut.model_validate(row)
+
+        await _assert_editable_or_toolerror(session, app_id, kind, body)
 
         state = await _get_state_row(session, app_id)
         version_state = state.editable_version_state if state else None

@@ -26,7 +26,7 @@ from typing import Literal
 
 import httpx
 from anthropic import AsyncAnthropic
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -264,9 +264,13 @@ def build_translator(settings: Settings) -> AbstractTranslator | None:
     """Build a translator from ``settings.TRANSLATION_PROVIDER_CHAIN``.
 
     Includes only providers whose API key is configured (others are skipped).
-    Returns ``None`` when no provider is configured (caller surfaces a 503),
-    the single translator when exactly one is configured, or a
-    ``FallbackTranslator`` over the ordered chain otherwise.
+    Returns ``None`` when no provider is configured (caller surfaces a 503).
+
+    Otherwise ALWAYS wraps the chain in a :class:`FallbackTranslator` — even a
+    single provider — so a raw provider exception (e.g. ``httpx`` errors from
+    ``OpenRouterTranslator``) is normalized to ``TranslatorUnavailableError``
+    by the fallback's ``except`` handler rather than bubbling up as an
+    unhandled 500.
     """
     seen: set[str] = set()
     translators: list[AbstractTranslator] = []
@@ -290,8 +294,6 @@ def build_translator(settings: Settings) -> AbstractTranslator | None:
 
     if not translators:
         return None
-    if len(translators) == 1:
-        return translators[0]
     return FallbackTranslator(translators)
 
 
@@ -334,13 +336,9 @@ def _build_system_prompt(
 def _post_process_keywords(text: str) -> str:
     """Normalize keyword field: lowercase, dedupe, comma-separated, no spaces."""
     tokens = [t.strip().lower() for t in text.split(",") if t.strip()]
-    seen: set[str] = set()
-    out: list[str] = []
-    for t in tokens:
-        if t not in seen:
-            seen.add(t)
-            out.append(t)
-    return ",".join(out)[:100]
+    # ``dict.fromkeys`` dedupes while preserving first-seen order.
+    deduped = dict.fromkeys(tokens)
+    return ",".join(deduped)[: FIELD_CHAR_LIMITS["keywords"]]
 
 
 def source_hash(text: str) -> str:
@@ -386,30 +384,31 @@ async def translate_with_cache(
     if row is not None:
         return row.translated_text, True
 
-    # 2. Rolling 30-day cap
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-    count_stmt = (
-        select(func.count())
-        .select_from(MetadataTranslationCache)
-        .where(
-            MetadataTranslationCache.app_id == app_id,
-            MetadataTranslationCache.created_at >= cutoff,
-        )
-    )
-    count_result = await session.execute(count_stmt)
-    count = count_result.scalar_one()
-    if count >= monthly_cap:
-        raise TranslationQuotaExceededError(
-            f"App {app_id} has used {count} translations in the last "
-            f"30 days (cap: {monthly_cap})",
-        )
-
-    # 3. Translate
+    # 2. Translate (outside the cap critical section — the network call is the
+    #    slow part; we re-check the cap atomically just before billing/insert).
     translated = await translator.translate(
         text, source_locale, target_locale, field_kind, brand_allowlist,
     )
 
-    # 4. Persist to cache
+    # 3. Atomically re-check the cap and persist the billed row.
+    #
+    #    Concurrent translates on separate sessions could both read count==499
+    #    and both insert, overrunning the cap. We serialize the count+insert
+    #    per app:
+    #      * PostgreSQL: a transaction-scoped advisory lock keyed on app_id.
+    #        It is released when this row's transaction commits below, so the
+    #        critical section is exactly count -> insert -> commit.
+    #      * SQLite: the single-writer transaction already serializes writers;
+    #        re-checking the count immediately before insert suffices.
+    await _acquire_app_cap_lock(session, app_id)
+
+    used = await _count_recent_translations(session, app_id)
+    if used >= monthly_cap:
+        raise TranslationQuotaExceededError(
+            f"App {app_id} has used {used} translations in the last "
+            f"30 days (cap: {monthly_cap})",
+        )
+
     new_row = MetadataTranslationCache(
         app_id=app_id,
         source_locale=source_locale,
@@ -420,5 +419,59 @@ async def translate_with_cache(
         model=translator.model_name[:64],
     )
     session.add(new_row)
-    await session.flush()
+    # Commit each successful, billed translation durably as it is produced so a
+    # LATER batch item's failure cannot roll back already-billed rows (which
+    # would both under-count the cap and re-bill the same translation). The
+    # commit also releases the Postgres advisory lock acquired above.
+    await session.commit()
     return translated, False
+
+
+async def _count_recent_translations(
+    session: AsyncSession, app_id: int, *, window_days: int = 30,
+) -> int:
+    """Count billed translations for ``app_id`` in the rolling window.
+
+    Must run inside the cap critical section (after the advisory lock) so the
+    count it returns is the value the cap check + insert are serialized against.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    stmt = (
+        select(func.count())
+        .select_from(MetadataTranslationCache)
+        .where(
+            MetadataTranslationCache.app_id == app_id,
+            MetadataTranslationCache.created_at >= cutoff,
+        )
+    )
+    return (await session.execute(stmt)).scalar_one()
+
+
+def _app_cap_lock_key(app_id: int) -> int:
+    """Stable signed 64-bit key for ``pg_advisory_xact_lock`` from an app id.
+
+    ``pg_advisory_xact_lock(bigint)`` takes a signed 64-bit integer. App ids are
+    small positive ints, so we namespace them into a fixed high band to avoid
+    colliding with advisory locks taken elsewhere, and keep the result inside
+    the signed 64-bit range.
+    """
+    _NAMESPACE = 0x4D455441  # "META"
+    key = (_NAMESPACE << 31) | (app_id & 0x7FFFFFFF)
+    return key - (1 << 63) if key >= (1 << 63) else key
+
+
+async def _acquire_app_cap_lock(session: AsyncSession, app_id: int) -> None:
+    """Serialize the translation cap critical section across sessions.
+
+    PostgreSQL only — takes a transaction-scoped advisory lock that releases on
+    the next commit/rollback. On SQLite (and any other dialect) this is a no-op
+    because the single-writer transaction already serializes concurrent writers.
+    """
+    bind = session.bind
+    dialect = bind.dialect.name if bind is not None else "sqlite"
+    if dialect != "postgresql":
+        return
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"),
+        {"key": _app_cap_lock_key(app_id)},
+    )

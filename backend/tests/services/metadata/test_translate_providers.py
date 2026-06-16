@@ -44,15 +44,25 @@ def test_build_translator_returns_none_when_no_keys() -> None:
     assert build_translator(_settings()) is None
 
 
+# NOTE: build_translator now ALWAYS wraps the provider chain in a
+# FallbackTranslator — even a single provider — so a raw provider exception
+# (e.g. httpx errors from OpenRouterTranslator) is normalized to
+# TranslatorUnavailableError instead of bubbling up as an unhandled 500 (I5).
+# These tests previously asserted a bare provider instance for the single-
+# provider case; they now assert the wrapping + the wrapped provider type.
+
+
 def test_build_translator_single_provider_when_only_openrouter() -> None:
     translator = build_translator(_settings(openrouter_key="sk-or-x"))
-    assert isinstance(translator, OpenRouterTranslator)
+    assert isinstance(translator, FallbackTranslator)
+    assert isinstance(translator._translators[0], OpenRouterTranslator)  # noqa: SLF001
     assert translator.model_name == "openrouter:anthropic/claude-3.5-haiku"
 
 
 def test_build_translator_single_provider_when_only_anthropic() -> None:
     translator = build_translator(_settings(anthropic_key="sk-ant-x"))
-    assert isinstance(translator, AnthropicTranslator)
+    assert isinstance(translator, FallbackTranslator)
+    assert isinstance(translator._translators[0], AnthropicTranslator)  # noqa: SLF001
     assert translator.model_name.startswith("anthropic:")
 
 
@@ -71,16 +81,18 @@ def test_build_translator_fallback_chain_order_is_respected() -> None:
 
 
 def test_build_translator_skips_providers_without_keys() -> None:
-    # Chain wants both, but only OpenRouter has a key -> single OpenRouter.
+    # Chain wants both, but only OpenRouter has a key -> single-provider chain.
     translator = build_translator(_settings(openrouter_key="sk-or-x"))
-    assert isinstance(translator, OpenRouterTranslator)
+    assert isinstance(translator, FallbackTranslator)
+    assert [type(t) for t in translator._translators] == [OpenRouterTranslator]  # noqa: SLF001
 
 
 def test_build_translator_ignores_unknown_and_duplicate_providers() -> None:
     translator = build_translator(
         _settings(chain="bogus,openrouter,openrouter", openrouter_key="sk-or-x"),
     )
-    assert isinstance(translator, OpenRouterTranslator)
+    assert isinstance(translator, FallbackTranslator)
+    assert [type(t) for t in translator._translators] == [OpenRouterTranslator]  # noqa: SLF001
 
 
 # --- OpenRouterTranslator (stubbed httpx) -----------------------------------

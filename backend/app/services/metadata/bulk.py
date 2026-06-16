@@ -33,6 +33,10 @@ from app.services.metadata.client import (
     ASCMetadataService,
     MetadataNotEditableError,
 )
+from app.services.metadata.guard import (
+    FieldsNotEditableError,
+    assert_fields_editable,
+)
 from app.services.metadata.validation import char_overflow, validate_field
 
 logger = logging.getLogger(__name__)
@@ -68,13 +72,25 @@ VERSION_FIELDS: frozenset[str] = frozenset({
 })
 
 
+def _skipped(locale: str, reason: str | None) -> BulkApplyResult:
+    """A ``skipped`` per-locale outcome carrying the (sanitized) reason."""
+    return BulkApplyResult(locale=locale, status="skipped", error=reason)
+
+
+def _failed(locale: str, error: str) -> BulkApplyResult:
+    """A ``failed`` per-locale outcome carrying a sanitized error string."""
+    return BulkApplyResult(locale=locale, status="failed", error=error)
+
+
 class BulkMetadataService:
     """Plan + replay bulk metadata edits across many locales.
 
     Both :meth:`preview` and :meth:`apply` build the same per-locale plan;
     ``apply`` then walks that plan and PATCHes each locale, recording
-    per-locale outcomes. The caller owns the transaction — this service
-    mutates ORM rows but never commits.
+    per-locale outcomes. :meth:`preview` never commits. :meth:`apply` commits
+    the snapshot mirror incrementally — once per successfully applied locale —
+    so an interruption mid-batch cannot discard already-applied edits; the
+    caller's trailing commit then only finalizes bookkeeping.
     """
 
     def __init__(
@@ -137,6 +153,20 @@ class BulkMetadataService:
         if values_by_locale is not None:
             return values_by_locale.get(locale)
         return value
+
+    @staticmethod
+    def _is_hard_skip(item: BulkPreviewItem) -> bool:
+        """Whether a built skip is one ``force`` may NOT override.
+
+        Char-overflow (would fail at ASC and waste a request) and a missing
+        version row (nothing to PATCH) are hard skips. The only soft skip is
+        ``unchanged``, which ``force`` re-applies. Field-editability is enforced
+        separately via :func:`assert_fields_editable` and is never overridable.
+        """
+        return (
+            item.char_overflow_by > 0
+            or item.reason == "no existing version localization to update"
+        )
 
     async def _load_existing(
         self,
@@ -259,12 +289,17 @@ class BulkMetadataService:
     ) -> list[BulkApplyResult]:
         """Replay the bulk plan as ASC PATCH calls.
 
-        ``force=True`` overrides the ``unchanged`` and "field not editable"
-        skip reasons (we still defer to ASC for the actual editability
-        decision in that case). ``force`` does NOT override the
-        ``char_overflow`` skip — sending an over-limit value would fail at
-        ASC anyway and waste a request — nor the "no existing version
-        localization" skip, since there is no row to PATCH.
+        ``force=True`` overrides ONLY the ``unchanged`` skip. It does NOT
+        override the field-editability check (re-asserted via
+        :func:`assert_fields_editable` against ``editable_fields`` regardless of
+        ``force``), the ``char_overflow`` skip (an over-limit value would fail
+        at ASC and waste a request), nor the "no existing version localization"
+        skip (there is no row to PATCH).
+
+        Each successfully applied locale is committed immediately so a later
+        locale's failure cannot roll back already-applied edits; the returned
+        per-locale result matrix is therefore accurate even on partial failure,
+        and a retry is safe (PATCH is idempotent and ``unchanged`` re-skips).
 
         When ``values_by_locale`` is provided each locale is patched with its
         own proposed value; otherwise the single ``value`` is fanned out.
@@ -283,95 +318,85 @@ class BulkMetadataService:
 
         results: list[BulkApplyResult] = []
         for item in plan:
-            if item.would_skip:
-                # Hard skips that ``force`` cannot override.
-                hard_skip = (
-                    item.char_overflow_by > 0
-                    or item.reason == "no existing version localization to update"
-                )
-                if not force or hard_skip:
-                    results.append(
-                        BulkApplyResult(
-                            locale=item.locale,
-                            status="skipped",
-                            error=item.reason,
-                        )
-                    )
-                    continue
+            locale = item.locale
 
-            row = existing.get(item.locale)
+            # Field-editability is a HARD skip that ``force`` can NEVER
+            # override — re-assert it against ``editable_fields`` before any
+            # other decision.
+            try:
+                await assert_fields_editable(self.session, app.id, [field])
+            except FieldsNotEditableError as exc:
+                results.append(_skipped(locale, str(exc)))
+                continue
+
+            # ``force`` overrides only the soft ``unchanged`` skip; char-overflow
+            # and missing-row skips stay hard.
+            if item.would_skip and (not force or self._is_hard_skip(item)):
+                results.append(_skipped(locale, item.reason))
+                continue
+
+            row = existing.get(locale)
             if row is None:
-                # Defensive: should already be caught by the version skip
-                # above, but app_info with no snapshot row also has
-                # nothing to PATCH.
+                # Defensive: the missing-version skip above should catch this,
+                # but app_info with no snapshot row also has nothing to PATCH.
                 results.append(
-                    BulkApplyResult(
-                        locale=item.locale,
-                        status="skipped",
-                        error="no existing localization to update",
-                    )
+                    _skipped(locale, "no existing localization to update")
                 )
                 continue
 
-            new_value = self._value_for(item.locale, value, values_by_locale)
-            attrs = {asc_attr: new_value}
+            new_value = self._value_for(locale, value, values_by_locale)
             try:
-                if kind == "app_info":
-                    await self.asc.update_app_info_localization(
-                        row.asc_localization_id, attrs,
-                    )
-                else:
-                    await self.asc.update_version_localization(
-                        row.asc_localization_id,
-                        attrs,
-                        version_state=version_state,
-                    )
-            except MetadataNotEditableError as exc:
-                results.append(
-                    BulkApplyResult(
-                        locale=item.locale,
-                        status="skipped",
-                        error=str(exc),
-                    )
+                await self._patch_locale(
+                    kind, row.asc_localization_id,
+                    {asc_attr: new_value}, version_state,
                 )
+            except MetadataNotEditableError as exc:
+                results.append(_skipped(locale, str(exc)))
                 continue
             except ASCAPIError as exc:
                 logger.warning(
                     "Bulk %s for app %s locale %s failed: %s",
-                    field, app.id, item.locale, exc,
+                    field, app.id, locale, exc,
                 )
-                results.append(
-                    BulkApplyResult(
-                        locale=item.locale,
-                        status="failed",
-                        error=str(exc),
-                    )
-                )
+                # ``exc.message`` is already sanitized (built from the ASC
+                # ``errors[].detail`` titles); never leak str(exc).
+                results.append(_failed(locale, exc.message))
                 continue
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 # Unexpected — log full traceback so we can debug, but keep
-                # going so one bad locale doesn't kill the whole batch.
+                # going so one bad locale doesn't kill the whole batch. Never
+                # surface the raw Python error to the API response.
                 logger.exception(
                     "Unexpected error applying bulk %s to app %s locale %s",
-                    field, app.id, item.locale,
+                    field, app.id, locale,
                 )
-                results.append(
-                    BulkApplyResult(
-                        locale=item.locale,
-                        status="failed",
-                        error=str(exc),
-                    )
-                )
+                results.append(_failed(locale, "Unexpected error"))
                 continue
 
-            # Mirror the change into the local snapshot. Caller commits.
+            # Mirror the change into the local snapshot and persist it
+            # durably as produced. The ASC PATCH already happened, so we must
+            # NOT let a later locale's failure roll this row back — commit per
+            # applied locale (PATCH is idempotent + ``unchanged`` skips make a
+            # retry safe). Drift on interruption is bounded to in-flight rows.
             setattr(row, field, new_value)
+            await self.session.commit()
             results.append(
-                BulkApplyResult(
-                    locale=item.locale,
-                    status="applied",
-                    error=None,
-                )
+                BulkApplyResult(locale=locale, status="applied", error=None)
             )
 
         return results
+
+    async def _patch_locale(
+        self,
+        kind: str,
+        localization_id: str,
+        attrs: dict[str, str | None],
+        version_state: str | None,
+    ) -> None:
+        """Dispatch a single-locale PATCH to the right ASC tree."""
+        if kind == "app_info":
+            await self.asc.update_app_info_localization(localization_id, attrs)
+        else:
+            await self.asc.update_version_localization(
+                localization_id, attrs, version_state=version_state,
+            )
