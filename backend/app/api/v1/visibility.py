@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -23,23 +22,26 @@ from app.schemas.visibility import (
     AnomalyOut,
     FullSovOut,
     SnapshotListOut,
-    SovEntry,
     SovOut,
-    VisibilityResultOut,
     VisibilitySnapshotOut,
     WatchAnomaliesOut,
     WatchCreate,
     WatchListOut,
     WatchOut,
+    is_known_storefront,
 )
 from app.services.visibility.anomaly import detect_anomalies
 from app.services.visibility.poller import poll_watch
+from app.services.visibility.queries import (
+    compute_sov_for_watch,
+    latest_snapshot,
+    load_watch,
+    serialize_snapshot,
+    snapshots_by_watch_in_window,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-SOV_TOP_N = 3  # an app counts as "winning" if it lands in the top 3
-SOV_MAX_ENTRIES = 10
 
 
 # ----------------------------------------------------------------------
@@ -50,66 +52,14 @@ SOV_MAX_ENTRIES = 10
 async def _load_watch(
     session: AsyncSession, app_id: int, watch_id: int,
 ) -> KeywordVisibilityWatch:
-    stmt = select(KeywordVisibilityWatch).where(
-        KeywordVisibilityWatch.id == watch_id,
-        KeywordVisibilityWatch.app_id == app_id,
-    )
-    watch = (await session.execute(stmt)).scalar_one_or_none()
+    """Load a watch or raise 404. Wraps the shared loader with the REST error."""
+    watch = await load_watch(session, app_id, watch_id)
     if watch is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Watch {watch_id} not found for this app",
         )
     return watch
-
-
-async def _latest_snapshot(
-    session: AsyncSession, watch_id: int,
-) -> KeywordVisibilitySnapshot | None:
-    stmt = (
-        select(KeywordVisibilitySnapshot)
-        .where(KeywordVisibilitySnapshot.watch_id == watch_id)
-        .order_by(desc(KeywordVisibilitySnapshot.polled_at))
-        .options(selectinload(KeywordVisibilitySnapshot.results))
-        .limit(1)
-    )
-    return (await session.execute(stmt)).scalar_one_or_none()
-
-
-async def _snapshots_by_watch_in_window(
-    session: AsyncSession,
-    watch_ids: list[int],
-    since: datetime,
-) -> dict[int, list[KeywordVisibilitySnapshot]]:
-    """Batch-load snapshots (with results eager-loaded) since ``since``,
-    ordered newest-first, grouped by watch_id."""
-    stmt = (
-        select(KeywordVisibilitySnapshot)
-        .where(
-            KeywordVisibilitySnapshot.watch_id.in_(watch_ids),
-            KeywordVisibilitySnapshot.polled_at >= since,
-        )
-        .order_by(desc(KeywordVisibilitySnapshot.polled_at))
-        .options(selectinload(KeywordVisibilitySnapshot.results))
-    )
-    grouped: dict[int, list[KeywordVisibilitySnapshot]] = {wid: [] for wid in watch_ids}
-    for snap in (await session.execute(stmt)).scalars().all():
-        grouped[snap.watch_id].append(snap)
-    return grouped
-
-
-def _serialize_snapshot(
-    snap: KeywordVisibilitySnapshot,
-) -> VisibilitySnapshotOut:
-    return VisibilitySnapshotOut(
-        id=snap.id,
-        polled_at=snap.polled_at,
-        results_count=snap.results_count,
-        results=[
-            VisibilityResultOut.model_validate(r)
-            for r in sorted(snap.results, key=lambda r: r.position)
-        ],
-    )
 
 
 @router.get("/{app_id}/visibility/watches", response_model=WatchListOut)
@@ -155,7 +105,7 @@ async def list_watches(
                 text=w.text,
                 country=w.country,
                 last_polled_at=w.last_polled_at,
-                latest_snapshot=_serialize_snapshot(snap) if snap else None,
+                latest_snapshot=serialize_snapshot(snap) if snap else None,
             )
         )
     return WatchListOut(items=items)
@@ -181,6 +131,11 @@ async def create_watch(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="text cannot be empty",
+        )
+    if not is_known_storefront(country):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown territory/storefront code: {body.country!r}",
         )
 
     existing = await session.execute(
@@ -251,11 +206,11 @@ async def poll_now(
     await session.commit()
 
     # Reload with results eagerly for the response.
-    full = await _latest_snapshot(session, watch.id)
+    full = await latest_snapshot(session, watch.id)
     if full is None:
         # Defensive — the poll just inserted one.
-        return _serialize_snapshot(snapshot)
-    return _serialize_snapshot(full)
+        return serialize_snapshot(snapshot)
+    return serialize_snapshot(full)
 
 
 @router.get(
@@ -284,46 +239,12 @@ async def list_snapshots(
         .options(selectinload(KeywordVisibilitySnapshot.results))
     )
     snaps = (await session.execute(stmt)).scalars().all()
-    return SnapshotListOut(items=[_serialize_snapshot(s) for s in snaps])
+    return SnapshotListOut(items=[serialize_snapshot(s) for s in snaps])
 
 
 # ----------------------------------------------------------------------
 # Share of voice
 # ----------------------------------------------------------------------
-
-
-def _compute_sov_for_watch(
-    snapshots: list[KeywordVisibilitySnapshot],
-) -> tuple[int, list[SovEntry]]:
-    """Return (poll_count, top entries) where each entry's appearances counts
-    polls in which the track landed in the top SOV_TOP_N positions."""
-    polls = len(snapshots)
-    if polls == 0:
-        return 0, []
-
-    counts: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"appearances": 0, "name": "", "icon_url": ""},
-    )
-    for snap in snapshots:
-        for result in sorted(snap.results, key=lambda x: x.position)[:SOV_TOP_N]:
-            entry = counts[result.track_id]
-            entry["appearances"] += 1
-            entry["name"] = result.name
-            entry["icon_url"] = result.icon_url
-
-    entries = [
-        SovEntry(
-            track_id=track_id,
-            name=info["name"],
-            icon_url=info["icon_url"],
-            appearances=info["appearances"],
-            polls=polls,
-            sov_pct=round(info["appearances"] / polls * 100, 2),
-        )
-        for track_id, info in counts.items()
-    ]
-    entries.sort(key=lambda e: e.appearances, reverse=True)
-    return polls, entries[:SOV_MAX_ENTRIES]
 
 
 @router.get("/{app_id}/visibility/anomalies", response_model=AnomaliesOut)
@@ -349,7 +270,7 @@ async def list_anomalies(
         return AnomaliesOut(items=[])
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    by_watch = await _snapshots_by_watch_in_window(
+    by_watch = await snapshots_by_watch_in_window(
         session, [w.id for w in watches], since,
     )
 
@@ -398,13 +319,13 @@ async def share_of_voice(
         return FullSovOut(items=[])
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    by_watch = await _snapshots_by_watch_in_window(
+    by_watch = await snapshots_by_watch_in_window(
         session, [w.id for w in watches], since,
     )
 
     items: list[SovOut] = []
     for w in watches:
-        polls, entries = _compute_sov_for_watch(by_watch.get(w.id, []))
+        polls, entries = compute_sov_for_watch(by_watch.get(w.id, []))
         items.append(
             SovOut(
                 watch_id=w.id,

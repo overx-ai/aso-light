@@ -8,9 +8,7 @@ and share-of-voice computation.
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from fastmcp.exceptions import ToolError
 from sqlalchemy import desc, select
@@ -28,117 +26,41 @@ from app.schemas.visibility import (
     AnomalyOut,
     FullSovOut,
     SnapshotListOut,
-    SovEntry,
     SovOut,
-    VisibilityResultOut,
     VisibilitySnapshotOut,
     WatchAnomaliesOut,
     WatchCreate,
     WatchListOut,
     WatchOut,
+    is_known_storefront,
 )
 from app.services.visibility.anomaly import detect_anomalies
 from app.services.visibility.poller import poll_watch as poll_watch_service
+from app.services.visibility.queries import (
+    compute_sov_for_watch,
+    latest_snapshot,
+    load_watch,
+    serialize_snapshot,
+    snapshots_by_watch_in_window,
+)
 
 logger = logging.getLogger(__name__)
 
-SOV_TOP_N = 3
-SOV_MAX_ENTRIES = 10
-
 
 # ---------------------------------------------------------------------------
-# Helpers — kept aligned with the REST router so behaviour matches exactly.
+# Helpers — the shared query/serialization logic lives in
+# ``app.services.visibility.queries``; this wrapper just frames the
+# not-found case as a ``ToolError`` for MCP clients.
 # ---------------------------------------------------------------------------
 
 
 async def _load_watch(
     session: AsyncSession, app_id: int, watch_id: int,
 ) -> KeywordVisibilityWatch:
-    stmt = select(KeywordVisibilityWatch).where(
-        KeywordVisibilityWatch.id == watch_id,
-        KeywordVisibilityWatch.app_id == app_id,
-    )
-    watch = (await session.execute(stmt)).scalar_one_or_none()
+    watch = await load_watch(session, app_id, watch_id)
     if watch is None:
         raise ToolError(f"Watch {watch_id} not found for this app")
     return watch
-
-
-async def _latest_snapshot(
-    session: AsyncSession, watch_id: int,
-) -> KeywordVisibilitySnapshot | None:
-    stmt = (
-        select(KeywordVisibilitySnapshot)
-        .where(KeywordVisibilitySnapshot.watch_id == watch_id)
-        .order_by(desc(KeywordVisibilitySnapshot.polled_at))
-        .options(selectinload(KeywordVisibilitySnapshot.results))
-        .limit(1)
-    )
-    return (await session.execute(stmt)).scalar_one_or_none()
-
-
-async def _snapshots_by_watch_in_window(
-    session: AsyncSession,
-    watch_ids: list[int],
-    since: datetime,
-) -> dict[int, list[KeywordVisibilitySnapshot]]:
-    stmt = (
-        select(KeywordVisibilitySnapshot)
-        .where(
-            KeywordVisibilitySnapshot.watch_id.in_(watch_ids),
-            KeywordVisibilitySnapshot.polled_at >= since,
-        )
-        .order_by(desc(KeywordVisibilitySnapshot.polled_at))
-        .options(selectinload(KeywordVisibilitySnapshot.results))
-    )
-    grouped: dict[int, list[KeywordVisibilitySnapshot]] = {wid: [] for wid in watch_ids}
-    for snap in (await session.execute(stmt)).scalars().all():
-        grouped[snap.watch_id].append(snap)
-    return grouped
-
-
-def _serialize_snapshot(snap: KeywordVisibilitySnapshot) -> VisibilitySnapshotOut:
-    return VisibilitySnapshotOut(
-        id=snap.id,
-        polled_at=snap.polled_at,
-        results_count=snap.results_count,
-        results=[
-            VisibilityResultOut.model_validate(r)
-            for r in sorted(snap.results, key=lambda r: r.position)
-        ],
-    )
-
-
-def _compute_sov_for_watch(
-    snapshots: list[KeywordVisibilitySnapshot],
-) -> tuple[int, list[SovEntry]]:
-    polls = len(snapshots)
-    if polls == 0:
-        return 0, []
-
-    counts: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"appearances": 0, "name": "", "icon_url": ""},
-    )
-    for snap in snapshots:
-        for result in sorted(snap.results, key=lambda x: x.position)[:SOV_TOP_N]:
-            entry = counts[result.track_id]
-            entry["appearances"] += 1
-            entry["name"] = result.name
-            entry["icon_url"] = result.icon_url
-
-    entries = [
-        SovEntry(
-            track_id=track_id,
-            name=info["name"],
-            icon_url=info["icon_url"],
-            appearances=info["appearances"],
-            polls=polls,
-            sov_pct=round(info["appearances"] / polls * 100, 2),
-        )
-        for track_id, info in counts.items()
-    ]
-    entries.sort(key=lambda e: e.appearances, reverse=True)
-    return polls, entries[:SOV_MAX_ENTRIES]
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +104,7 @@ async def list_watches(app_id: int) -> WatchListOut:
                     text=w.text,
                     country=w.country,
                     last_polled_at=w.last_polled_at,
-                    latest_snapshot=_serialize_snapshot(snap) if snap else None,
+                    latest_snapshot=serialize_snapshot(snap) if snap else None,
                 )
             )
         return WatchListOut(items=items)
@@ -199,6 +121,8 @@ async def create_watch(app_id: int, text: str, country: str) -> WatchOut:
         country = body.country.strip().lower()
         if not text:
             raise ToolError("text cannot be empty")
+        if not is_known_storefront(country):
+            raise ToolError(f"Unknown territory/storefront code: {country!r}")
 
         existing = await session.execute(
             select(KeywordVisibilityWatch).where(
@@ -253,8 +177,8 @@ async def poll_watch(app_id: int, watch_id: int) -> VisibilitySnapshotOut:
 
         # Re-load with results eagerly populated for serialization; fall back
         # to the freshly-polled snapshot if the reload comes up empty.
-        full = await _latest_snapshot(session, watch.id)
-        return _serialize_snapshot(full or snapshot)
+        full = await latest_snapshot(session, watch.id)
+        return serialize_snapshot(full or snapshot)
 
 
 @mcp.tool(name="visibility.list_snapshots")
@@ -281,7 +205,7 @@ async def list_snapshots(
             .options(selectinload(KeywordVisibilitySnapshot.results))
         )
         snaps = (await session.execute(stmt)).scalars().all()
-        return SnapshotListOut(items=[_serialize_snapshot(s) for s in snaps])
+        return SnapshotListOut(items=[serialize_snapshot(s) for s in snaps])
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +240,7 @@ async def list_anomalies(
             return AnomaliesOut(items=[])
 
         since = datetime.now(timezone.utc) - timedelta(days=days)
-        by_watch = await _snapshots_by_watch_in_window(
+        by_watch = await snapshots_by_watch_in_window(
             session, [w.id for w in watches], since,
         )
 
@@ -364,13 +288,13 @@ async def get_sov(app_id: int, days: int = 30) -> FullSovOut:
             return FullSovOut(items=[])
 
         since = datetime.now(timezone.utc) - timedelta(days=days)
-        by_watch = await _snapshots_by_watch_in_window(
+        by_watch = await snapshots_by_watch_in_window(
             session, [w.id for w in watches], since,
         )
 
         items: list[SovOut] = []
         for w in watches:
-            polls, entries = _compute_sov_for_watch(by_watch.get(w.id, []))
+            polls, entries = compute_sov_for_watch(by_watch.get(w.id, []))
             items.append(
                 SovOut(
                     watch_id=w.id,

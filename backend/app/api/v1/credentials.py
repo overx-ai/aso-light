@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from sqlalchemy import inspect as sa_inspect
 
-from app.core.security import decrypt_value, encrypt_value, get_current_user
+from app.core.security import encrypt_value, get_current_user
 from app.db.session import get_session
 from app.models.credential import ASCCredential
 from app.schemas.credential import CredentialResponse, CredentialTestResponse
@@ -90,7 +90,9 @@ async def list_credentials(
 ) -> list[CredentialResponse]:
     user_id = int(current_user["user_id"])
     result = await session.execute(
-        select(ASCCredential).where(ASCCredential.user_id == user_id)
+        select(ASCCredential)
+        .where(ASCCredential.user_id == user_id)
+        .options(selectinload(ASCCredential.apps))
     )
     credentials = result.scalars().all()
     return [_credential_to_response(c) for c in credentials]

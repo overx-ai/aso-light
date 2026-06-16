@@ -68,6 +68,11 @@ async def get_availability(
     """Return current per-territory availability fetched from Apple."""
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
+    if not app.asc_app_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="App not yet synced from App Store Connect.",
+        )
     territory_names = await _territory_name_map(session)
 
     async with await _get_asc_client_for_app(app, session) as client:
@@ -75,9 +80,13 @@ async def get_availability(
         try:
             raw = await service.get_app_availability(app.asc_app_id)
         except ASCAPIError as exc:
+            logger.warning(
+                "ASC rejected availability fetch for app_id=%s: %s",
+                app_id, exc.message,
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Apple rejected availability fetch: {exc}",
+                detail="App Store Connect rejected the availability request.",
             )
 
     return _build_response(raw, territory_names)
@@ -96,6 +105,11 @@ async def update_availability(
     """Submit a new availability snapshot to Apple, then return the result."""
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
+    if not app.asc_app_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="App not yet synced from App Store Connect.",
+        )
     territory_names = await _territory_name_map(session)
 
     disabled = {code.upper() for code in body.disabled_territories}
@@ -123,9 +137,13 @@ async def update_availability(
             )
             raw = await service.get_app_availability(app.asc_app_id)
         except ASCAPIError as exc:
+            logger.warning(
+                "ASC rejected availability update for app_id=%s: %s",
+                app_id, exc.message,
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Apple rejected availability update: {exc}",
+                detail="App Store Connect rejected the availability request.",
             )
         except ValueError as exc:
             raise HTTPException(
