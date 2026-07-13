@@ -20,6 +20,7 @@ from app.api.v1._deps import _get_asc_client_for_app
 from app.mcp.context import resolve_app, session_scope
 from app.mcp.server import mcp
 from app.schemas.cpp import (
+    CPPEnsureLocalizationResponse,
     CPPListResponse,
     CPPResponse,
     Screenshot,
@@ -88,16 +89,21 @@ async def get_cpp(app_id: int, cpp_id: str) -> CPPResponse:
 
 @mcp.tool(name="cpp.create")
 async def create_cpp(
-    app_id: int, name: str, visible: bool = True,
+    app_id: int, name: str, locale: str = "en-US", visible: bool = True,
 ) -> CPPResponse:
-    """Create a Custom Product Page (Apple auto-creates a draft version)."""
+    """Create a Custom Product Page.
+
+    ASC requires the first version + a localization inline on create, so the
+    page is seeded with a ``locale`` localization (default ``en-US``); add more
+    locales with ``cpp.ensure_localization``.
+    """
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
             service = ASCCustomProductPageService(client)
             async with _asc_tool_error():
                 resource = await service.create_cpp(
-                    app.asc_app_id, name, visible=visible,
+                    app.asc_app_id, name, locale=locale, visible=visible,
                 )
         return _to_cpp_response(resource)
 
@@ -134,6 +140,45 @@ async def delete_cpp(app_id: int, cpp_id: str) -> dict[str, bool]:
             async with _asc_tool_error():
                 await service.delete_cpp(cpp_id)
         return {"deleted": True}
+
+
+# ==================================================================
+# Localizations
+# ==================================================================
+
+
+@mcp.tool(name="cpp.ensure_localization")
+async def ensure_cpp_localization(
+    app_id: int, cpp_id: str, locale: str,
+) -> CPPEnsureLocalizationResponse:
+    """Resolve (or create) a CPP localization, returning its ``localization_id``.
+
+    ``cpp.upload_screenshot`` needs an ``appCustomProductPageLocalizations`` id,
+    which otherwise requires manually walking the CPP's versions then
+    localizations. This resolves the CPP's editable (draft) version, reuses the
+    localization whose ``locale`` matches, and creates one if absent — so a
+    multi-locale CPP can be populated one locale at a time. Idempotent: repeat
+    calls for the same ``(cpp_id, locale)`` return the same ``localization_id``.
+    """
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        async with await _get_asc_client_for_app(app, session) as client:
+            service = ASCCustomProductPageService(client)
+            async with _asc_tool_error():
+                version_id = await service.get_editable_version_id(cpp_id)
+                if version_id is None:
+                    raise ToolError(
+                        f"Custom Product Page {cpp_id} has no editable version"
+                    )
+                localization_id = await service.find_or_create_localization_id(
+                    version_id, locale,
+                )
+        return CPPEnsureLocalizationResponse(
+            cpp_id=cpp_id,
+            version_id=version_id,
+            localization_id=localization_id,
+            locale=locale,
+        )
 
 
 # ==================================================================

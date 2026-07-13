@@ -89,23 +89,57 @@ def test_get_cpp_returns_data_resource():
     assert ("GET", "/appCustomProductPages/cpp-1", None) in client.calls
 
 
-def test_create_cpp_posts_app_relationship_and_attributes():
+def test_create_cpp_sends_compound_version_and_localization():
+    # ASC requires the first version + localization inline on CREATE (compound
+    # doc, ``${...}`` inline ids). ``name`` carries no ``visible`` (rejected on
+    # CREATE); visibility is applied with a follow-up PATCH.
     svc, client = _service({
         ("POST", "/appCustomProductPages"): {"data": {"id": "cpp-new"}},
+        ("PATCH", "/appCustomProductPages/cpp-new"): {
+            "data": {"id": "cpp-new", "attributes": {"visible": False}},
+        },
     })
-    out = run_async(svc.create_cpp("app-123", "My CPP", visible=False))
+    out = run_async(svc.create_cpp("app-123", "My CPP", locale="de-DE", visible=False))
     assert out["id"] == "cpp-new"
 
-    method, path, body = next(
-        c for c in client.calls if c[0] == "POST"
-    )
+    _method, path, body = next(c for c in client.calls if c[0] == "POST")
     assert path == "/appCustomProductPages"
     data = body["data"]
     assert data["type"] == "appCustomProductPages"
-    assert data["attributes"] == {"name": "My CPP", "visible": False}
-    assert data["relationships"]["app"]["data"] == {
-        "type": "apps", "id": "app-123",
-    }
+    assert data["attributes"] == {"name": "My CPP"}  # no 'visible' on CREATE
+    assert data["relationships"]["app"]["data"] == {"type": "apps", "id": "app-123"}
+
+    # data references an inline version; included seeds that version + a de-DE localization
+    ver_lid = data["relationships"]["appCustomProductPageVersions"]["data"][0]["id"]
+    included = {(i["type"], i["id"]): i for i in body["included"]}
+    assert ("appCustomProductPageVersions", ver_lid) in included
+    version_item = included[("appCustomProductPageVersions", ver_lid)]
+    # The inline version MUST carry an attributes object (deepLink) — Apple drops a
+    # relationships-only inline resource and mis-reports "must provide localizations".
+    assert "deepLink" in version_item["attributes"]
+    loc_ref = (version_item
+               ["relationships"]["appCustomProductPageLocalizations"]["data"][0])
+    loc = included[("appCustomProductPageLocalizations", loc_ref["id"])]
+    assert loc["attributes"] == {"locale": "de-DE"}
+
+    # visibility applied via a follow-up update
+    _m, patch_path, patch_body = next(c for c in client.calls if c[0] == "PATCH")
+    assert patch_path == "/appCustomProductPages/cpp-new"
+    assert patch_body["data"]["attributes"] == {"visible": False}
+
+
+def test_create_cpp_survives_visibility_update_rejection():
+    # A brand-new page that refuses the visibility change must not fail create.
+    from app.services.asc.errors import ASCAPIError
+
+    class _RejectPatch(FakeASCClient):
+        async def _patch(self, path, json=None):
+            raise ASCAPIError(409, {"errors": [{"detail": "visible not allowed yet"}]})
+
+    client = _RejectPatch({("POST", "/appCustomProductPages"): {"data": {"id": "cpp-x"}}})
+    svc = ASCCustomProductPageService(client)  # type: ignore[arg-type]
+    out = run_async(svc.create_cpp("app-1", "My CPP", visible=True))
+    assert out["id"] == "cpp-x"
 
 
 def test_update_cpp_sends_only_provided_attributes():
@@ -164,6 +198,63 @@ def test_list_localizations_paginates_version_localizations():
     rows = run_async(svc.list_localizations("ver-1"))
     assert rows[0]["id"] == "loc-1"
     assert ("GET_ALL", path, None) in client.calls
+
+
+def test_get_editable_version_prefers_editable_state():
+    svc, _client = _service({
+        ("GET", "/appCustomProductPages/cpp-1/appCustomProductPageVersions"): {
+            "data": [
+                {"id": "ver-old", "attributes": {"state": "COMPLETE"}},
+                {"id": "ver-edit", "attributes": {"state": "PREPARE_FOR_SUBMISSION"}},
+            ],
+        },
+    })
+    assert run_async(svc.get_editable_version_id("cpp-1")) == "ver-edit"
+
+
+def test_get_editable_version_none_when_no_versions():
+    svc, _client = _service()  # empty -> {"data": []}
+    assert run_async(svc.get_editable_version_id("cpp-1")) is None
+
+
+def test_find_or_create_localization_reuses_matching_locale():
+    """cpp.ensure_localization idempotency: an existing locale is reused (no POST)."""
+    path = (
+        "/appCustomProductPageVersions/ver-1"
+        "/appCustomProductPageLocalizations"
+    )
+    svc, client = _service({
+        ("GET", path): {
+            "data": [
+                {"id": "loc-en", "attributes": {"locale": "en-US"}},
+                {"id": "loc-de", "attributes": {"locale": "de-DE"}},
+            ],
+        },
+    })
+    loc_id = run_async(svc.find_or_create_localization_id("ver-1", "de-DE"))
+    assert loc_id == "loc-de"
+    assert not any(c[0] == "POST" for c in client.calls)
+
+
+def test_find_or_create_localization_creates_when_absent():
+    """cpp.ensure_localization: a missing locale is created under the version."""
+    list_path = (
+        "/appCustomProductPageVersions/ver-1"
+        "/appCustomProductPageLocalizations"
+    )
+    svc, client = _service({
+        ("GET", list_path): {
+            "data": [{"id": "loc-en", "attributes": {"locale": "en-US"}}],
+        },
+        ("POST", "/appCustomProductPageLocalizations"): {
+            "data": {"id": "loc-ru", "attributes": {"locale": "ru"}},
+        },
+    })
+    loc_id = run_async(svc.find_or_create_localization_id("ver-1", "ru"))
+    assert loc_id == "loc-ru"
+    _method, path, body = next(c for c in client.calls if c[0] == "POST")
+    assert path == "/appCustomProductPageLocalizations"
+    assert body["data"]["attributes"]["locale"] == "ru"
 
 
 # ------------------------------------------------------------------

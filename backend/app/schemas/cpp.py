@@ -134,6 +134,20 @@ class CPPLocalizationListResponse(BaseModel):
     items: list[CPPLocalization] = Field(default_factory=list)
 
 
+class CPPEnsureLocalizationResponse(BaseModel):
+    """Resolved (found-or-created) localization for a CPP + locale.
+
+    ``localization_id`` is the ``appCustomProductPageLocalizations`` id that
+    ``cpp.upload_screenshot`` requires; ``version_id`` is the editable draft
+    version it lives under.
+    """
+
+    cpp_id: str
+    version_id: str
+    localization_id: str
+    locale: str
+
+
 # ------------------------------------------------------------------
 # Screenshots
 # ------------------------------------------------------------------

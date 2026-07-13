@@ -19,6 +19,8 @@ import hashlib
 import logging
 from typing import TYPE_CHECKING
 
+from app.services.asc.errors import ASCAPIError
+
 if TYPE_CHECKING:
     from app.services.asc.client import ASCClient
 
@@ -90,36 +92,92 @@ class ASCCustomProductPageService:
         self,
         asc_app_id: str,
         name: str,
+        locale: str = "en-US",
         visible: bool = True,
+        deep_link: str | None = None,
     ) -> dict:
         """Create a Custom Product Page.
 
         ``POST /v1/appCustomProductPages``
 
-        Apple auto-creates a draft version under the new page; localizations
-        are added under that version.
+        ASC requires a page to be created together with its first version and a
+        localization, so this sends a **compound** create: the page, an inline
+        ``appCustomProductPageVersions`` and an inline
+        ``appCustomProductPageLocalizations`` for ``locale`` — linked by Apple's
+        ``${...}`` inline-creation ids (the same idiom as the pricing schedules).
+        Extra locales are added afterwards with
+        :meth:`find_or_create_localization_id`.
+
+        The inline version **must** carry an ``attributes`` object: Apple drops a
+        relationships-only inline resource and then reports the misleading error
+        "must provide a value for the relationship 'appCustomProductPageLocalizations'"
+        (the localizations are nested under the dropped version). ``deepLink`` is
+        the version's only writable attribute — ``None`` sends ``null`` (no deep
+        link), which is enough to make the version a well-formed inline resource.
+
+        ``visible`` is **not** accepted on CREATE, so the requested visibility is
+        applied with a best-effort follow-up update — a brand-new page may refuse
+        a visibility change until it has content, and that must not fail the
+        create (screenshots still upload; visibility can be set later).
 
         Returns:
             The created appCustomProductPages resource dict.
         """
+        version_lid = "${cpp-version-1}"
+        localization_lid = "${cpp-localization-1}"
         body = {
             "data": {
                 "type": "appCustomProductPages",
                 "attributes": {
                     "name": name,
-                    "visible": visible,
                 },
                 "relationships": {
                     "app": {
                         "data": {"type": "apps", "id": asc_app_id},
                     },
+                    "appCustomProductPageVersions": {
+                        "data": [{
+                            "type": "appCustomProductPageVersions",
+                            "id": version_lid,
+                        }],
+                    },
                 },
-            }
+            },
+            "included": [
+                {
+                    "type": "appCustomProductPageVersions",
+                    "id": version_lid,
+                    "attributes": {"deepLink": deep_link},
+                    "relationships": {
+                        "appCustomProductPageLocalizations": {
+                            "data": [{
+                                "type": "appCustomProductPageLocalizations",
+                                "id": localization_lid,
+                            }],
+                        },
+                    },
+                },
+                {
+                    "type": "appCustomProductPageLocalizations",
+                    "id": localization_lid,
+                    "attributes": {"locale": locale},
+                },
+            ],
         }
         response = await self.client._post(
             "/appCustomProductPages", json=body
         )
-        return response.get("data", {})
+        created = response.get("data", {})
+        cpp_id = created.get("id")
+        if cpp_id and visible is not None:
+            try:
+                return await self.update_cpp(cpp_id, visible=visible) or created
+            except ASCAPIError:
+                logger.warning(
+                    "CPP %s created but visible=%s not applied "
+                    "(ASC rejected the update)", cpp_id, visible,
+                )
+        return created
 
     async def create_localization(
         self, version_id: str, locale: str
@@ -315,7 +373,7 @@ class ASCCustomProductPageService:
         Returns:
             ``{"cpp_id", "name", "uploaded_count"}``.
         """
-        cpp = await self.create_cpp(asc_app_id, name, visible=True)
+        cpp = await self.create_cpp(asc_app_id, name, locale=locale, visible=True)
         cpp_id = cpp["id"]
 
         version_id = await self.get_editable_version_id(cpp_id)
