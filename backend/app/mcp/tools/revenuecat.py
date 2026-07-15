@@ -82,7 +82,7 @@ async def _resolve_rc_client_for_app(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="revenuecat.set_credential")
+@mcp.tool(name="revenuecat_set_credential")
 async def set_credential(
     app_id: int,
     name: str,
@@ -121,7 +121,7 @@ async def set_credential(
         return _cred_to_response(cred)
 
 
-@mcp.tool(name="revenuecat.get_credential")
+@mcp.tool(name="revenuecat_get_credential")
 async def get_credential(app_id: int) -> RevenueCatCredentialResponse | None:
     """Return the RevenueCat credential linked to the app, or ``None``."""
     async with session_scope() as session:
@@ -131,7 +131,7 @@ async def get_credential(app_id: int) -> RevenueCatCredentialResponse | None:
         return _cred_to_response(cred) if cred else None
 
 
-@mcp.tool(name="revenuecat.update_credential")
+@mcp.tool(name="revenuecat_update_credential")
 async def update_credential(
     app_id: int,
     name: str | None = None,
@@ -160,7 +160,7 @@ async def update_credential(
         return _cred_to_response(cred)
 
 
-@mcp.tool(name="revenuecat.delete_credential")
+@mcp.tool(name="revenuecat_delete_credential")
 async def delete_credential(app_id: int) -> dict[str, str]:
     """Disconnect the RevenueCat credential from the app and delete it."""
     async with session_scope() as session:
@@ -175,7 +175,7 @@ async def delete_credential(app_id: int) -> dict[str, str]:
         return {"detail": "RevenueCat credential disconnected"}
 
 
-@mcp.tool(name="revenuecat.test_credential")
+@mcp.tool(name="revenuecat_test_credential")
 async def test_credential(app_id: int) -> RCConnectionTestResponse:
     """Verify the linked RC credential by listing apps in its project."""
     async with session_scope() as session:
@@ -206,7 +206,7 @@ async def test_credential(app_id: int) -> RCConnectionTestResponse:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="revenuecat.list_apps")
+@mcp.tool(name="revenuecat_list_apps")
 async def list_rc_apps(app_id: int) -> list[dict[str, Any]]:
     """List RevenueCat apps in the linked project."""
     async with session_scope() as session:
@@ -220,7 +220,7 @@ async def list_rc_apps(app_id: int) -> list[dict[str, Any]]:
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.list_products")
+@mcp.tool(name="revenuecat_list_products")
 async def list_products(
     app_id: int,
     store_identifier: str | None = None,
@@ -244,7 +244,7 @@ async def list_products(
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.archive_product")
+@mcp.tool(name="revenuecat_archive_product")
 async def archive_product(app_id: int, rc_product_id: str) -> dict[str, Any]:
     """Archive a RevenueCat product (soft-delete; preserves history)."""
     async with session_scope() as session:
@@ -263,7 +263,7 @@ async def archive_product(app_id: int, rc_product_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="revenuecat.list_entitlements")
+@mcp.tool(name="revenuecat_list_entitlements")
 async def list_entitlements(app_id: int) -> list[dict[str, Any]]:
     """List entitlements in the RC project."""
     async with session_scope() as session:
@@ -277,7 +277,7 @@ async def list_entitlements(app_id: int) -> list[dict[str, Any]]:
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.create_entitlement")
+@mcp.tool(name="revenuecat_create_entitlement")
 async def create_entitlement(
     app_id: int,
     lookup_key: str,
@@ -298,7 +298,7 @@ async def create_entitlement(
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.update_entitlement")
+@mcp.tool(name="revenuecat_update_entitlement")
 async def update_entitlement(
     app_id: int,
     entitlement_id: str,
@@ -319,7 +319,7 @@ async def update_entitlement(
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.delete_entitlement")
+@mcp.tool(name="revenuecat_delete_entitlement")
 async def archive_entitlement(
     app_id: int,
     entitlement_id: str,
@@ -336,7 +336,7 @@ async def archive_entitlement(
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.attach_product_to_entitlement")
+@mcp.tool(name="revenuecat_attach_product_to_entitlement")
 async def attach_products_to_entitlement(
     app_id: int,
     entitlement_id: str,
@@ -359,7 +359,7 @@ async def attach_products_to_entitlement(
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.detach_product_from_entitlement")
+@mcp.tool(name="revenuecat_detach_product_from_entitlement")
 async def detach_products_from_entitlement(
     app_id: int,
     entitlement_id: str,
@@ -387,7 +387,7 @@ async def detach_products_from_entitlement(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="revenuecat.list_offerings")
+@mcp.tool(name="revenuecat_list_offerings")
 async def list_offerings(app_id: int) -> list[dict[str, Any]]:
     """List offerings in the RC project."""
     async with session_scope() as session:
@@ -401,7 +401,7 @@ async def list_offerings(app_id: int) -> list[dict[str, Any]]:
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.create_offering")
+@mcp.tool(name="revenuecat_create_offering")
 async def create_offering(
     app_id: int,
     lookup_key: str,
@@ -426,7 +426,7 @@ async def create_offering(
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.update_offering")
+@mcp.tool(name="revenuecat_update_offering")
 async def update_offering(
     app_id: int,
     offering_id: str,
@@ -451,7 +451,7 @@ async def update_offering(
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.delete_offering")
+@mcp.tool(name="revenuecat_delete_offering")
 async def archive_offering(app_id: int, offering_id: str) -> dict[str, Any]:
     """Archive an offering."""
     async with session_scope() as session:
@@ -470,7 +470,7 @@ async def archive_offering(app_id: int, offering_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="revenuecat.list_packages")
+@mcp.tool(name="revenuecat_list_packages")
 async def list_packages(app_id: int, offering_id: str) -> list[dict[str, Any]]:
     """List packages inside an offering."""
     async with session_scope() as session:
@@ -484,7 +484,7 @@ async def list_packages(app_id: int, offering_id: str) -> list[dict[str, Any]]:
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.create_package")
+@mcp.tool(name="revenuecat_create_package")
 async def create_package(
     app_id: int,
     offering_id: str,
@@ -509,7 +509,7 @@ async def create_package(
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.delete_package")
+@mcp.tool(name="revenuecat_delete_package")
 async def delete_package(
     app_id: int,
     offering_id: str,
@@ -528,7 +528,7 @@ async def delete_package(
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.attach_products_to_package")
+@mcp.tool(name="revenuecat_attach_products_to_package")
 async def attach_products_to_package(
     app_id: int,
     offering_id: str,
@@ -553,7 +553,7 @@ async def attach_products_to_package(
             raise _wrap_rc(exc) from exc
 
 
-@mcp.tool(name="revenuecat.detach_products_from_package")
+@mcp.tool(name="revenuecat_detach_products_from_package")
 async def detach_products_from_package(
     app_id: int,
     offering_id: str,

@@ -27,7 +27,7 @@ async def _get_user_preset(
     return preset
 
 
-@mcp.tool(name="presets.list")
+@mcp.tool(name="presets_list")
 async def list_presets_tool() -> list[PresetResponse]:
     """List all price presets owned by the authenticated user."""
     async with session_scope() as session:
@@ -40,7 +40,7 @@ async def list_presets_tool() -> list[PresetResponse]:
         return [PresetResponse.model_validate(p) for p in res.scalars().all()]
 
 
-@mcp.tool(name="presets.create")
+@mcp.tool(name="presets_create")
 async def create_preset_tool(body: PresetCreate) -> PresetResponse:
     """Create a new price preset for the current user."""
     async with session_scope() as session:
@@ -61,7 +61,7 @@ async def create_preset_tool(body: PresetCreate) -> PresetResponse:
         return PresetResponse.model_validate(preset)
 
 
-@mcp.tool(name="presets.get")
+@mcp.tool(name="presets_get")
 async def get_preset_tool(preset_id: int) -> PresetResponse:
     """Fetch a single preset by id (must be owned by the current user)."""
     async with session_scope() as session:
@@ -70,7 +70,7 @@ async def get_preset_tool(preset_id: int) -> PresetResponse:
         return PresetResponse.model_validate(preset)
 
 
-@mcp.tool(name="presets.update")
+@mcp.tool(name="presets_update")
 async def update_preset_tool(preset_id: int, body: PresetUpdate) -> PresetResponse:
     """Partial-update an existing preset; only provided fields are written."""
     async with session_scope() as session:
@@ -83,7 +83,7 @@ async def update_preset_tool(preset_id: int, body: PresetUpdate) -> PresetRespon
         return PresetResponse.model_validate(preset)
 
 
-@mcp.tool(name="presets.delete")
+@mcp.tool(name="presets_delete")
 async def delete_preset_tool(preset_id: int) -> dict[str, bool]:
     """Delete a preset owned by the current user."""
     async with session_scope() as session:

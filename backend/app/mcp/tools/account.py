@@ -22,7 +22,7 @@ from app.schemas.account import (
 )
 
 
-@mcp.tool(name="account.whoami")
+@mcp.tool(name="account_whoami")
 async def whoami_tool() -> AccountWhoAmIResponse:
     """Show which user, PAT, ASC credentials, and apps the current MCP call can see."""
     async with session_scope() as session:

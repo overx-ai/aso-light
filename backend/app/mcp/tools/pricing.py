@@ -138,7 +138,7 @@ async def _get_verified_subscription_group(group_id, app_id, session):
 # ==================================================================
 
 
-@mcp.tool(name="pricing.list_subscription_groups")
+@mcp.tool(name="pricing_list_subscription_groups")
 async def list_subscription_groups(
     app_id: int,
 ) -> list[SubscriptionGroupWithSubscriptionsResponse]:
@@ -224,7 +224,7 @@ async def list_subscription_groups(
         ]
 
 
-@mcp.tool(name="pricing.create_subscription_group")
+@mcp.tool(name="pricing_create_subscription_group")
 async def create_subscription_group(
     app_id: int, reference_name: str
 ) -> SubscriptionGroupResponse:
@@ -257,7 +257,7 @@ async def create_subscription_group(
         return SubscriptionGroupResponse.model_validate(group)
 
 
-@mcp.tool(name="pricing.update_subscription_group")
+@mcp.tool(name="pricing_update_subscription_group")
 async def update_subscription_group(
     app_id: int, group_id: int, reference_name: str,
 ) -> SubscriptionGroupResponse:
@@ -287,7 +287,7 @@ async def update_subscription_group(
 # ==================================================================
 
 
-@mcp.tool(name="pricing.list_subscription_group_localizations")
+@mcp.tool(name="pricing_list_subscription_group_localizations")
 async def list_subscription_group_localizations(
     app_id: int, group_id: int,
 ) -> list[GroupLocalizationResponse]:
@@ -308,7 +308,7 @@ async def list_subscription_group_localizations(
         return [_parse_group_localization(item) for item in data]
 
 
-@mcp.tool(name="pricing.create_subscription_group_localization")
+@mcp.tool(name="pricing_create_subscription_group_localization")
 async def create_subscription_group_localization(
     app_id: int,
     group_id: int,
@@ -339,7 +339,7 @@ async def create_subscription_group_localization(
         return _parse_group_localization(result.get("data", result))
 
 
-@mcp.tool(name="pricing.update_subscription_group_localization")
+@mcp.tool(name="pricing_update_subscription_group_localization")
 async def update_subscription_group_localization(
     app_id: int,
     group_id: int,
@@ -372,7 +372,7 @@ async def update_subscription_group_localization(
         return _parse_group_localization(result.get("data", result))
 
 
-@mcp.tool(name="pricing.delete_subscription_group_localization")
+@mcp.tool(name="pricing_delete_subscription_group_localization")
 async def delete_subscription_group_localization(
     app_id: int, group_id: int, localization_id: str,
 ) -> dict[str, bool]:
@@ -404,7 +404,7 @@ async def delete_subscription_group_localization(
 # ==================================================================
 
 
-@mcp.tool(name="pricing.create_subscription")
+@mcp.tool(name="pricing_create_subscription")
 async def create_subscription(
     app_id: int,
     group_id: int,
@@ -478,7 +478,7 @@ async def create_subscription(
         return SubscriptionResponse.model_validate(sub)
 
 
-@mcp.tool(name="pricing.update_subscription")
+@mcp.tool(name="pricing_update_subscription")
 async def update_subscription(
     app_id: int,
     subscription_id: int,
@@ -518,7 +518,7 @@ async def update_subscription(
         return SubscriptionResponse.model_validate(sub)
 
 
-@mcp.tool(name="pricing.delete_subscription")
+@mcp.tool(name="pricing_delete_subscription")
 async def delete_subscription(
     app_id: int, subscription_id: int,
 ) -> dict[str, bool]:
@@ -541,7 +541,7 @@ async def delete_subscription(
         return {"deleted": True}
 
 
-@mcp.tool(name="pricing.get_subscription_availability")
+@mcp.tool(name="pricing_get_subscription_availability")
 async def get_subscription_availability(
     app_id: int, subscription_id: int,
 ) -> SubscriptionAvailabilityResponse:
@@ -575,7 +575,7 @@ async def get_subscription_availability(
 # ==================================================================
 
 
-@mcp.tool(name="pricing.list_subscription_localizations")
+@mcp.tool(name="pricing_list_subscription_localizations")
 async def list_subscription_localizations(
     app_id: int, subscription_id: int,
 ) -> list[LocalizationResponse]:
@@ -598,7 +598,7 @@ async def list_subscription_localizations(
         return [_parse_localization(item) for item in data]
 
 
-@mcp.tool(name="pricing.create_subscription_localization")
+@mcp.tool(name="pricing_create_subscription_localization")
 async def create_subscription_localization(
     app_id: int,
     subscription_id: int,
@@ -629,7 +629,7 @@ async def create_subscription_localization(
         return _parse_localization(result.get("data", result))
 
 
-@mcp.tool(name="pricing.update_subscription_localization")
+@mcp.tool(name="pricing_update_subscription_localization")
 async def update_subscription_localization(
     app_id: int,
     subscription_id: int,
@@ -662,7 +662,7 @@ async def update_subscription_localization(
         return _parse_localization(result.get("data", result))
 
 
-@mcp.tool(name="pricing.delete_subscription_localization")
+@mcp.tool(name="pricing_delete_subscription_localization")
 async def delete_subscription_localization(
     app_id: int, subscription_id: int, localization_id: str,
 ) -> dict[str, bool]:
@@ -689,7 +689,7 @@ async def delete_subscription_localization(
         return {"deleted": True}
 
 
-@mcp.tool(name="pricing.bulk_sync_subscription_localizations")
+@mcp.tool(name="pricing_bulk_sync_subscription_localizations")
 async def bulk_sync_subscription_localizations(
     app_id: int,
     subscription_id: int,
@@ -735,7 +735,7 @@ async def bulk_sync_subscription_localizations(
 # ==================================================================
 
 
-@mcp.tool(name="pricing.get_subscription_prices")
+@mcp.tool(name="pricing_get_subscription_prices")
 async def get_subscription_prices(
     app_id: int, subscription_id: int,
 ) -> SubscriptionPricesResponse:
@@ -784,7 +784,7 @@ async def get_subscription_prices(
         )
 
 
-@mcp.tool(name="pricing.sync_subscription_prices")
+@mcp.tool(name="pricing_sync_subscription_prices")
 async def sync_subscription_prices(
     app_id: int, subscription_id: int,
 ) -> SyncPricesResponse:
@@ -849,7 +849,7 @@ async def sync_subscription_prices(
         )
 
 
-@mcp.tool(name="pricing.subscription_price_points_status")
+@mcp.tool(name="pricing_subscription_price_points_status")
 async def subscription_price_points_status(
     app_id: int, subscription_id: int,
 ) -> PricePointCacheStatus:
@@ -863,7 +863,7 @@ async def subscription_price_points_status(
         return PricePointCacheStatus(**info)
 
 
-@mcp.tool(name="pricing.sync_subscription_price_points")
+@mcp.tool(name="pricing_sync_subscription_price_points")
 async def sync_subscription_price_points(
     app_id: int, subscription_id: int,
 ) -> PricePointSyncResponse:
@@ -912,7 +912,7 @@ async def _preview_items(
         raise_error=lambda message: ToolError(message),
     )
 
-@mcp.tool(name="pricing.preview_subscription_prices")
+@mcp.tool(name="pricing_preview_subscription_prices")
 async def preview_subscription_prices(
     app_id: int,
     subscription_id: int,
@@ -969,7 +969,7 @@ async def preview_subscription_prices(
         )
 
 
-@mcp.tool(name="pricing.resolve_subscription_price")
+@mcp.tool(name="pricing_resolve_subscription_price")
 async def resolve_subscription_price(
     app_id: int,
     subscription_id: int,
@@ -1003,7 +1003,7 @@ async def resolve_subscription_price(
         )
 
 
-@mcp.tool(name="pricing.apply_subscription_prices")
+@mcp.tool(name="pricing_apply_subscription_prices")
 async def apply_subscription_prices(
     app_id: int,
     subscription_id: int,
@@ -1260,7 +1260,7 @@ async def apply_subscription_prices(
 # ==================================================================
 
 
-@mcp.tool(name="pricing.list_subscription_intro_offers")
+@mcp.tool(name="pricing_list_subscription_intro_offers")
 async def list_subscription_intro_offers(
     app_id: int, subscription_id: int,
 ) -> list[IntroOfferResponse]:
@@ -1281,7 +1281,7 @@ async def list_subscription_intro_offers(
         return [_parse_intro_offer(item) for item in data]
 
 
-@mcp.tool(name="pricing.create_subscription_intro_offer")
+@mcp.tool(name="pricing_create_subscription_intro_offer")
 async def create_subscription_intro_offer(
     app_id: int,
     subscription_id: int,
@@ -1318,7 +1318,7 @@ async def create_subscription_intro_offer(
         )
 
 
-@mcp.tool(name="pricing.delete_subscription_intro_offer")
+@mcp.tool(name="pricing_delete_subscription_intro_offer")
 async def delete_subscription_intro_offer(
     app_id: int, subscription_id: int, offer_id: str,
 ) -> dict[str, bool]:
@@ -1350,7 +1350,7 @@ async def delete_subscription_intro_offer(
 # ==================================================================
 
 
-@mcp.tool(name="pricing.get_subscription_review_screenshot")
+@mcp.tool(name="pricing_get_subscription_review_screenshot")
 async def get_subscription_review_screenshot(
     app_id: int, subscription_id: int,
 ) -> ReviewScreenshotResponse | None:
@@ -1369,7 +1369,7 @@ async def get_subscription_review_screenshot(
         return _parse_screenshot(data)
 
 
-@mcp.tool(name="pricing.upload_subscription_review_screenshot")
+@mcp.tool(name="pricing_upload_subscription_review_screenshot")
 async def upload_subscription_review_screenshot(
     app_id: int,
     subscription_id: int,
@@ -1408,7 +1408,7 @@ async def upload_subscription_review_screenshot(
 # ==================================================================
 
 
-@mcp.tool(name="pricing.list_iaps")
+@mcp.tool(name="pricing_list_iaps")
 async def list_iaps(app_id: int) -> list[IAPResponse]:
     """Fetch in-app purchases from ASC and sync to DB."""
     async with session_scope() as session:
@@ -1456,7 +1456,7 @@ async def list_iaps(app_id: int) -> list[IAPResponse]:
         return [IAPResponse.model_validate(iap) for iap in result.scalars().all()]
 
 
-@mcp.tool(name="pricing.list_iap_localizations")
+@mcp.tool(name="pricing_list_iap_localizations")
 async def list_iap_localizations(
     app_id: int, iap_id: int,
 ) -> list[LocalizationResponse]:
@@ -1476,7 +1476,7 @@ async def list_iap_localizations(
         return [_parse_localization(item) for item in data]
 
 
-@mcp.tool(name="pricing.create_iap_localization")
+@mcp.tool(name="pricing_create_iap_localization")
 async def create_iap_localization(
     app_id: int,
     iap_id: int,
@@ -1504,7 +1504,7 @@ async def create_iap_localization(
         return _parse_localization(result.get("data", result))
 
 
-@mcp.tool(name="pricing.update_iap_localization")
+@mcp.tool(name="pricing_update_iap_localization")
 async def update_iap_localization(
     app_id: int,
     iap_id: int,
@@ -1534,7 +1534,7 @@ async def update_iap_localization(
         return _parse_localization(result.get("data", result))
 
 
-@mcp.tool(name="pricing.bulk_sync_iap_localizations")
+@mcp.tool(name="pricing_bulk_sync_iap_localizations")
 async def bulk_sync_iap_localizations(
     app_id: int,
     iap_id: int,
@@ -1571,7 +1571,7 @@ async def bulk_sync_iap_localizations(
                 raise _asc_error(exc)
 
 
-@mcp.tool(name="pricing.get_iap_prices")
+@mcp.tool(name="pricing_get_iap_prices")
 async def get_iap_prices(app_id: int, iap_id: int) -> IAPPricesResponse:
     """Fetch current prices for an IAP from ASC, sync to DB."""
     async with session_scope() as session:
@@ -1644,7 +1644,7 @@ async def get_iap_prices(app_id: int, iap_id: int) -> IAPPricesResponse:
         )
 
 
-@mcp.tool(name="pricing.sync_iap_prices")
+@mcp.tool(name="pricing_sync_iap_prices")
 async def sync_iap_prices(app_id: int, iap_id: int) -> SyncPricesResponse:
     """Explicitly sync IAP prices from ASC into DB cache."""
     async with session_scope() as session:
@@ -1702,7 +1702,7 @@ async def sync_iap_prices(app_id: int, iap_id: int) -> SyncPricesResponse:
         )
 
 
-@mcp.tool(name="pricing.iap_price_points_status")
+@mcp.tool(name="pricing_iap_price_points_status")
 async def iap_price_points_status(
     app_id: int, iap_id: int,
 ) -> PricePointCacheStatus:
@@ -1715,7 +1715,7 @@ async def iap_price_points_status(
         return PricePointCacheStatus(**info)
 
 
-@mcp.tool(name="pricing.sync_iap_price_points")
+@mcp.tool(name="pricing_sync_iap_price_points")
 async def sync_iap_price_points(
     app_id: int, iap_id: int,
 ) -> PricePointSyncResponse:
@@ -1740,7 +1740,7 @@ async def sync_iap_price_points(
         )
 
 
-@mcp.tool(name="pricing.preview_iap_prices")
+@mcp.tool(name="pricing_preview_iap_prices")
 async def preview_iap_prices(
     app_id: int, iap_id: int, request: dict[str, Any],
 ) -> IAPPricePreviewResponse:
@@ -1787,7 +1787,7 @@ async def preview_iap_prices(
         )
 
 
-@mcp.tool(name="pricing.resolve_iap_price")
+@mcp.tool(name="pricing_resolve_iap_price")
 async def resolve_iap_price(
     app_id: int, iap_id: int, territory_code: str, price: float,
 ) -> PriceResolveResponse:
@@ -1816,7 +1816,7 @@ async def resolve_iap_price(
         )
 
 
-@mcp.tool(name="pricing.apply_iap_prices")
+@mcp.tool(name="pricing_apply_iap_prices")
 async def apply_iap_prices(
     app_id: int, iap_id: int, request: dict[str, Any],
 ) -> PriceApplyResponse:
@@ -1955,7 +1955,7 @@ async def apply_iap_prices(
         )
 
 
-@mcp.tool(name="pricing.get_iap_review_screenshot")
+@mcp.tool(name="pricing_get_iap_review_screenshot")
 async def get_iap_review_screenshot(
     app_id: int, iap_id: int,
 ) -> ReviewScreenshotResponse | None:
@@ -1970,7 +1970,7 @@ async def get_iap_review_screenshot(
         return _parse_screenshot(data)
 
 
-@mcp.tool(name="pricing.upload_iap_review_screenshot")
+@mcp.tool(name="pricing_upload_iap_review_screenshot")
 async def upload_iap_review_screenshot(
     app_id: int,
     iap_id: int,
@@ -2007,7 +2007,7 @@ async def upload_iap_review_screenshot(
 # ==================================================================
 
 
-@mcp.tool(name="pricing.export_prices")
+@mcp.tool(name="pricing_export_prices")
 async def export_prices_tool(
     subscription_name: str,
     prices: list[dict[str, Any]],
@@ -2038,7 +2038,7 @@ async def export_prices_tool(
     }
 
 
-@mcp.tool(name="pricing.import_prices")
+@mcp.tool(name="pricing_import_prices")
 async def import_prices_tool(
     filename: str,
     file_base64: str,

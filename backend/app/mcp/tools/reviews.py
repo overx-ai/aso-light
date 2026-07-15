@@ -130,7 +130,7 @@ def _wrap_asc(action: str, exc: ASCAPIError) -> ToolError:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="reviews.list")
+@mcp.tool(name="reviews_list")
 async def list_reviews(
     app_id: int,
     territory: str | None = None,
@@ -178,7 +178,7 @@ async def list_reviews(
     return ReviewListOut(items=items, next_cursor=_extract_cursor(payload))
 
 
-@mcp.tool(name="reviews.get")
+@mcp.tool(name="reviews_get")
 async def get_review(app_id: int, review_id: str) -> ReviewOut:
     """Fetch a single review with its response (if any)."""
     async with session_scope() as session:
@@ -201,7 +201,7 @@ async def get_review(app_id: int, review_id: str) -> ReviewOut:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="reviews.draft_reply")
+@mcp.tool(name="reviews_draft_reply")
 async def draft_review_reply(
     app_id: int,
     review_id: str,
@@ -251,7 +251,7 @@ async def draft_review_reply(
     return DraftOut(suggestion=suggestion, locale=locale, theme=selected_theme)
 
 
-@mcp.tool(name="reviews.translate")
+@mcp.tool(name="reviews_translate")
 async def translate_review(
     app_id: int,
     review_id: str,
@@ -324,7 +324,7 @@ def _validate_reply_body(body: str) -> None:
         raise ToolError(f"body exceeds {RESPONSE_BODY_MAX_LEN}-character limit")
 
 
-@mcp.tool(name="reviews.respond")
+@mcp.tool(name="reviews_respond")
 async def create_reply(
     app_id: int,
     review_id: str,
@@ -353,7 +353,7 @@ async def create_reply(
     )
 
 
-@mcp.tool(name="reviews.update_response")
+@mcp.tool(name="reviews_update_response")
 async def update_reply(
     app_id: int,
     response_id: str,
@@ -380,7 +380,7 @@ async def update_reply(
     )
 
 
-@mcp.tool(name="reviews.delete_response")
+@mcp.tool(name="reviews_delete_response")
 async def delete_reply(
     app_id: int,
     response_id: str,

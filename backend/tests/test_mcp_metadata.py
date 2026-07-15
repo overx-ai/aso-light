@@ -82,7 +82,7 @@ def test_metadata_bulk_preview_tool_accepts_values_by_locale(monkeypatch):
 
     async def go() -> None:
         _patch_mcp_dependencies(monkeypatch, FakeBulkService)
-        tool = await mcp.get_tool("metadata.bulk_preview")
+        tool = await mcp.get_tool("metadata_bulk_preview")
         assert tool is not None
         result = await tool.fn(
             app_id=41,
@@ -134,7 +134,7 @@ def test_metadata_bulk_apply_tool_accepts_values_by_locale(monkeypatch):
 
     async def go() -> None:
         _patch_mcp_dependencies(monkeypatch, FakeBulkService)
-        tool = await mcp.get_tool("metadata.bulk_apply")
+        tool = await mcp.get_tool("metadata_bulk_apply")
         assert tool is not None
         result = await tool.fn(
             app_id=41,
@@ -185,7 +185,7 @@ def test_metadata_bulk_preview_tool_preserves_single_value_mode(monkeypatch):
 
     async def go() -> None:
         _patch_mcp_dependencies(monkeypatch, FakeBulkService)
-        tool = await mcp.get_tool("metadata.bulk_preview")
+        tool = await mcp.get_tool("metadata_bulk_preview")
         assert tool is not None
         result = await tool.fn(
             app_id=41,
@@ -218,7 +218,7 @@ def test_metadata_bulk_preview_tool_surfaces_missing_localized_value(monkeypatch
 
     async def go() -> None:
         _patch_mcp_dependencies(monkeypatch, FakeBulkService)
-        tool = await mcp.get_tool("metadata.bulk_preview")
+        tool = await mcp.get_tool("metadata_bulk_preview")
         assert tool is not None
         with pytest.raises(ToolError, match="Missing proposed value for target locale ru"):
             await tool.fn(

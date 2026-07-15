@@ -165,12 +165,12 @@ def _fake_access_token(user_id: int, pat_id: int) -> SimpleNamespace:
 
 def test_keyword_intel_tools_are_registered():
     async def go() -> None:
-        list_tool = await mcp.get_tool("keyword_intel.list_for_app")
-        refresh_tool = await mcp.get_tool("keyword_intel.refresh")
+        list_tool = await mcp.get_tool("keyword_intel_list_for_app")
+        refresh_tool = await mcp.get_tool("keyword_intel_refresh")
         assert list_tool is not None
         assert refresh_tool is not None
-        assert list_tool.name == "keyword_intel.list_for_app"
-        assert refresh_tool.name == "keyword_intel.refresh"
+        assert list_tool.name == "keyword_intel_list_for_app"
+        assert refresh_tool.name == "keyword_intel_refresh"
 
     asyncio.run(go())
 
@@ -189,7 +189,7 @@ def test_keyword_intel_list_for_app_matches_rest_and_enforces_ownership(monkeypa
             ),
         )
 
-        tool = await mcp.get_tool("keyword_intel.list_for_app")
+        tool = await mcp.get_tool("keyword_intel_list_for_app")
         assert tool is not None
 
         async with async_session_factory() as session:
@@ -251,7 +251,7 @@ def test_keyword_intel_refresh_matches_rest(monkeypatch):
             fake_refresh,
         )
 
-        tool = await mcp.get_tool("keyword_intel.refresh")
+        tool = await mcp.get_tool("keyword_intel_refresh")
         assert tool is not None
 
         async with async_session_factory() as session:
