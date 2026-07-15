@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added — Product Page Optimization (PPO / App Store Version Experiments) (2026-07-16)
+- **PPO feature** ([docs/015](015-product-page-optimization.md)): manage Apple App Store Version Experiments — experiment CRUD + lifecycle (submit-for-review / stop), ≤3 treatments, and per-treatment-localization screenshot upload. Mirrors the CPP feature ([013](013-custom-product-pages-and-visual-compare.md)) across all three layers: `ASCExperimentService` (`backend/app/services/asc/experiment.py`), `experiment_*` MCP tools, `/apps/{id}/experiments…` REST routes, and a React Experiments page. **API v1/v2 split**: experiment CRUD is v2 (`base_v2 = BASE_URL.replace("/v1","/v2")`), treatments + treatment localizations are v1.
+- **No results via API**: Apple exposes no experiment-results endpoint (impressions / conversion / confidence are ASC-Analytics-only), so the UI deep-links to App Store Connect; there is deliberately no results-reading tool/method.
+- **DRY extraction**: the shared `appScreenshotSets`/`appScreenshots` upload + shaping moved to `backend/app/services/asc/screenshots.py` + `backend/app/schemas/screenshots.py`; both CPP and PPO delegate to it (CPP behaviour unchanged).
+- **IDOR guards**: `assert_experiment_in_app` / `assert_treatment_in_experiment` / `assert_localization_in_treatment` (mirroring `ASCPricingService._assert_member`) membership-check every child id against the verified app before read/mutate → 404 (REST) / `ToolError` (MCP); the screenshot list/upload paths are nested under experiment/treatment so the whole chain is checkable.
+
+### Added — MCP tool-name guard test (2026-07-16)
+- `backend/tests/test_mcp_tool_names.py`: a tripwire asserting every registered MCP tool **and** prompt name matches the Anthropic regex `^[a-zA-Z0-9_-]{1,64}$` (no dots), so the Claude-Desktop-breaking regression fixed by the rename below cannot silently recur (Claude Code masks it by rewriting `.`→`_`).
+
+### Fixed — MCP tool names use underscores, not dots (2026-07-15)
+- Renamed all 156 MCP tools from dotted (`account.whoami`, `swap.subscription_product`) to underscored (`account_whoami`, `swap_subscription_product`) across `backend/app/mcp/tools/*.py`. The Anthropic tool-name regex `^[a-zA-Z0-9_-]{1,64}$` rejects dots, so **Claude Desktop refused the whole server** (an invalid tool at ~index 173 of the combined tool list); Claude Code had hidden it by rewriting `.`→`_` before the API call, so the sanitized name — and every existing Claude Code integration — is **byte-identical** before and after. Also updated the `get_tool("…")` test lookups + `.name ==` assertions, the `swap_product_safely`/`optimize_keywords` prompt bodies, the server `instructions=` string, [docs/007](007-mcp-integration.md), and `CONTRIBUTING.md` (which had prescribed the dotted form). No collisions after the transform; longest name 46 chars.
+
 ### Added — Phase 5: Metadata Editor + Cross-Loc + AI Translation (2026-05-05)
 - **Metadata Editor** (spec 007): per-locale CRUD for App Store metadata (name, subtitle, description, keywords, promotional text, what's new, marketing/support/privacy URLs) via ASC `appInfoLocalizations` and `appStoreVersionLocalizations`. Preview-then-apply pattern mirrors `pricing.py`. State-machine guard refuses non-`promotionalText` mutations on `READY_FOR_DISTRIBUTION` (409). UI greys out forbidden fields based on `editable_fields` list returned by `GET /apps/{id}/metadata`.
 - **Bulk fan-out**: edit one field once, broadcast to N selected locales (cap 50) with diff preview before commit. `force=True` overrides only soft skips (unchanged, state-guess); never overrides hard skips (char overflow, missing row).

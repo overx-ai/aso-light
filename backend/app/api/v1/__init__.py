@@ -10,6 +10,7 @@ from app.api.v1.clash import router as clash_router
 from app.api.v1.clone import router as clone_router
 from app.api.v1.cpp import router as cpp_router
 from app.api.v1.credentials import router as credentials_router
+from app.api.v1.experiment import router as experiment_router
 from app.api.v1.export import router as export_router
 from app.api.v1.growth import router as growth_router
 from app.api.v1.indices import router as indices_router
@@ -50,6 +51,7 @@ router.include_router(aso_check_router, prefix="/apps", tags=["aso-check"])
 router.include_router(clash_router, prefix="/apps", tags=["clash"])
 router.include_router(screenshots_router, prefix="/apps", tags=["screenshots"])
 router.include_router(cpp_router, prefix="/apps", tags=["cpp"])
+router.include_router(experiment_router, prefix="/apps", tags=["experiment"])
 router.include_router(keywords_router, tags=["keywords"])
 router.include_router(metadata_keywords_router, prefix="/keywords", tags=["keywords"])
 router.include_router(territories_router, prefix="/territories", tags=["territories"])

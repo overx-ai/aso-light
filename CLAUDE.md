@@ -26,6 +26,7 @@ App Store Optimization SaaS — web-based alternative to aso.dev. Focuses on pri
 - **ASC territory codes**: ASC API returns alpha-3 (ARE, USA); our DB uses alpha-2 (AE, US) — use `ALPHA2_TO_ALPHA3` from `app/data/territories.py`
 - **Pricing endpoints**: read from DB cache; ASC sync is explicit via `POST .../sync`
 - **ASC binary uploads**: use `_put_binary()` (no auth headers) for pre-signed S3 URLs — Apple rejects Bearer tokens on those
+- **MCP tool names**: `@mcp.tool(name="module_action")` — **underscores, never dots**. The Anthropic tool-name regex is `^[a-zA-Z0-9_-]{1,64}$`; a dotted name breaks Claude Desktop (Claude Code hides it by rewriting `.`→`_`). Same for the `name=` in `get_tool("…")` test lookups. Enforced by `backend/tests/test_mcp_tool_names.py` (fails on any dotted tool/prompt name). See [docs/007](docs/007-mcp-integration.md#adding-a-new-tool)
 
 ## Best Practices
 
@@ -59,7 +60,8 @@ App Store Optimization SaaS — web-based alternative to aso.dev. Focuses on pri
 - **Price point cache**: filesystem-based under `backend/.cache/price_points/`, not DB — per-territory JSON files
 - **Price safety limits**: ±50% — skip territory if price change exceeds this threshold in either direction (constant `SAFETY_BAND_PCT` in `backend/app/api/v1/pricing.py`)
 - **MCP server**: mounted at `/mcp` on the FastAPI app, exposes ~123 tools across all REST domains via `fastmcp`. Auth uses Personal Access Tokens (`aso_pat_…`, sha256-hashed at rest, model in `backend/app/models/personal_access_token.py`, routes under `/api/v1/auth/tokens`). Tool modules live in `backend/app/mcp/tools/` and call service classes directly (no HTTP hop). App-scope is enforced by `app.mcp.context.resolve_app` mirroring `_get_verified_app`.
-- **Product swap**: the existing clone subsystem (`POST /apps/{id}/subscriptions/{sub_id}/clone` with `auto_archive=True, swap_revenuecat=True`) IS the swap. The MCP `swap.subscription_product` / `swap.iap` tools wrap it and additionally return an `ios_checklist` tailored to whether RC is wired, whether RC swap succeeded, and which path the iOS app is on. iOS-side guidance lives in `docs/006-product-swap-ios-integration.md`.
+- **Product swap**: the existing clone subsystem (`POST /apps/{id}/subscriptions/{sub_id}/clone` with `auto_archive=True, swap_revenuecat=True`) IS the swap. The MCP `swap_subscription_product` / `swap_iap` tools wrap it and additionally return an `ios_checklist` tailored to whether RC is wired, whether RC swap succeeded, and which path the iOS app is on. iOS-side guidance lives in `docs/006-product-swap-ios-integration.md`.
+- **Product Page Optimization (PPO)**: App Store Version Experiments A/B testing. `ASCExperimentService` (`backend/app/services/asc/experiment.py`) mirrors CPP; `experiment_*` MCP tools (underscored — the Anthropic tool-name regex rejects dots) + `/apps/{id}/experiments…` REST + `frontend/src/pages/Experiments.tsx`. **API version split:** experiment CRUD is `/v2` (via `base_v2`), treatments + treatment localizations are `/v1`. Screenshot upload + `Screenshot`/`ScreenshotSet` schemas are shared with CPP via `app/services/asc/screenshots.py` + `app/schemas/screenshots.py`. **No results via API** — impressions/conversion/confidence are ASC-Analytics-only, so the UI deep-links there; there is no results-reading tool. ≤3 treatments (guarded), one draft experiment per app (Apple 409), delete only before start. Full details in `docs/015-product-page-optimization.md`.
 
 ## Project-Specific Rules
 
@@ -90,3 +92,4 @@ Do NOT execute any tools in plan mode. Wait for me to switch back to act mode be
 - [docs/005-subscription-management.md](docs/005-subscription-management.md) — Subscription / group / intro-offer write paths
 - [docs/006-product-swap-ios-integration.md](docs/006-product-swap-ios-integration.md) — Product swap (clone+archive+RC) and what the iOS app must change
 - [docs/007-mcp-integration.md](docs/007-mcp-integration.md) — MCP server, PAT lifecycle, tool reference, client config
+- [docs/015-product-page-optimization.md](docs/015-product-page-optimization.md) — Product Page Optimization (App Store Version Experiments): CRUD, treatments, screenshot upload, v1/v2 split, results deep-link

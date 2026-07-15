@@ -24,6 +24,7 @@
 | [012 - Growth Recommendations Advisor](012-growth-recommendations.md) | Cross-domain recommendation engine powering the Growth page |
 | [013 - Custom Product Pages + Visual Compare](013-custom-product-pages-and-visual-compare.md) | CPP CRUD + screenshot upload, Pillow before/after compositor, ASA→CPP ad-group wiring (`asa.assign_cpp` / `asa.unassign_cpp` / `asa.list_cpp_ads`) |
 | [014 - Reviews Module Security Findings](014-reviews-module-security-findings.md) | `/code` review-pass findings for Review Responses (cross-app IDOR, uncapped AI drafts, cap-signal + cache-namespace bugs) — report only, fixes paused pending the C1 ASC review→app linkage decision |
+| [015 - Product Page Optimization](015-product-page-optimization.md) | App Store Version Experiments (PPO): experiment CRUD + lifecycle, ≤3 treatments, treatment-localization screenshot upload; v1/v2 API split; results are ASC-Analytics-only (deep-link) |
 
 ## Specs
 
@@ -47,6 +48,7 @@
     └── → 006-metadata-editor.md (keyword coverage classifier)
 011-apple-search-ads-analytics.md
     └── → 013-custom-product-pages-and-visual-compare.md (CPP CRUD + visual compare + ASA→CPP wiring)
+        └── → 015-product-page-optimization.md (PPO / App Store Version Experiments — CPP's A/B-testing sibling; shares the screenshot machinery)
 010-audit.md (planned — summarizes 001-009)
 ```
 
@@ -80,4 +82,4 @@
 | ASA→CPP ad wiring | `backend/app/services/asa/cpp_ads.py` + `backend/app/mcp/tools/asa.py` (`asa.assign_cpp` / `asa.unassign_cpp` / `asa.list_cpp_ads`) |
 
 ---
-*Last updated: 2026-06-16*
+*Last updated: 2026-07-16*

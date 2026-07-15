@@ -15,6 +15,7 @@ import {
   IconBulb,
   IconTargetArrow,
   IconPhoto,
+  IconFlask,
 } from "@tabler/icons-react";
 import type { App } from "@/types";
 
@@ -33,6 +34,7 @@ const SUB_ROUTES = [
   { path: "cross-localization", label: "Cross-Loc", icon: IconLanguage },
   { path: "reviews", label: "Reviews", icon: IconMessage },
   { path: "compare", label: "Compare", icon: IconPhoto },
+  { path: "experiments", label: "Experiments", icon: IconFlask },
   { path: "paid-search", label: "Paid Search", icon: IconTargetArrow },
   { path: "visibility", label: "Visibility", icon: IconChartBar },
   { path: "clash", label: "App Clash", icon: IconSwords },
