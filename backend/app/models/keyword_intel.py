@@ -13,7 +13,6 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
-    DateTime,
     ForeignKey,
     Index,
     String,
@@ -22,7 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
-from app.db.base import Base
+from app.db.base import Base, UTCDateTime
 
 
 class KeywordIntelCache(Base):
@@ -50,7 +49,7 @@ class KeywordIntelCache(Base):
     # so we don't churn the schema for each new source.
     extra: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        UTCDateTime, server_default=func.now(),
     )
 
     __table_args__ = (

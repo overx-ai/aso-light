@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, TimestampMixin
+from app.db.base import Base, TimestampMixin, UTCDateTime
 
 if TYPE_CHECKING:
     from app.models.app import App
@@ -23,7 +23,7 @@ class Keyword(TimestampMixin, Base):
     locale: Mapped[str] = mapped_column(String(10))
     popularity: Mapped[int | None] = mapped_column(nullable=True)
     popularity_updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime, nullable=True,
     )
 
     trackings: Mapped[list[KeywordTracking]] = relationship(
@@ -70,7 +70,7 @@ class KeywordRanking(Base):
     territory_id: Mapped[int] = mapped_column(ForeignKey("territories.id"))
     rank: Mapped[int | None] = mapped_column(nullable=True)
     recorded_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        UTCDateTime, server_default=func.now(),
     )
 
     tracking: Mapped[KeywordTracking] = relationship(back_populates="rankings")

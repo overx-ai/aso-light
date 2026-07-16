@@ -18,7 +18,6 @@ from sqlalchemy import (
     JSON,
     CheckConstraint,
     Date,
-    DateTime,
     ForeignKey,
     Index,
     Numeric,
@@ -28,7 +27,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, TimestampMixin
+from app.db.base import Base, TimestampMixin, UTCDateTime
 
 if TYPE_CHECKING:
     from app.models.app import App
@@ -54,7 +53,7 @@ class ASACredential(TimestampMixin, Base):
     key_id: Mapped[str] = mapped_column(String(64))
     private_key_ciphertext: Mapped[str] = mapped_column(Text)
     last_synced_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime,
         nullable=True,
     )
 
@@ -124,7 +123,7 @@ class ASACampaign(TimestampMixin, Base):
     daily_budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     storefronts: Mapped[list | None] = mapped_column(JSON, nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime,
         nullable=True,
     )
 
@@ -170,7 +169,7 @@ class ASAAdGroup(TimestampMixin, Base):
     gender: Mapped[str | None] = mapped_column(String(16), nullable=True)
     device_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime,
         nullable=True,
     )
 
@@ -215,7 +214,7 @@ class ASAKeyword(TimestampMixin, Base):
     bid_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     status: Mapped[str] = mapped_column(String(32))
     archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime,
         nullable=True,
     )
 
@@ -294,7 +293,7 @@ class ASASearchTerm(TimestampMixin, Base):
     match_type: Mapped[str] = mapped_column(String(16))
     source: Mapped[str] = mapped_column(String(16))  # SEARCHTERM | RAW
     archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime,
         nullable=True,
     )
 
@@ -378,11 +377,11 @@ class ASASyncOperation(TimestampMixin, Base):
     steps: Mapped[list | None] = mapped_column(JSON, nullable=True)
     error_log: Mapped[list | None] = mapped_column(JSON, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime,
         nullable=True,
     )
     completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime,
         nullable=True,
     )
 

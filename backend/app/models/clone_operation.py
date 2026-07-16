@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String
+from sqlalchemy import JSON, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, TimestampMixin
+from app.db.base import Base, TimestampMixin, UTCDateTime
 
 if TYPE_CHECKING:
     from app.models.app import App
@@ -38,7 +38,7 @@ class CloneOperation(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), default="pending")
     error_log_json: Mapped[list] = mapped_column(JSON, default=list)
     completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime, nullable=True,
     )
 
     app: Mapped[App] = relationship()

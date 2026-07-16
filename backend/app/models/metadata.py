@@ -16,7 +16,6 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     CheckConstraint,
-    DateTime,
     ForeignKey,
     Index,
     String,
@@ -25,7 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
-from app.db.base import Base
+from app.db.base import Base, UTCDateTime
 
 
 class AppMetadataLocalization(Base):
@@ -66,7 +65,7 @@ class AppMetadataLocalization(Base):
     support_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     synced_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime,
         server_default=func.now(),
         nullable=False,
     )
@@ -109,7 +108,7 @@ class AppMetadataState(Base):
         JSON, nullable=True,
     )
     last_synced_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime,
         server_default=func.now(),
         nullable=False,
     )
@@ -141,7 +140,7 @@ class MetadataTranslationCache(Base):
     translated_text: Mapped[str] = mapped_column(String(4000))
     model: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime,
         server_default=func.now(),
         nullable=False,
     )

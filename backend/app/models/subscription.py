@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, TimestampMixin
+from app.db.base import Base, TimestampMixin, UTCDateTime
 
 if TYPE_CHECKING:
     from app.models.app import App
@@ -75,7 +75,7 @@ class SubscriptionPrice(TimestampMixin, Base):
     customer_price: Mapped[float] = mapped_column()
     proceeds: Mapped[float] = mapped_column()
     synced_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime, nullable=True,
     )
 
     subscription: Mapped[Subscription] = relationship(back_populates="prices")
@@ -108,7 +108,7 @@ class SubscriptionPricePoint(TimestampMixin, Base):
     proceeds: Mapped[float] = mapped_column()
     price_point_id: Mapped[str] = mapped_column(String(255))
     synced_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime, nullable=True,
     )
 
     def __repr__(self) -> str:

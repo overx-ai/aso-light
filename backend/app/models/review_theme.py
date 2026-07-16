@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
-from app.db.base import Base
+from app.db.base import Base, UTCDateTime
 
 
 class ReviewThemeCache(Base):
@@ -32,7 +32,7 @@ class ReviewThemeCache(Base):
     severity: Mapped[int] = mapped_column()
     model: Mapped[str] = mapped_column(String(64))
     classified_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        UTCDateTime, server_default=func.now(),
     )
 
     __table_args__ = (
