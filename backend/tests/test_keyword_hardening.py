@@ -326,7 +326,7 @@ def test_mcp_add_competitor_rejects_non_numeric_id(monkeypatch):
         )
 
         with pytest.raises(ToolError, match="numeric iTunes track ID"):
-            await mcp_add_competitor.fn(
+            await mcp_add_competitor(
                 app_id=seeded["app_id"],
                 asc_app_id="not-a-number",
                 name="Bad",

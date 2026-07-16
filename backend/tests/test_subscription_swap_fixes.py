@@ -376,7 +376,7 @@ def test_mcp_delete_localization_foreign_child_toolerror(monkeypatch):
         monkeypatch.setattr(mcp_pricing, "resolve_app", _resolve_app)
 
         with pytest.raises(ToolError):
-            await mcp_pricing.delete_subscription_localization.fn(
+            await mcp_pricing.delete_subscription_localization(
                 app_id=app_id,
                 subscription_id=sub_b_id,
                 localization_id="loc-A1",  # belongs to sub A
