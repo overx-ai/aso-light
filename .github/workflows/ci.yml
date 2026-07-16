@@ -29,8 +29,10 @@ jobs:
         run: uv run pytest -q
         env:
           DATABASE_URL: sqlite+aiosqlite:///./test.db
-          SECRET_KEY: ci-secret
-          JWT_SECRET_KEY: ci-jwt-secret
+          # Must satisfy app.core.config.reject_weak_secret (>= 32 chars, not a
+          # known placeholder) — CI-only throwaway values, never used in prod.
+          SECRET_KEY: ci-secret-not-for-prod-0123456789abcdef
+          JWT_SECRET_KEY: ci-jwt-secret-not-for-prod-0123456789abcdef
           FERNET_KEY: V6tNpIULWzIJpc-DEou34d5KtZqWJpwXILqRsWh28do=
 
   frontend:
