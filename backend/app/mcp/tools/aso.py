@@ -14,7 +14,7 @@ from app.services.aso_check.audit import audit
 from app.services.metadata.coloring import classify_keyword
 
 
-@mcp.tool(name="aso.aso_check")
+@mcp.tool(name="aso_aso_check")
 async def aso_check_tool(app_id: int) -> AsoCheckOut:
     """Run the listing audit on a synced metadata snapshot + tracked keywords.
 

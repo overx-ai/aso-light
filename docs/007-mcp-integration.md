@@ -129,32 +129,32 @@ return types are self-describing.
 ### High-leverage workflows
 
 **Swap a subscription productId safely** — the showcase
-1. `pricing.list_subscription_groups(app_id)` to find the local subscription id
-2. `swap.suggest_new_product_id(current_product_id)` to get a sane new id
-3. `swap.subscription_product(app_id, subscription_id, new_product_id, auto_archive=true, swap_revenuecat=true)`
+1. `pricing_list_subscription_groups(app_id)` to find the local subscription id
+2. `swap_suggest_new_product_id(current_product_id)` to get a sane new id
+3. `swap_subscription_product(app_id, subscription_id, new_product_id, auto_archive=true, swap_revenuecat=true)`
 4. Read the returned `ios_checklist` — it tells the operator exactly what
    their iOS app must change. Full guidance:
    [006-product-swap-ios-integration.md](006-product-swap-ios-integration.md).
 
 **Optimize keywords for a locale**
-1. `aso.aso_check(app_id)` → see metadata gaps
-2. `metadata.get_snapshot(app_id)` → read current title/subtitle/keywords
-3. `keywords.list_for_app(app_id)` or `keyword_intel.list_for_app(app_id)` → see currently tracked keywords
-4. `keywords.search` / `keywords.suggestions` → find new candidates
-5. `clash.run(app_id)` → compare against competitors
-6. Propose edits, then `metadata.update_locale(...)` after user approval
+1. `aso_aso_check(app_id)` → see metadata gaps
+2. `metadata_get_snapshot(app_id)` → read current title/subtitle/keywords
+3. `keywords_list_for_app(app_id)` or `keyword_intel_list_for_app(app_id)` → see currently tracked keywords
+4. `keywords_search` / `keywords_suggestions` → find new candidates
+5. `clash_run(app_id)` → compare against competitors
+6. Propose edits, then `metadata_update_locale(...)` after user approval
 
 To refresh the cached keyword-intel table from MCP, use
-`keywords.refresh_rankings(app_id)` or the parity alias
-`keyword_intel.refresh(app_id)`.
+`keywords_refresh_rankings(app_id)` or the parity alias
+`keyword_intel_refresh(app_id)`.
 
 
 **Bulk price update**
-1. `pricing.export_prices(app_id)` → CSV/Excel of current prices
+1. `pricing_export_prices(app_id)` → CSV/Excel of current prices
 2. (Edit offline)
-3. `pricing.import_prices(app_id, file_base64)` → preview the import
-4. `pricing.preview_subscription_prices(app_id, sub_id, ...)` → see the diff
-5. `pricing.apply_subscription_prices(app_id, sub_id, ...)` → push to ASC
+3. `pricing_import_prices(app_id, file_base64)` → preview the import
+4. `pricing_preview_subscription_prices(app_id, sub_id, ...)` → see the diff
+5. `pricing_apply_subscription_prices(app_id, sub_id, ...)` → push to ASC
 
 There are pre-built MCP prompts (`swap_product_safely`, `optimize_keywords`)
 that walk through these flows. Most LLM clients show prompts as quick-pick
@@ -196,7 +196,7 @@ and review responses.
   the REST API uses. Look for `app.mcp.*` in dev logs.
 - **Rate limiting**: the underlying ASCClient has a 150ms min interval
   between requests + 429 backoff. The MCP server inherits this transparently.
-- **Anthropic translation cap**: `metadata.translate` is rate-limited per app
+- **Anthropic translation cap**: `metadata_translate` is rate-limited per app
   (500 calls / rolling 30 days, persisted in `metadata_translation_cache`).
   The MCP tool returns the same quota-exceeded error that the REST endpoint
   returns.
@@ -207,7 +207,10 @@ and review responses.
 
 1. Add the corresponding REST endpoint first (or pick an existing one).
 2. In the matching `backend/app/mcp/tools/<module>.py`, add a function with
-   `@mcp.tool(name="<module>.<action>")`.
+   `@mcp.tool(name="<module>_<action>")`. **Use underscores, not dots** — the
+   Anthropic tool-name regex is `^[a-zA-Z0-9_-]{1,64}$`, so a dotted name
+   (`module.action`) is rejected by Claude Desktop. Claude Code silently
+   rewrites `.`→`_`, which hides the bug until someone connects via Desktop.
 3. Use `session_scope()` for the DB session, `resolve_app()` for app-scoped
    tools, `get_user_id()` for user-scoped tools.
 4. Reuse Pydantic schemas from `backend/app/schemas/`.
@@ -245,10 +248,10 @@ Delete the credential in **Settings → ASC Credentials** and re-upload your rea
 **A tool returns "not found" for an app you own.** The user_id resolution
 goes through the PAT → owner chain. If you issued the PAT under a different
 account than the one that owns the app, you'll get `App access denied`. Re-issue
-the PAT under the right account. `account.whoami` is the fastest way to confirm
+the PAT under the right account. `account_whoami` is the fastest way to confirm
 which user, PAT, credentials, and app rows the current MCP session can see.
 
-**`metadata.translate` returns quota-exceeded.** 500 calls / 30 days per app.
+**`metadata_translate` returns quota-exceeded.** 500 calls / 30 days per app.
 Wait or raise the cap by editing the `MetadataTranslationCache` row.
 
 **Swap tool succeeded but RC steps failed.** The ASC side is done; only RC

@@ -45,7 +45,7 @@ def _build_response(
     )
 
 
-@mcp.tool(name="availability.get")
+@mcp.tool(name="availability_get")
 async def get_availability_tool(app_id: int) -> AppAvailabilityResponse:
     """Fetch current per-territory availability for an app from Apple."""
     async with session_scope() as session:
@@ -61,7 +61,7 @@ async def get_availability_tool(app_id: int) -> AppAvailabilityResponse:
         return _build_response(raw, territory_names)
 
 
-@mcp.tool(name="availability.update")
+@mcp.tool(name="availability_update")
 async def update_availability_tool(
     app_id: int,
     body: AppAvailabilityUpdateRequest,

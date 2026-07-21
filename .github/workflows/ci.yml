@@ -26,12 +26,17 @@ jobs:
         run: uv sync
 
       - name: Run tests
-        run: uv run pytest -q
+        run: |
+          # Generate a throwaway Fernet key per run — never commit a valid key
+          # to this public repo. It only encrypts ephemeral CI test data.
+          export FERNET_KEY=$(uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+          uv run pytest -q
         env:
           DATABASE_URL: sqlite+aiosqlite:///./test.db
-          SECRET_KEY: ci-secret
-          JWT_SECRET_KEY: ci-jwt-secret
-          FERNET_KEY: V6tNpIULWzIJpc-DEou34d5KtZqWJpwXILqRsWh28do=
+          # CI-only throwaway secrets — must satisfy app.core.config.reject_weak_secret
+          # (>= 32 chars, not a known placeholder). Never used in prod.
+          SECRET_KEY: ci-secret-not-for-prod-0123456789abcdef
+          JWT_SECRET_KEY: ci-jwt-secret-not-for-prod-0123456789abcdef
 
   frontend:
     name: Frontend (tsc + vitest)

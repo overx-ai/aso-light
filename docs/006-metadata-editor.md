@@ -12,7 +12,7 @@ This complements [004 - Localization Management](004-localization-management.md)
 
 ## Out of Scope (deferred to later phases)
 
-- A/B testing (Product Page Optimization, Custom Product Pages)
+- ~~A/B testing (Product Page Optimization, Custom Product Pages)~~ — both now built: Custom Product Pages in [013](013-custom-product-pages-and-visual-compare.md), Product Page Optimization in [015](015-product-page-optimization.md)
 - Apple Search Ads intelligence (Share of Voice, Auction Insights)
 - DeepL / OpenAI / Gemini translation providers (Anthropic only for now; `AbstractTranslator` ABC is plug-in ready)
 - MCP server exposing metadata read/write to Claude Code (planned future phase)

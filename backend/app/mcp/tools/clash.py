@@ -13,7 +13,7 @@ from app.services.clash import build_row
 from app.services.keywords.itunes_search import ITunesSearchService
 
 
-@mcp.tool(name="clash.run")
+@mcp.tool(name="clash_run")
 async def app_clash_tool(app_id: int, country: str = "us") -> AppClashOut:
     """Side-by-side iTunes lookup for our app + every saved competitor.
 

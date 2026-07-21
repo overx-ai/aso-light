@@ -17,7 +17,7 @@ VALID_INDEX_TYPES = {"ppp", "bigmac", "netflix", "spotify", "gdp_per_capita_ppp"
 GDP_INDEX_TYPE = "gdp_per_capita_ppp"
 
 
-@mcp.tool(name="indices.status")
+@mcp.tool(name="indices_status")
 async def index_status_tool() -> dict[str, Any]:
     """Return last refresh timestamps and record counts per index type."""
     async with session_scope() as session:
@@ -52,7 +52,7 @@ async def index_status_tool() -> dict[str, Any]:
         return {"indices": statuses}
 
 
-@mcp.tool(name="indices.refresh")
+@mcp.tool(name="indices_refresh")
 async def refresh_indices_tool(index_type: str | None = None) -> dict[str, Any]:
     """Trigger an economic-index refresh.
 
@@ -74,7 +74,7 @@ async def refresh_indices_tool(index_type: str | None = None) -> dict[str, Any]:
         return {"refreshed": results}
 
 
-@mcp.tool(name="indices.list_gdp")
+@mcp.tool(name="indices_list_gdp")
 async def list_gdp_tool() -> list[dict[str, Any]]:
     """Return GDP/capita PPP per territory, sorted descending.
 

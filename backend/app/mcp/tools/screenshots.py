@@ -23,7 +23,7 @@ from app.services.visual.compare import build_comparison
 logger = logging.getLogger(__name__)
 
 
-@mcp.tool(name="screenshots.compare")
+@mcp.tool(name="screenshots_compare")
 async def compare_screenshots(
     app_id: int,
     cpp_id: str,

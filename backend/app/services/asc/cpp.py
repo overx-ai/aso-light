@@ -15,14 +15,20 @@ the source for the old-vs-new visual comparison.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from typing import TYPE_CHECKING
 
+from app.services.asc import screenshots as shots
 from app.services.asc.errors import ASCAPIError
 
 if TYPE_CHECKING:
     from app.services.asc.client import ASCClient
+
+# The parent localization type + set relationship key for CPP screenshots. The
+# reserve/PUT/commit upload and set resolution themselves live in
+# ``app.services.asc.screenshots`` (shared with PPO treatment localizations).
+_CPP_LOCALIZATION_TYPE = "appCustomProductPageLocalizations"
+_CPP_SET_RELATIONSHIP = "appCustomProductPageLocalization"
 
 logger = logging.getLogger(__name__)
 
@@ -434,9 +440,9 @@ class ASCCustomProductPageService:
                     ],
                 }
         """
-        return await self._fetch_screenshot_sets(
-            f"/appCustomProductPageLocalizations/{localization_id}"
-            "/appScreenshotSets"
+        return await shots.fetch_screenshot_sets(
+            self.client,
+            f"/{_CPP_LOCALIZATION_TYPE}/{localization_id}/appScreenshotSets",
         )
 
     async def get_default_screenshots(
@@ -450,95 +456,16 @@ class ASCCustomProductPageService:
         Same shape as :meth:`get_cpp_screenshots`; the default (live) page's
         screenshots are the "old" side of the old-vs-new comparison.
         """
-        return await self._fetch_screenshot_sets(
+        return await shots.fetch_screenshot_sets(
+            self.client,
             f"/appStoreVersionLocalizations/{version_localization_id}"
-            "/appScreenshotSets"
+            "/appScreenshotSets",
         )
 
-    async def _fetch_screenshot_sets(self, path: str) -> list[dict]:
-        """Fetch screenshot sets with their included screenshots and shape them.
-
-        ``GET {path}?include=appScreenshots`` — resolves the included
-        ``appScreenshots`` resources per set and builds each screenshot's
-        CDN ``source_url`` from ``imageAsset.templateUrl``.
-
-        ``appScreenshotSets`` and the default-page localization both expose
-        this relationship, so the path is parameterized.
-        """
-        response = await self.client._get(
-            path,
-            params={
-                "include": "appScreenshots",
-                "fields[appScreenshotSets]":
-                    "screenshotDisplayType,appScreenshots",
-                "fields[appScreenshots]": "fileName,imageAsset",
-                "limit": 200,
-            },
-        )
-
-        # Build a lookup of included screenshot assets by id.
-        included = response.get("included", [])
-        screenshots_map: dict[str, dict] = {}
-        for item in included:
-            if item.get("type") == "appScreenshots":
-                screenshots_map[item["id"]] = item
-
-        sets: list[dict] = []
-        for set_obj in response.get("data", []):
-            set_attrs = set_obj.get("attributes", {})
-            display_type = set_attrs.get("screenshotDisplayType")
-
-            shot_refs = (
-                set_obj.get("relationships", {})
-                .get("appScreenshots", {})
-                .get("data", [])
-            )
-
-            screenshots: list[dict] = []
-            for ref in shot_refs:
-                shot = screenshots_map.get(ref.get("id"))
-                if shot is None:
-                    continue
-                shot_attrs = shot.get("attributes", {})
-                screenshots.append({
-                    "id": shot["id"],
-                    "file_name": shot_attrs.get("fileName"),
-                    "display_type": display_type,
-                    "source_url": self._build_source_url(
-                        shot_attrs.get("imageAsset")
-                    ),
-                })
-
-            sets.append({
-                "id": set_obj["id"],
-                "display_type": display_type,
-                "screenshots": screenshots,
-            })
-
-        return sets
-
-    @staticmethod
-    def _build_source_url(image_asset: dict | None) -> str | None:
-        """Build a downloadable CDN URL from an ``imageAsset`` block.
-
-        Substitutes Apple's ``{w}``/``{h}``/``{f}`` placeholders in
-        ``templateUrl`` with the asset's own width/height (falling back to
-        the iPhone 6.7" 1290x2796 marketing resolution) and ``png``.
-        Returns ``None`` when no template is present (source upload still
-        pending).
-        """
-        if not image_asset:
-            return None
-        template = image_asset.get("templateUrl")
-        if not template:
-            return None
-        width = image_asset.get("width") or 1290
-        height = image_asset.get("height") or 2796
-        return (
-            template.replace("{w}", str(width))
-            .replace("{h}", str(height))
-            .replace("{f}", "png")
-        )
+    # ``_build_source_url`` remains a static method on the service for the
+    # existing call sites (``app/mcp/tools/cpp.py`` and the test suite); it
+    # delegates to the shared implementation.
+    _build_source_url = staticmethod(shots.build_source_url)
 
     # ------------------------------------------------------------------
     # Default (live) page resolution — for the old-vs-new comparison
@@ -610,53 +537,6 @@ class ASCCustomProductPageService:
     # Screenshot upload (3-step reserve -> PUT -> commit)
     # ------------------------------------------------------------------
 
-    async def _find_or_create_screenshot_set(
-        self, localization_id: str, display_type: str
-    ) -> str:
-        """Find (or create) the ``appScreenshotSet`` for a display type.
-
-        Screenshots hang off a set keyed by ``screenshotDisplayType`` under
-        the CPP localization. We reuse an existing set for the requested
-        device family if present, else create a new one.
-
-        ``GET /v1/appCustomProductPageLocalizations/{id}/appScreenshotSets``
-        ``POST /v1/appScreenshotSets``
-
-        Returns:
-            The ``appScreenshotSets`` id to attach the new screenshot to.
-        """
-        existing = await self.client._get_all_pages(
-            f"/appCustomProductPageLocalizations/{localization_id}"
-            "/appScreenshotSets",
-            params={
-                "fields[appScreenshotSets]": "screenshotDisplayType",
-                "limit": 200,
-            },
-        )
-        for set_obj in existing:
-            attrs = set_obj.get("attributes", {})
-            if attrs.get("screenshotDisplayType") == display_type:
-                return set_obj["id"]
-
-        body = {
-            "data": {
-                "type": "appScreenshotSets",
-                "attributes": {
-                    "screenshotDisplayType": display_type,
-                },
-                "relationships": {
-                    "appCustomProductPageLocalization": {
-                        "data": {
-                            "type": "appCustomProductPageLocalizations",
-                            "id": localization_id,
-                        },
-                    },
-                },
-            }
-        }
-        response = await self.client._post("/appScreenshotSets", json=body)
-        return response["data"]["id"]
-
     async def upload_screenshot_to_cpp(
         self,
         localization_id: str,
@@ -666,16 +546,9 @@ class ASCCustomProductPageService:
     ) -> dict:
         """Upload a marketing screenshot to a CPP localization (3-step flow).
 
-        Mirrors the review-screenshot reserve -> PUT -> commit flow in
-        :mod:`app.services.asc.pricing`, applied to the standard
-        ``appScreenshotSets``/``appScreenshots`` model:
-
-        1. Find (or create) the ``appScreenshotSet`` for ``display_type``
-           under the CPP localization.
-        2. ``POST /v1/appScreenshots`` to reserve the asset (returns
-           ``uploadOperations`` pre-signed PUT URLs).
-        3. ``PUT`` the source bytes to each upload operation URL.
-        4. ``PATCH`` ``uploaded=true`` with the source file's md5 checksum.
+        Delegates to :func:`app.services.asc.screenshots.upload_screenshot_to_localization`
+        with the CPP localization type + set relationship — the reserve -> PUT
+        -> commit upload itself is shared with PPO treatment localizations.
 
         Args:
             localization_id: An ``appCustomProductPageLocalizations`` id.
@@ -687,67 +560,12 @@ class ASCCustomProductPageService:
         Returns:
             The committed ``appScreenshots`` resource dict.
         """
-        set_id = await self._find_or_create_screenshot_set(
-            localization_id, display_type
+        return await shots.upload_screenshot_to_localization(
+            self.client,
+            _CPP_LOCALIZATION_TYPE,
+            localization_id,
+            _CPP_SET_RELATIONSHIP,
+            display_type,
+            file_bytes,
+            file_name,
         )
-
-        # Apple requires md5 for the appScreenshots sourceFileChecksum — this
-        # is a content checksum for upload integrity, not a security primitive.
-        checksum = hashlib.md5(file_bytes).hexdigest()  # noqa: S324
-
-        # Step 1: Reserve the screenshot asset.
-        reserve_body = {
-            "data": {
-                "type": "appScreenshots",
-                "attributes": {
-                    "fileName": file_name,
-                    "fileSize": len(file_bytes),
-                },
-                "relationships": {
-                    "appScreenshotSet": {
-                        "data": {
-                            "type": "appScreenshotSets",
-                            "id": set_id,
-                        },
-                    },
-                },
-            }
-        }
-        reservation = await self.client._post(
-            "/appScreenshots", json=reserve_body
-        )
-
-        screenshot_id = reservation["data"]["id"]
-        operations = reservation["data"]["attributes"].get(
-            "uploadOperations", []
-        )
-
-        # Step 2: Upload binary (use Apple's requested content type).
-        for op in operations:
-            content_type = "application/octet-stream"
-            for hdr in op.get("requestHeaders", []):
-                if hdr.get("name", "").lower() == "content-type":
-                    content_type = hdr["value"]
-            offset = op.get("offset", 0)
-            await self.client._put_binary(
-                op["url"],
-                file_bytes[offset:offset + op["length"]],
-                content_type=content_type,
-            )
-
-        # Step 3: Commit.
-        commit_body = {
-            "data": {
-                "type": "appScreenshots",
-                "id": screenshot_id,
-                "attributes": {
-                    "uploaded": True,
-                    "sourceFileChecksum": checksum,
-                },
-            }
-        }
-        response = await self.client._patch(
-            f"/appScreenshots/{screenshot_id}",
-            json=commit_body,
-        )
-        return response.get("data", {})

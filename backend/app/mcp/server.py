@@ -11,8 +11,8 @@ mcp: FastMCP = FastMCP(
     instructions=(
         "Tools to manage an iOS app's App Store Connect presence: pricing, "
         "subscriptions/IAPs, metadata, keywords, reviews, visibility, ASO "
-        "audit, and competitor analysis. The 'swap.subscription_product' / "
-        "'swap.iap' tools handle productId swaps end-to-end (ASC + "
+        "audit, and competitor analysis. The 'swap_subscription_product' / "
+        "'swap_iap' tools handle productId swaps end-to-end (ASC + "
         "RevenueCat) and return the iOS-side checklist explaining what the "
         "app code must change."
     ),
@@ -29,6 +29,7 @@ from app.mcp.tools import (  # noqa: E402, F401
     availability,
     clash,
     cpp,
+    experiment,
     indices,
     keywords,
     metadata,

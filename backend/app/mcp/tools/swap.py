@@ -176,7 +176,7 @@ async def _finalize_swap(
     )
 
 
-@mcp.tool(name="swap.subscription_product")
+@mcp.tool(name="swap_subscription_product")
 async def swap_subscription_product(
     app_id: int,
     subscription_id: int,
@@ -260,7 +260,7 @@ async def swap_subscription_product(
         )
 
 
-@mcp.tool(name="swap.iap")
+@mcp.tool(name="swap_iap")
 async def swap_iap(
     app_id: int,
     iap_id: int,
@@ -335,7 +335,7 @@ async def swap_iap(
         )
 
 
-@mcp.tool(name="swap.suggest_new_product_id")
+@mcp.tool(name="swap_suggest_new_product_id")
 async def suggest_new_product_id(current_product_id: str) -> str:
     """Suggest the next versioned productId for a swap.
 

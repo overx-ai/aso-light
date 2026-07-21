@@ -116,7 +116,7 @@ def test_clash_tool_rejects_three_letter_country(monkeypatch):
             "get_access_token",
             lambda: _fake_access_token(seeded["user_id"]),
         )
-        tool = await mcp.get_tool("clash.run")
+        tool = await mcp.get_tool("clash_run")
         assert tool is not None
         with pytest.raises(ToolError, match="country must be a 2-letter code"):
             await tool.fn(app_id=seeded["app_id"], country="usa")
@@ -180,7 +180,7 @@ def test_create_watch_mcp_rejects_unknown_two_char_country(monkeypatch):
             "get_access_token",
             lambda: _fake_access_token(seeded["user_id"]),
         )
-        tool = await mcp.get_tool("visibility.create_watch")
+        tool = await mcp.get_tool("visibility_create_watch")
         assert tool is not None
         with pytest.raises(ToolError, match="Unknown territory"):
             await tool.fn(app_id=seeded["app_id"], text="coffee", country="zz")

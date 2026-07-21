@@ -10,7 +10,7 @@ from app.models.territory import Territory
 from app.schemas.territory import TerritoryResponse
 
 
-@mcp.tool(name="territories.list")
+@mcp.tool(name="territories_list")
 async def list_territories_tool() -> list[TerritoryResponse]:
     """List all seeded App Store territories with currency + VAT rate info."""
     async with session_scope() as session:

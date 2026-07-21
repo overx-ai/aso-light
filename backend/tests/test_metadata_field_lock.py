@@ -322,7 +322,7 @@ def test_mcp_update_locked_version_field_raises_tool_error(monkeypatch) -> None:
             assert app is not None
             _patch_mcp(monkeypatch, app, session)
             with pytest.raises(ToolError, match="keywords"):
-                await metadata_tools.update_locale.fn(
+                await metadata_tools.update_locale(
                     app_id=app_id,
                     kind="version",
                     locale="en-US",
@@ -340,7 +340,7 @@ def test_mcp_update_promotional_text_succeeds(monkeypatch) -> None:
             app = await session.get(App, app_id)
             assert app is not None
             _patch_mcp(monkeypatch, app, session)
-            out = await metadata_tools.update_locale.fn(
+            out = await metadata_tools.update_locale(
                 app_id=app_id,
                 kind="version",
                 locale="en-US",
@@ -360,7 +360,7 @@ def test_mcp_create_locked_version_field_raises_tool_error(monkeypatch) -> None:
             assert app is not None
             _patch_mcp(monkeypatch, app, session)
             with pytest.raises(ToolError):
-                await metadata_tools.create_locale.fn(
+                await metadata_tools.create_locale(
                     app_id=app_id,
                     kind="version",
                     locale="de-DE",

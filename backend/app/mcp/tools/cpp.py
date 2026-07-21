@@ -61,7 +61,7 @@ def _to_cpp_response(resource: dict) -> CPPResponse:
 # ==================================================================
 
 
-@mcp.tool(name="cpp.list")
+@mcp.tool(name="cpp_list")
 async def list_cpps(app_id: int) -> CPPListResponse:
     """List the Custom Product Pages for an app."""
     async with session_scope() as session:
@@ -75,7 +75,7 @@ async def list_cpps(app_id: int) -> CPPListResponse:
         )
 
 
-@mcp.tool(name="cpp.get")
+@mcp.tool(name="cpp_get")
 async def get_cpp(app_id: int, cpp_id: str) -> CPPResponse:
     """Fetch a single Custom Product Page by its ASC id."""
     async with session_scope() as session:
@@ -87,7 +87,7 @@ async def get_cpp(app_id: int, cpp_id: str) -> CPPResponse:
         return _to_cpp_response(resource)
 
 
-@mcp.tool(name="cpp.create")
+@mcp.tool(name="cpp_create")
 async def create_cpp(
     app_id: int, name: str, locale: str = "en-US", visible: bool = True,
 ) -> CPPResponse:
@@ -108,7 +108,7 @@ async def create_cpp(
         return _to_cpp_response(resource)
 
 
-@mcp.tool(name="cpp.update")
+@mcp.tool(name="cpp_update")
 async def update_cpp(
     app_id: int,
     cpp_id: str,
@@ -130,7 +130,7 @@ async def update_cpp(
         return _to_cpp_response(resource)
 
 
-@mcp.tool(name="cpp.delete")
+@mcp.tool(name="cpp_delete")
 async def delete_cpp(app_id: int, cpp_id: str) -> dict[str, bool]:
     """Delete a Custom Product Page."""
     async with session_scope() as session:
@@ -147,7 +147,7 @@ async def delete_cpp(app_id: int, cpp_id: str) -> dict[str, bool]:
 # ==================================================================
 
 
-@mcp.tool(name="cpp.ensure_localization")
+@mcp.tool(name="cpp_ensure_localization")
 async def ensure_cpp_localization(
     app_id: int, cpp_id: str, locale: str,
 ) -> CPPEnsureLocalizationResponse:
@@ -186,7 +186,7 @@ async def ensure_cpp_localization(
 # ==================================================================
 
 
-@mcp.tool(name="cpp.list_screenshots")
+@mcp.tool(name="cpp_list_screenshots")
 async def list_cpp_screenshots(
     app_id: int, localization_id: str,
 ) -> ScreenshotSetListResponse:
@@ -215,7 +215,7 @@ async def list_cpp_screenshots(
         )
 
 
-@mcp.tool(name="cpp.upload_screenshot")
+@mcp.tool(name="cpp_upload_screenshot")
 async def upload_cpp_screenshot(
     app_id: int,
     localization_id: str,

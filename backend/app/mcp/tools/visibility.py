@@ -71,7 +71,7 @@ async def _load_watch(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="visibility.list_watches")
+@mcp.tool(name="visibility_list_watches")
 async def list_watches(app_id: int) -> WatchListOut:
     """List every watch (keyword + country) registered against an app, with
     each watch's latest snapshot inlined."""
@@ -113,7 +113,7 @@ async def list_watches(app_id: int) -> WatchListOut:
         return WatchListOut(items=items)
 
 
-@mcp.tool(name="visibility.create_watch")
+@mcp.tool(name="visibility_create_watch")
 async def create_watch(app_id: int, text: str, country: str) -> WatchOut:
     """Register a new (keyword, country) watch for the app."""
     body = WatchCreate(text=text, country=country)
@@ -152,7 +152,7 @@ async def create_watch(app_id: int, text: str, country: str) -> WatchOut:
         )
 
 
-@mcp.tool(name="visibility.delete_watch")
+@mcp.tool(name="visibility_delete_watch")
 async def delete_watch(app_id: int, watch_id: int) -> dict[str, str]:
     """Delete a watch and all its historical snapshots."""
     async with session_scope() as session:
@@ -168,7 +168,7 @@ async def delete_watch(app_id: int, watch_id: int) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="visibility.poll_watch")
+@mcp.tool(name="visibility_poll_watch")
 async def poll_watch(app_id: int, watch_id: int) -> VisibilitySnapshotOut:
     """Poll the iTunes SERP for a watch right now and persist a fresh snapshot."""
     async with session_scope() as session:
@@ -184,7 +184,7 @@ async def poll_watch(app_id: int, watch_id: int) -> VisibilitySnapshotOut:
         return serialize_snapshot(full or snapshot)
 
 
-@mcp.tool(name="visibility.list_snapshots")
+@mcp.tool(name="visibility_list_snapshots")
 async def list_snapshots(
     app_id: int,
     watch_id: int,
@@ -216,7 +216,7 @@ async def list_snapshots(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="visibility.list_anomalies")
+@mcp.tool(name="visibility_list_anomalies")
 async def list_anomalies(
     app_id: int,
     days: int = 14,
@@ -274,7 +274,7 @@ async def list_anomalies(
         return AnomaliesOut(items=items)
 
 
-@mcp.tool(name="visibility.get_sov")
+@mcp.tool(name="visibility_get_sov")
 async def get_sov(app_id: int, days: int = 30) -> FullSovOut:
     """Compute share-of-voice across every watch — for each watch, lists the
     top-N tracks and the % of polls in the window where they landed in the
@@ -316,7 +316,7 @@ async def get_sov(app_id: int, days: int = 30) -> FullSovOut:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="visibility.competitor_sites")
+@mcp.tool(name="visibility_competitor_sites")
 async def competitor_sites(
     app_id: int,
     watch_id: int | None = None,

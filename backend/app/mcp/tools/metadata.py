@@ -99,7 +99,7 @@ async def _assert_editable_or_toolerror(
 # ==================================================================
 
 
-@mcp.tool(name="metadata.get_snapshot")
+@mcp.tool(name="metadata_get_snapshot")
 async def get_snapshot(app_id: int) -> AppMetadataSnapshotOut | None:
     """Return the cached metadata snapshot, or None if never synced."""
     async with session_scope() as session:
@@ -107,7 +107,7 @@ async def get_snapshot(app_id: int) -> AppMetadataSnapshotOut | None:
         return await _build_snapshot_out(session, app_id)
 
 
-@mcp.tool(name="metadata.sync")
+@mcp.tool(name="metadata_sync")
 async def sync_metadata(app_id: int) -> AppMetadataSnapshotOut:
     """Pull AppInfo + AppStoreVersion locales from ASC and upsert."""
     async with session_scope() as session:
@@ -132,7 +132,7 @@ async def sync_metadata(app_id: int) -> AppMetadataSnapshotOut:
 # ==================================================================
 
 
-@mcp.tool(name="metadata.get_locale")
+@mcp.tool(name="metadata_get_locale")
 async def get_locale(
     app_id: int, kind: str, locale: str,
 ) -> AppMetadataLocalizationOut:
@@ -150,7 +150,7 @@ async def get_locale(
         return AppMetadataLocalizationOut.model_validate(row)
 
 
-@mcp.tool(name="metadata.create_locale")
+@mcp.tool(name="metadata_create_locale")
 async def create_locale(
     app_id: int,
     kind: str,
@@ -228,7 +228,7 @@ async def create_locale(
         return AppMetadataLocalizationOut.model_validate(row)
 
 
-@mcp.tool(name="metadata.update_locale")
+@mcp.tool(name="metadata_update_locale")
 async def update_locale(
     app_id: int,
     kind: str,
@@ -282,7 +282,7 @@ async def update_locale(
         return AppMetadataLocalizationOut.model_validate(row)
 
 
-@mcp.tool(name="metadata.delete_locale")
+@mcp.tool(name="metadata_delete_locale")
 async def delete_locale(
     app_id: int, kind: str, locale: str,
 ) -> dict[str, bool]:
@@ -319,7 +319,7 @@ async def delete_locale(
 # ==================================================================
 
 
-@mcp.tool(name="metadata.bulk_preview")
+@mcp.tool(name="metadata_bulk_preview")
 async def bulk_preview(
     app_id: int,
     field: str,
@@ -352,7 +352,7 @@ async def bulk_preview(
         return BulkPreviewOut(items=items)
 
 
-@mcp.tool(name="metadata.bulk_apply")
+@mcp.tool(name="metadata_bulk_apply")
 async def bulk_apply(
     app_id: int,
     field: str,
@@ -404,7 +404,7 @@ async def bulk_apply(
 # ==================================================================
 
 
-@mcp.tool(name="metadata.translate")
+@mcp.tool(name="metadata_translate")
 async def translate_metadata(
     app_id: int,
     source_locale: str,
@@ -498,7 +498,7 @@ async def translate_metadata(
 # ==================================================================
 
 
-@mcp.tool(name="metadata.keyword_coverage")
+@mcp.tool(name="metadata_keyword_coverage")
 async def keyword_coverage(app_id: int) -> KeywordCoverageOut:
     """Classify each tracked keyword against each snapshot locale.
 

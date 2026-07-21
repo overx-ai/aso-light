@@ -129,7 +129,7 @@ async def _refresh_keyword_rankings(app_id: int) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="keywords.suggestions")
+@mcp.tool(name="keywords_suggestions")
 async def keyword_suggestions(
     term: str,
     locale: str = "en_us",
@@ -142,7 +142,7 @@ async def keyword_suggestions(
     return [KeywordSuggestion(term=s) for s in suggestions]
 
 
-@mcp.tool(name="keywords.search")
+@mcp.tool(name="keywords_search")
 async def keyword_search(
     term: str,
     country: str = "us",
@@ -155,7 +155,7 @@ async def keyword_search(
     return [SearchResult(**r) for r in results]
 
 
-@mcp.tool(name="keywords.cross_localization")
+@mcp.tool(name="keywords_cross_localization")
 async def keyword_cross_localization() -> list[CrossLocalizationEntry]:
     """Get the static (territory, locale, indexed) mapping table."""
     data = get_cross_localization_table()
@@ -167,7 +167,7 @@ async def keyword_cross_localization() -> list[CrossLocalizationEntry]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="keywords.list_for_app")
+@mcp.tool(name="keywords_list_for_app")
 async def list_tracked_keywords(
     app_id: int, with_paid: bool = False,
 ) -> list[KeywordTrackingResponse]:
@@ -182,7 +182,7 @@ async def list_tracked_keywords(
     return await _list_tracked_keywords(app_id=app_id, with_paid=with_paid)
 
 
-@mcp.tool(name="keyword_intel.list_for_app")
+@mcp.tool(name="keyword_intel_list_for_app")
 async def list_keyword_intel_rows(app_id: int) -> list[KeywordTrackingResponse]:
     """List the cached keyword-intel rows for an app.
 
@@ -192,7 +192,7 @@ async def list_keyword_intel_rows(app_id: int) -> list[KeywordTrackingResponse]:
     return await _list_tracked_keywords(app_id=app_id)
 
 
-@mcp.tool(name="keywords.add")
+@mcp.tool(name="keywords_add")
 async def add_tracked_keyword(
     app_id: int,
     text: str,
@@ -241,7 +241,7 @@ async def add_tracked_keyword(
         return _build_tracking_response(tracking)
 
 
-@mcp.tool(name="keywords.remove")
+@mcp.tool(name="keywords_remove")
 async def remove_tracked_keyword(app_id: int, tracking_id: int) -> dict[str, str]:
     """Stop tracking a keyword for an app."""
     async with session_scope() as session:
@@ -261,7 +261,7 @@ async def remove_tracked_keyword(app_id: int, tracking_id: int) -> dict[str, str
         return {"detail": "Keyword tracking removed"}
 
 
-@mcp.tool(name="keywords.refresh_rankings")
+@mcp.tool(name="keywords_refresh_rankings")
 async def refresh_keyword_rankings(app_id: int) -> dict[str, int]:
     """Refresh rankings for every tracked keyword on the app.
 
@@ -270,7 +270,7 @@ async def refresh_keyword_rankings(app_id: int) -> dict[str, int]:
     return await _refresh_keyword_rankings(app_id=app_id)
 
 
-@mcp.tool(name="keyword_intel.refresh")
+@mcp.tool(name="keyword_intel_refresh")
 async def refresh_keyword_intel(app_id: int) -> dict[str, int]:
     """Refresh the cached keyword-intel rows for an app.
 
@@ -280,7 +280,7 @@ async def refresh_keyword_intel(app_id: int) -> dict[str, int]:
     return await _refresh_keyword_rankings(app_id=app_id)
 
 
-@mcp.tool(name="keywords.get_rankings")
+@mcp.tool(name="keywords_get_rankings")
 async def get_keyword_rankings(
     app_id: int,
     tracking_id: int,
@@ -334,7 +334,7 @@ async def get_keyword_rankings(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="keywords.list_competitors")
+@mcp.tool(name="keywords_list_competitors")
 async def list_competitors(app_id: int) -> list[CompetitorResponse]:
     """List competitor apps registered for an app."""
     async with session_scope() as session:
@@ -348,7 +348,7 @@ async def list_competitors(app_id: int) -> list[CompetitorResponse]:
         return [CompetitorResponse.model_validate(c) for c in competitors]
 
 
-@mcp.tool(name="keywords.add_competitor")
+@mcp.tool(name="keywords_add_competitor")
 async def add_competitor(
     app_id: int,
     asc_app_id: str,
@@ -379,7 +379,7 @@ async def add_competitor(
         return CompetitorResponse.model_validate(competitor)
 
 
-@mcp.tool(name="keywords.remove_competitor")
+@mcp.tool(name="keywords_remove_competitor")
 async def remove_competitor(app_id: int, competitor_id: int) -> dict[str, str]:
     """Unregister a competitor app."""
     async with session_scope() as session:
@@ -432,7 +432,7 @@ async def _check_competitor_keywords(
         )
 
 
-@mcp.tool(name="keywords.list_competitor_keywords")
+@mcp.tool(name="keywords_list_competitor_keywords")
 async def list_competitor_keywords(
     app_id: int,
     competitor_id: int,
@@ -447,7 +447,7 @@ async def list_competitor_keywords(
     return await _check_competitor_keywords(app_id, competitor_id)
 
 
-@mcp.tool(name="keywords.add_competitor_keywords")
+@mcp.tool(name="keywords_add_competitor_keywords")
 async def add_competitor_keywords(
     app_id: int,
     competitor_id: int,

@@ -129,7 +129,7 @@ async def _ad_group_owned_by_user(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="asa.list_credentials")
+@mcp.tool(name="asa_list_credentials")
 async def list_credentials() -> list[ASACredentialOut]:
     """List the current user's stored ASA credentials (no secrets)."""
     async with session_scope() as session:
@@ -142,7 +142,7 @@ async def list_credentials() -> list[ASACredentialOut]:
         return [ASACredentialOut.model_validate(r) for r in rows]
 
 
-@mcp.tool(name="asa.test_credential")
+@mcp.tool(name="asa_test_credential")
 async def test_credential(credential_id: int) -> ASATestResult:
     """Hit Apple's ``/me/acl`` with the credential and report status."""
     async with session_scope() as session:
@@ -161,7 +161,7 @@ async def test_credential(credential_id: int) -> ASATestResult:
         )
 
 
-@mcp.tool(name="asa.delete_credential")
+@mcp.tool(name="asa_delete_credential")
 async def delete_credential(credential_id: int) -> dict:
     """Revoke an ASA credential and delete it from the project."""
     async with session_scope() as session:
@@ -170,7 +170,7 @@ async def delete_credential(credential_id: int) -> dict:
         return {"deleted": True, "id": credential_id}
 
 
-@mcp.tool(name="asa.list_orgs")
+@mcp.tool(name="asa_list_orgs")
 async def list_orgs(credential_id: int) -> list[ASAOrgOut]:
     """List ASA orgs visible to a credential (cached from the last sync)."""
     async with session_scope() as session:
@@ -188,7 +188,7 @@ async def list_orgs(credential_id: int) -> list[ASAOrgOut]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="asa.list_campaigns")
+@mcp.tool(name="asa_list_campaigns")
 async def list_campaigns(
     app_id: int | None = None,
     org_id: int | None = None,
@@ -232,7 +232,7 @@ async def list_campaigns(
         ]
 
 
-@mcp.tool(name="asa.get_campaign")
+@mcp.tool(name="asa_get_campaign")
 async def get_campaign(campaign_id: int) -> ASACampaignOut:
     """Get a single campaign; auth chain enforced."""
     async with session_scope() as session:
@@ -240,7 +240,7 @@ async def get_campaign(campaign_id: int) -> ASACampaignOut:
         return ASACampaignOut.model_validate(camp)
 
 
-@mcp.tool(name="asa.list_ad_groups")
+@mcp.tool(name="asa_list_ad_groups")
 async def list_ad_groups(campaign_id: int) -> list[ASAAdGroupOut]:
     """List ad groups under a campaign."""
     async with session_scope() as session:
@@ -253,7 +253,7 @@ async def list_ad_groups(campaign_id: int) -> list[ASAAdGroupOut]:
         return [ASAAdGroupOut.model_validate(r) for r in rows]
 
 
-@mcp.tool(name="asa.list_keywords")
+@mcp.tool(name="asa_list_keywords")
 async def list_keywords(ad_group_id: int) -> list[ASAKeywordOut]:
     """List targeted keywords inside an ad group."""
     async with session_scope() as session:
@@ -271,7 +271,7 @@ async def list_keywords(ad_group_id: int) -> list[ASAKeywordOut]:
         return [ASAKeywordOut.model_validate(r) for r in rows]
 
 
-@mcp.tool(name="asa.list_negative_keywords")
+@mcp.tool(name="asa_list_negative_keywords")
 async def list_negative_keywords(
     campaign_id: int | None = None,
     ad_group_id: int | None = None,
@@ -306,7 +306,7 @@ async def list_negative_keywords(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="asa.performance_report")
+@mcp.tool(name="asa_performance_report")
 async def performance_report(
     app_id: int,
     grain: Literal["CAMPAIGN", "AD_GROUP", "KEYWORD"] = "CAMPAIGN",
@@ -336,7 +336,7 @@ async def performance_report(
         )
 
 
-@mcp.tool(name="asa.search_term_report")
+@mcp.tool(name="asa_search_term_report")
 async def search_term_report(
     app_id: int,
     days: int = 30,
@@ -369,7 +369,7 @@ async def search_term_report(
         )
 
 
-@mcp.tool(name="asa.paid_organic_join")
+@mcp.tool(name="asa_paid_organic_join")
 async def paid_organic_join_tool(
     app_id: int, days: int = 30,
 ) -> list[PaidOrganicJoinRow]:
@@ -393,7 +393,7 @@ async def paid_organic_join_tool(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="asa.suggest_organic_keywords_to_track")
+@mcp.tool(name="asa_suggest_organic_keywords_to_track")
 async def suggest_organic(
     app_id: int, days: int = 30, min_taps: int = 20,
 ) -> list[dict[str, Any]]:
@@ -414,7 +414,7 @@ async def suggest_organic(
         )
 
 
-@mcp.tool(name="asa.suggest_negative_candidates")
+@mcp.tool(name="asa_suggest_negative_candidates")
 async def suggest_negatives(
     app_id: int,
     days: int = 30,
@@ -445,7 +445,7 @@ async def suggest_negatives(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="asa.add_negative_keywords")
+@mcp.tool(name="asa_add_negative_keywords")
 async def add_negative_keywords(
     scope: Literal["CAMPAIGN", "AD_GROUP"],
     scope_id: int,
@@ -514,7 +514,7 @@ async def add_negative_keywords(
         return [ASANegativeKeywordOut.model_validate(r) for r in out]
 
 
-@mcp.tool(name="asa.remove_negative_keyword")
+@mcp.tool(name="asa_remove_negative_keyword")
 async def remove_negative_keyword(negative_keyword_id: int) -> dict:
     """Delete a single negative keyword from ASA and our local cache."""
     async with session_scope() as session:
@@ -569,7 +569,7 @@ async def remove_negative_keyword(negative_keyword_id: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="asa.list_cpp_ads")
+@mcp.tool(name="asa_list_cpp_ads")
 async def list_cpp_ads(ad_group_id: int) -> list[dict[str, Any]]:
     """List the Ads in an ad group (each carries its Custom Product Page link).
 
@@ -595,7 +595,7 @@ async def list_cpp_ads(ad_group_id: int) -> list[dict[str, Any]]:
             await client.aclose()
 
 
-@mcp.tool(name="asa.assign_cpp")
+@mcp.tool(name="asa_assign_cpp")
 async def assign_cpp(
     ad_group_id: int, cpp_id: str, name: str,
 ) -> dict[str, Any]:
@@ -635,7 +635,7 @@ async def assign_cpp(
             await client.aclose()
 
 
-@mcp.tool(name="asa.unassign_cpp")
+@mcp.tool(name="asa_unassign_cpp")
 async def unassign_cpp(ad_group_id: int, ad_id: int) -> dict:
     """Detach a Custom Product Page from an ad group by deleting its Ad.
 
@@ -671,7 +671,7 @@ async def unassign_cpp(ad_group_id: int, ad_id: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(name="asa.sync")
+@mcp.tool(name="asa_sync")
 async def sync_tool(
     credential_id: int, full: bool = False,
 ) -> ASASyncOperationOut:

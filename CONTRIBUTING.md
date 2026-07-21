@@ -197,7 +197,7 @@ Add a module under `backend/app/mcp/tools/` and import it in `backend/app/mcp/__
 - Call service classes directly — no HTTP hop
 - Use `session_scope()` + `resolve_app()` for session and ownership
 - Raise `ToolError` for user-visible errors
-- Name tools `@mcp.tool(name="module.action")`
+- Name tools `@mcp.tool(name="module_action")` — underscores, **not dots** (the Anthropic tool-name regex `^[a-zA-Z0-9_-]{1,64}$` rejects dots; Claude Desktop refuses a dotted server, Claude Code silently rewrites `.`→`_`)
 
 ---
 

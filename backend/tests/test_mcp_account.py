@@ -117,11 +117,11 @@ def _fake_access_token(user_id: int, pat_id: int) -> SimpleNamespace:
 
 def test_account_whoami_tool_is_registered():
     async def go() -> str | None:
-        tool = await mcp.get_tool("account.whoami")
+        tool = await mcp.get_tool("account_whoami")
         return None if tool is None else tool.name
 
     name = asyncio.run(go())
-    assert name == "account.whoami"
+    assert name == "account_whoami"
 
 
 def test_account_whoami_returns_pat_user_context(monkeypatch):
@@ -137,7 +137,7 @@ def test_account_whoami_returns_pat_user_context(monkeypatch):
             ),
         )
 
-        tool = await mcp.get_tool("account.whoami")
+        tool = await mcp.get_tool("account_whoami")
         assert tool is not None
         result = await tool.fn()
 
