@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from typing import Any, Iterator
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -120,14 +121,18 @@ def _serialize_review(raw: dict[str, Any], included: list[dict[str, Any]] | None
 
 
 def _extract_cursor(payload: dict[str, Any]) -> str | None:
+    """Pull the decoded ``cursor`` value out of Apple's pagination ``next`` link.
+
+    ``parse_qs`` percent-decodes the token. Splitting the raw query string by
+    hand would hand back a still-encoded value, which httpx would then
+    percent-encode *again* when it's placed in ``params["cursor"]`` on the
+    next request.
+    """
     next_link = (payload.get("links") or {}).get("next")
-    if not next_link or "cursor=" not in next_link:
+    if not next_link:
         return None
-    # Apple's next link is a fully-qualified URL; we just want the cursor token.
-    try:
-        return next_link.split("cursor=", 1)[1].split("&", 1)[0]
-    except IndexError:
-        return None
+    values = parse_qs(urlsplit(next_link).query).get("cursor")
+    return values[0] if values else None
 
 
 # ----------------------------------------------------------------------
@@ -346,6 +351,9 @@ async def create_reply(
     attrs = data.get("attributes") or {}
     return ReviewResponseOut(
         id=data.get("id", ""),
+        # ASC's create-response payload sometimes omits responseBody; falling
+        # back to what we sent is safe here because a non-2xx write already
+        # raised via _asc_to_502 above, so a 2xx implies ASC accepted this body.
         body=attrs.get("responseBody") or body.body,
         last_modified_date=attrs.get("lastModifiedDate"),
         state=attrs.get("state"),

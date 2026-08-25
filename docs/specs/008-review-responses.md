@@ -72,8 +72,13 @@ Tones: `neutral` (default), `apologetic`, `appreciative`. Each prepends 2-3 line
 - `POST /apps/{app_id}/reviews/{review_id}/draft` body `DraftIn` → `DraftOut` (no DB write; suggestion only)
 - `POST /apps/{app_id}/reviews/{review_id}/translate` body `{target_locale}` → `{translation, cached}` (re-uses `translate_with_cache` against the review body, treating it as a free-form text field with `field_kind="review_body"`)
 - `POST /apps/{app_id}/reviews/{review_id}/respond` body `ReplyIn` → `ReviewResponseOut`
-- `PATCH /apps/{app_id}/reviews/{review_id}/respond` body `ReplyIn` → `ReviewResponseOut`
-- `DELETE /apps/{app_id}/reviews/{review_id}/respond` → 204
+- `PATCH /apps/{app_id}/reviews/{review_id}/respond/{response_id}` body `ReplyIn` → `ReviewResponseOut`
+- `DELETE /apps/{app_id}/reviews/{review_id}/respond/{response_id}` → 204
+
+The mutate/delete paths carry `{response_id}` explicitly (deviation from this
+spec's original draft, which keyed them off the review alone). `GET
+/reviews/{id}` already returns `response.id`, so passing it in the URL avoids an
+extra ASC round-trip to resolve "the" response for a review.
 
 All endpoints verify ownership via the existing `_get_verified_app(app_id, user_id, session)` helper.
 
@@ -86,7 +91,7 @@ All endpoints verify ownership via the existing `_get_verified_app(app_id, user_
   - "Translate to my locale" button — calls translate endpoint, shows the translation under the original.
   - "Suggest reply" — tone picker (3 options), button → AI draft fills the reply textarea.
   - Reply textarea (5970 char counter), Save / Update / Delete buttons depending on existing response state.
-- Hooks in `lib/hooks.ts`: `useReviews`, `useReview`, `useDraftReply`, `useTranslateReview`, `useRespondToReview`, `useUpdateReply`, `useDeleteReply`.
+- Hooks in `lib/hooks.ts`: `useReviews`, `useReview`, `useDraftReply`, `useTranslateReview`, `useCreateReply`, `useUpdateReply`, `useDeleteReply`.
 
 ## Edge cases
 
@@ -96,6 +101,7 @@ All endpoints verify ownership via the existing `_get_verified_app(app_id, user_
 - **No `ANTHROPIC_API_KEY`** — `/draft` returns 503; UI hides the Suggest button with a tooltip.
 - **Char limit 5970** — schema `Field(max_length=5970)` + frontend live counter.
 - **Locale of review** — Apple returns territory but not language; we infer locale by territory's primary language (reuse `app/data/territories.py` mapping).
+- **Pagination cursor decoding** — `_extract_cursor()` (in `api/v1/reviews.py`, mirrored in `mcp/tools/reviews.py`) parses Apple's `links.next` via `urllib.parse.parse_qs` rather than a hand-rolled string split, so a percent-encoded cursor token is decoded exactly once before being re-sent as the next request's `cursor` param — a hand split would leave it encoded and httpx would double-encode it on resend. Fixed + regression-tested (`test_extract_cursor_decodes_percent_encoded_token`) in the T8 QA pass.
 
 ## Verification
 
@@ -121,6 +127,7 @@ All endpoints verify ownership via the existing `_get_verified_app(app_id, user_
 - Edit `frontend/src/components/AppNavItem.tsx` — sub-nav link
 
 ## Tasks
+
 | ID | Description | Files |
 |----|-------------|-------|
 | T1 | `ASCReviewService` (list/get reviews, create/update/delete response) | `services/asc/reviews.py` |

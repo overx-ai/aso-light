@@ -9,6 +9,7 @@ guarantees both surfaces stay in lock-step.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from app.schemas.review import ReviewOut, ReviewResponseOut
 
@@ -93,12 +94,14 @@ def serialize_review(
 
 
 def extract_cursor(payload: dict[str, Any]) -> str | None:
-    """Pull the ``cursor=...`` token from Apple's pagination ``next`` link."""
+    """Pull the decoded ``cursor`` value out of Apple's pagination ``next`` link.
+
+    ``parse_qs`` percent-decodes the token; a still-encoded value fed back
+    into the next request's ``cursor`` param would get double-encoded by
+    httpx.
+    """
     next_link = (payload.get("links") or {}).get("next")
-    if not next_link or "cursor=" not in next_link:
+    if not next_link:
         return None
-    # Apple's next link is a fully-qualified URL; we just want the cursor token.
-    try:
-        return next_link.split("cursor=", 1)[1].split("&", 1)[0]
-    except IndexError:
-        return None
+    values = parse_qs(urlsplit(next_link).query).get("cursor")
+    return values[0] if values else None

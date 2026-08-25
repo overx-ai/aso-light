@@ -13,6 +13,8 @@ is exercised at the unit level only, same as every other ASC-backed router.
 """
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import pytest
 from pydantic import ValidationError
 
@@ -26,37 +28,47 @@ from app.services.asc.reviews import RESPONSE_BODY_MAX_LEN, ASCReviewService
 from tests._async_harness import run_async
 
 
+class ASCCall(NamedTuple):
+    """One recorded ASC call. ``payload`` is GET params or a JSON body."""
+
+    method: str
+    path: str
+    payload: dict | None
+
+
 class FakeASCClient:
     """Records ASC calls and returns scripted responses.
 
     ``responses`` maps ``(method, path)`` -> payload. Every call is appended
-    to ``calls`` as ``(method, path, params_or_json)`` for assertions.
+    to ``calls`` as an :class:`ASCCall` for assertions.
     """
 
     def __init__(self, responses: dict[tuple[str, str], dict] | None = None):
         self.responses = responses or {}
-        self.calls: list[tuple[str, str, dict | None]] = []
+        self.calls: list[ASCCall] = []
 
     def _lookup(self, method: str, path: str) -> dict:
         return self.responses.get((method, path), {"data": {}})
 
     async def _get(self, path: str, params: dict | None = None) -> dict:
-        self.calls.append(("GET", path, params))
+        self.calls.append(ASCCall("GET", path, params))
         return self._lookup("GET", path)
 
     async def _post(self, path: str, json: dict | None = None) -> dict:
-        self.calls.append(("POST", path, json))
+        self.calls.append(ASCCall("POST", path, json))
         return self._lookup("POST", path)
 
     async def _patch(self, path: str, json: dict | None = None) -> dict:
-        self.calls.append(("PATCH", path, json))
+        self.calls.append(ASCCall("PATCH", path, json))
         return self._lookup("PATCH", path)
 
     async def _delete(self, path: str) -> None:
-        self.calls.append(("DELETE", path, None))
+        self.calls.append(ASCCall("DELETE", path, None))
 
 
-def _service(responses=None) -> tuple[ASCReviewService, FakeASCClient]:
+def _service(
+    responses: dict[tuple[str, str], dict] | None = None,
+) -> tuple[ASCReviewService, FakeASCClient]:
     client = FakeASCClient(responses)
     return ASCReviewService(client), client  # type: ignore[arg-type]
 
@@ -70,20 +82,20 @@ def test_list_reviews_hits_app_scoped_endpoint_with_expected_params():
     svc, client = _service()
     run_async(svc.list_reviews("app-1"))
 
-    _m, path, params = client.calls[0]
-    assert path == "/v1/apps/app-1/customerReviews"
-    assert params["include"] == "response"
-    assert params["sort"] == "-createdDate"
-    assert "filter[territory]" not in params
-    assert "filter[rating]" not in params
-    assert "cursor" not in params
+    call = client.calls[0]
+    assert call.path == "/v1/apps/app-1/customerReviews"
+    assert call.payload["include"] == "response"
+    assert call.payload["sort"] == "-createdDate"
+    assert "filter[territory]" not in call.payload
+    assert "filter[rating]" not in call.payload
+    assert "cursor" not in call.payload
 
 
 def test_list_reviews_uppercases_territory_and_stringifies_rating():
     svc, client = _service()
     run_async(svc.list_reviews("app-1", territory="usa", rating=1))
 
-    _m, _path, params = client.calls[0]
+    params = client.calls[0].payload
     assert params["filter[territory]"] == "USA"
     assert params["filter[rating]"] == "1"
 
@@ -92,8 +104,7 @@ def test_list_reviews_passes_cursor_through():
     svc, client = _service()
     run_async(svc.list_reviews("app-1", cursor="abc123"))
 
-    _m, _path, params = client.calls[0]
-    assert params["cursor"] == "abc123"
+    assert client.calls[0].payload["cursor"] == "abc123"
 
 
 @pytest.mark.parametrize(
@@ -104,17 +115,16 @@ def test_list_reviews_clamps_limit_to_valid_range(requested, expected):
     svc, client = _service()
     run_async(svc.list_reviews("app-1", limit=requested))
 
-    _m, _path, params = client.calls[0]
-    assert params["limit"] == expected
+    assert client.calls[0].payload["limit"] == expected
 
 
 def test_get_review_hits_expected_path_with_include():
     svc, client = _service()
     run_async(svc.get_review("rev-1"))
 
-    _m, path, params = client.calls[0]
-    assert path == "/v1/customerReviews/rev-1"
-    assert params["include"] == "response"
+    call = client.calls[0]
+    assert call.path == "/v1/customerReviews/rev-1"
+    assert call.payload["include"] == "response"
 
 
 # ------------------------------------------------------------------
@@ -131,9 +141,9 @@ def test_create_response_posts_expected_json_api_body():
     out = run_async(svc.create_response("rev-1", "Thanks!"))
 
     assert out["id"] == "resp-1"
-    _m, path, body = client.calls[0]
-    assert path == "/v1/customerReviewResponses"
-    data = body["data"]
+    call = client.calls[0]
+    assert call.path == "/v1/customerReviewResponses"
+    data = call.payload["data"]
     assert data["type"] == "customerReviewResponses"
     assert data["attributes"] == {"responseBody": "Thanks!"}
     assert data["relationships"]["review"]["data"] == {
@@ -150,9 +160,9 @@ def test_update_response_patches_expected_json_api_body():
     out = run_async(svc.update_response("resp-1", "Updated"))
 
     assert out["id"] == "resp-1"
-    _m, path, body = client.calls[0]
-    assert path == "/v1/customerReviewResponses/resp-1"
-    data = body["data"]
+    call = client.calls[0]
+    assert call.path == "/v1/customerReviewResponses/resp-1"
+    data = call.payload["data"]
     assert data["type"] == "customerReviewResponses"
     assert data["id"] == "resp-1"
     assert data["attributes"] == {"responseBody": "Updated"}
@@ -162,7 +172,9 @@ def test_delete_response_issues_expected_delete():
     svc, client = _service()
     run_async(svc.delete_response("resp-1"))
 
-    assert ("DELETE", "/v1/customerReviewResponses/resp-1", None) in client.calls
+    assert client.calls[0] == ASCCall(
+        "DELETE", "/v1/customerReviewResponses/resp-1", None,
+    )
 
 
 # ------------------------------------------------------------------
@@ -239,6 +251,14 @@ def test_extract_cursor_parses_next_link():
 def test_extract_cursor_returns_none_when_no_next_link():
     assert _extract_cursor({}) is None
     assert _extract_cursor({"links": {}}) is None
+
+
+def test_extract_cursor_decodes_percent_encoded_token():
+    # A cursor containing reserved characters (=, &) comes back percent-encoded
+    # in the URL. It must be decoded here so that re-sending it as a query
+    # param on the next request doesn't get double-encoded by httpx.
+    payload = {"links": {"next": "https://api/v1/x?cursor=abc%3D123%26x&limit=50"}}
+    assert _extract_cursor(payload) == "abc=123&x"
 
 
 @pytest.mark.parametrize(

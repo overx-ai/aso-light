@@ -41,7 +41,10 @@ class ASCReviewService:
         so the caller can pass back ``links.next`` cursor for pagination.
 
         Apple does NOT support a ``has_response`` filter directly; the route
-        layer filters in memory after fetching.
+        layer filters in memory after fetching. Because that filter is applied
+        after pagination, a page that looked full-size on the wire can shrink
+        (or even empty out) once filtered, while ``next_cursor`` still advances
+        a full page at a time — this is a known UX quirk, not a data-loss bug.
         """
         params: dict[str, Any] = {
             "limit": min(max(limit, 1), 200),
