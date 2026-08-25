@@ -314,7 +314,12 @@ async def _gdp_bracket_items(
     build_item: BuildItem,
     raise_error: RaiseError,
 ) -> PreviewResult:
-    assert body.gdp_config is not None  # validator enforced
+    if body.gdp_config is None:
+        # PricePreviewRequest's model_validator enforces this on every
+        # normal construction path, but `assert` is stripped under `-O`
+        # and would otherwise surface as an unhandled AttributeError below
+        # rather than a clean caller-facing error.
+        raise raise_error("gdp_config is required when index_type='gdp_brackets'")
     gdp_config = body.gdp_config
     gdp_result = await session.execute(
         select(EconomicIndex).where(

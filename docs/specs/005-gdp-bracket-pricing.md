@@ -22,7 +22,7 @@ Existing pricing strategies (PPP, Big Mac, Netflix, Spotify, exchange rate) all 
   4. Else (no GDP data) → `low`
 - GDP source: World Bank `NY.GDP.PCAP.PP.CD` (PPP, current international $) — store **raw** values
 - Special list and full config persisted **per pricing preset**
-- Reuse existing currency conversion + smart rounding + Apple price-point matching + safety bands (+20%/-25%)
+- Reuse existing currency conversion + smart rounding + Apple price-point matching + safety bands (±50%, `SAFETY_BAND_PCT`)
 - v1: subscriptions only (IAP follow-up uses identical pattern)
 
 ## Architecture
@@ -83,11 +83,11 @@ Validators: 4 tier prices required; `top_min > mid_min`; alpha-2 codes only.
 | T11 | `PresetManager` `config` plumbing | `components/pricing/PresetManager.tsx` |
 
 ## Acceptance Criteria
-- [ ] `POST /api/v1/indices/refresh?index_type=gdp_per_capita_ppp` populates `economic_indices` with raw GDP/capita PPP
-- [ ] `GET /api/v1/indices/gdp` returns sorted territory list with GDP values
-- [ ] Preview with `index_type='gdp_brackets'` returns per-territory prices grouped by tier
-- [ ] `assign_tier()` priority order: special > manual override > threshold > fallback `low`
-- [ ] Pydantic rejects `top_min < mid_min` with 422
-- [ ] UI: GDP browser modal opens, tier badges update live as thresholds/overrides change
-- [ ] Save/load preset persists full `GDPBracketConfig` end-to-end
-- [ ] Apply path unchanged — existing safety bands and price-point matching reused
+- [x] `POST /api/v1/indices/refresh?index_type=gdp_per_capita_ppp` populates `economic_indices` with raw GDP/capita PPP (verified by code inspection — no endpoint-level test exists for any `IndexFetcher`, consistent with the rest of the codebase)
+- [x] `GET /api/v1/indices/gdp` returns sorted territory list with GDP values (verified by code inspection — same no-endpoint-test convention as above)
+- [x] Preview with `index_type='gdp_brackets'` returns per-territory prices grouped by tier — `test_gdp_bracket_preview_endpoint.py`
+- [x] `assign_tier()` priority order: special > manual override > threshold > fallback `low` — `test_gdp_brackets.py`
+- [x] Pydantic rejects `top_min < mid_min` with 422 — `test_gdp_brackets.py::test_inverted_thresholds_rejected`
+- [x] UI: GDP browser modal opens, tier badges update live as thresholds/overrides change (verified by code inspection of `GDPBracketEditor.tsx` + `PriceMultiplierPanel.tsx` wiring — not manually click-tested in a browser)
+- [x] Save/load preset persists full `GDPBracketConfig` end-to-end (verified by code inspection — `PriceMultiplierPanel.tsx` save/load path)
+- [x] Apply path unchanged — existing safety bands and price-point matching reused — `test_gdp_bracket_preview_endpoint.py`

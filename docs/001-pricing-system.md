@@ -61,6 +61,22 @@ When `index_type == "exchange_rate"`, the preview endpoint:
 
 This mode bypasses the `EconomicIndex` table entirely — rates are fetched live each time.
 
+## GDP-Bracket Pricing Mode
+
+**File**: `backend/app/services/pricing/gdp_brackets.py`
+**Spec**: [005 - GDP-Bracket Pricing](specs/005-gdp-bracket-pricing.md)
+
+`index_type == "gdp_brackets"` is a third dispatch path (alongside `PriceCalculator` and Exchange Rate mode) that assigns each territory an **absolute** USD tier price instead of scaling proportionally from a base price. `assign_tier(territory_code, gdp_value, config)` resolves one of four tiers in priority order:
+
+1. Territory in `special_territories` → `special`
+2. Territory in `manual_overrides` → that tier
+3. `gdp_value >= tier_thresholds_usd.top_min` → `top`; `>= mid_min` → `mid`
+4. Otherwise (including missing GDP data) → `low`
+
+Each tier maps to a fixed `tier_prices_usd` value from the request's `GDPBracketConfig` (`backend/app/schemas/pricing.py`). From there the tier price runs through the same FX conversion, smart currency rounding, Apple price-point matching, and `SAFETY_BAND_PCT` safety check (±50%) as every other strategy — see `_gdp_bracket_items()` in `backend/app/services/pricing/preview.py`.
+
+GDP/capita PPP values are sourced from World Bank `NY.GDP.PCAP.PP.CD` via `GDPFetcher` (stored **raw**, not US-normalized — see Economic Indices below) and browsed via `GET /api/v1/indices/gdp`. `GDPBracketConfig` (tier prices, thresholds, overrides, special list) is persisted per preset in `PricePreset.config` (nullable JSON — see Price Presets below).
+
 ## Smart Currency Rounding
 
 **File**: `backend/app/services/pricing/currency_rounding.py`
@@ -127,6 +143,7 @@ Sync (explicit user action):
 | Big Mac | `indices/bigmac.py` | Economist GitHub CSV | Semi-annual |
 | Netflix | `indices/netflix.py` | Seed data | ~70 countries, manual quarterly update |
 | Spotify | `indices/spotify.py` | Seed data | ~70 countries, manual quarterly update |
+| GDP/capita PPP | `indices/gdp.py` | World Bank API (`NY.GDP.PCAP.PP.CD`) | Annual update; stores **raw** value (not US-normalized) — drives GDP-bracket pricing, not `ProportionalCalculator` |
 
 ### IndexFetcher ABC
 
@@ -146,7 +163,7 @@ Users can save pricing configurations (index type, base price, territory, VAT, c
 
 **File**: `backend/app/api/v1/presets.py`
 
-**Model**: `backend/app/models/preset.py` — `PricePreset`
+**Model**: `backend/app/models/preset.py` — `PricePreset`, with a nullable `config: dict | None` JSON column for strategies needing extra state beyond the base fields (currently just `GDPBracketConfig` for `gdp_brackets`; older rows have `config=NULL` and are unaffected).
 
 ## Export / Import
 
