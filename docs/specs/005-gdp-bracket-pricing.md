@@ -1,8 +1,9 @@
 ---
 id: 005
 title: "GDP-Bracket Pricing Strategy"
-status: in-progress
+status: done
 created: 2026-04-26
+updated: 2026-08-26
 tasks: []
 ---
 
