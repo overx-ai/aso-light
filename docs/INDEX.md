@@ -35,7 +35,7 @@
 | [005 - GDP-Bracket Pricing](specs/005-gdp-bracket-pricing.md) | Absolute-price tiers driven by World Bank GDP/capita PPP | done |
 | [006 - Subscription Management](specs/006-subscription-management.md) | Group / subscription / intro-offer write paths | done |
 | [007 - Metadata Editor + Cross-Loc](specs/007-metadata-editor-and-cross-loc.md) | Phase 5 — metadata editor, AI translation, cross-loc grid | done |
-| [008 - Review Responses](specs/008-review-responses.md) | Read, AI-suggest, translate, post developer replies | draft |
+| [008 - Review Responses](specs/008-review-responses.md) | Read, AI-suggest, translate, post developer replies | done — see [014](014-reviews-module-security-findings.md) for unresolved C1 IDOR |
 | [009 - Keyword Visibility Tracker](specs/009-asa-analytics.md) | Search Ads-style competitor intel / share-of-voice | draft |
 | [010 - MCP Main-Listing Screenshots](specs/010-mcp-main-listing-screenshots.md) | `screenshots_list` / `_upload` / `_delete` for the main product page | done |
 | [011 - App Price Schedules](specs/011-app-price-schedules.md) | Paid-app price schedules — read, preview, apply | draft |
