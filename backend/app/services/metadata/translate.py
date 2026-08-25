@@ -13,16 +13,24 @@ Design notes
   ``cache_control`` would silently no-op (no error, just zero cache reads) and
   cost the ~1.25x cache-write premium for nothing. The DB-backed translation
   cache (``MetadataTranslationCache``) is the real cache layer here.
-* All ASC field char limits are enforced post-translation via hard truncation.
+* ASC field char limits are enforced post-translation WITHOUT truncation: an
+  over-long translation is retried once with an explicit length instruction and
+  then raises :class:`TranslationOverflowError`. Slicing the string would ship a
+  mid-word cut to a storefront nobody on the team reads. The one exception is
+  the comma-separated keywords field, where whole trailing terms are dropped.
+* Char limits are imported from ``app.services.metadata.validation`` — a single
+  source of truth shared with the editor/bulk validation path. They are global:
+  Apple counts Unicode code points uniformly, so there is no per-locale limit.
 * Per-app monthly cap (rolling 30 days) bounds Anthropic spend.
 """
+
 from __future__ import annotations
 
 import hashlib
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Final, Literal
 
 import httpx
 from anthropic import AsyncAnthropic
@@ -31,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.models.metadata import MetadataTranslationCache
+from app.services.metadata.validation import FIELD_CHAR_LIMITS
 
 logger = logging.getLogger(__name__)
 
@@ -43,14 +52,9 @@ FieldKind = Literal[
     "whats_new",
 ]
 
-FIELD_CHAR_LIMITS: dict[str, int] = {
-    "name": 30,
-    "subtitle": 30,
-    "description": 4000,
-    "keywords": 100,
-    "promotional_text": 170,
-    "whats_new": 4000,
-}
+# Applied to a field kind with no documented Apple limit (defensive; every
+# member of ``FieldKind`` is in FIELD_CHAR_LIMITS today).
+FALLBACK_CHAR_LIMIT: Final[int] = 4000
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
@@ -61,6 +65,14 @@ class TranslationQuotaExceededError(Exception):
 
 class TranslatorUnavailableError(Exception):
     """Raised when every configured translation provider fails."""
+
+
+class TranslationOverflowError(Exception):
+    """Raised when a translation still exceeds the field limit after a retry.
+
+    Deliberately preferred over truncation: a suggestion that cannot fit is a
+    suggestion the user must rewrite, not one we silently cut mid-word.
+    """
 
 
 class AbstractTranslator(ABC):
@@ -83,25 +95,27 @@ class AbstractTranslator(ABC):
         target_locale: str,
         field_kind: FieldKind,
         brand_allowlist: list[str] | None = None,
-    ) -> str:
-        ...
+    ) -> str: ...
 
 
-class AnthropicTranslator(AbstractTranslator):
-    """Claude-backed translator. Field-kind-aware + brand allowlist.
+class _PromptedTranslator(AbstractTranslator):
+    """Shared pipeline: build prompt -> complete -> post-process -> fit limit.
 
-    No prompt caching: see module docstring for rationale.
+    Subclasses implement :meth:`_complete` (exactly one provider round-trip).
+    Everything else — the field-kind system prompt, keyword normalization and
+    the no-truncation char-limit enforcement (retry once, then raise) — lives
+    here so every provider behaves identically.
     """
 
-    def __init__(
-        self, api_key: str, model: str = DEFAULT_MODEL,
-    ) -> None:
-        self._client = AsyncAnthropic(api_key=api_key)
-        self._model = model
-
-    @property
-    def model_name(self) -> str:
-        return f"anthropic:{self._model}"
+    @abstractmethod
+    async def _complete(
+        self,
+        system: str,
+        source_locale: str,
+        text: str,
+    ) -> str:
+        """One provider round-trip. Returns the raw (stripped) completion."""
+        ...
 
     async def translate(
         self,
@@ -111,10 +125,72 @@ class AnthropicTranslator(AbstractTranslator):
         field_kind: FieldKind,
         brand_allowlist: list[str] | None = None,
     ) -> str:
-        char_limit = FIELD_CHAR_LIMITS.get(field_kind, 4000)
-        system = _build_system_prompt(
-            field_kind, target_locale, char_limit, brand_allowlist or [],
+        char_limit = FIELD_CHAR_LIMITS.get(field_kind, FALLBACK_CHAR_LIMIT)
+        allowlist = brand_allowlist or []
+
+        async def attempt(overflow_by: int | None = None) -> str:
+            """One prompt -> completion -> post-process round-trip."""
+            system = _build_system_prompt(
+                field_kind,
+                target_locale,
+                char_limit,
+                allowlist,
+                overflow_by=overflow_by,
+            )
+            return _post_process(
+                await self._complete(system, source_locale, text),
+                field_kind,
+            )
+
+        translated = await attempt()
+        if len(translated) <= char_limit:
+            return translated
+
+        # Retry ONCE with an explicit length instruction. Truncating instead
+        # would cut mid-word; a second overflow is the user's call to make.
+        overflow = len(translated) - char_limit
+        logger.warning(
+            "Translation to %s for %r overflowed by %d char(s) — retrying "
+            "with an explicit length instruction",
+            target_locale,
+            field_kind,
+            overflow,
         )
+        retried = await attempt(overflow)
+        if len(retried) <= char_limit:
+            return retried
+
+        raise TranslationOverflowError(
+            f"Translation of {field_kind!r} to {target_locale} is "
+            f"{len(retried) - char_limit} char(s) over the {char_limit}-char "
+            f"limit after a retry (model: {self.model_name})",
+        )
+
+
+class AnthropicTranslator(_PromptedTranslator):
+    """Claude-backed translator. Field-kind-aware + brand allowlist.
+
+    No prompt caching: see module docstring for rationale.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = DEFAULT_MODEL,
+    ) -> None:
+        self._client = AsyncAnthropic(api_key=api_key)
+        self._model = model
+
+    @property
+    def model_name(self) -> str:
+        return f"anthropic:{self._model}"
+
+    async def _complete(
+        self,
+        system: str,
+        source_locale: str,
+        text: str,
+    ) -> str:
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=1024,
@@ -128,26 +204,20 @@ class AnthropicTranslator(AbstractTranslator):
         )
         # Defensive: response.content is List[ContentBlock]; first block is
         # text for our prompt shape.
-        translated = ""
         for block in response.content:
             if getattr(block, "type", None) == "text":
-                translated = block.text.strip()
-                break
-
-        if field_kind == "keywords":
-            translated = _post_process_keywords(translated)
-
-        return translated[:char_limit]
+                return block.text.strip()
+        return ""
 
 
-class OpenRouterTranslator(AbstractTranslator):
+class OpenRouterTranslator(_PromptedTranslator):
     """OpenRouter-backed translator (openrouter.ai).
 
     OpenRouter exposes an OpenAI-compatible ``/chat/completions`` endpoint, so
-    we call it with raw ``httpx`` (no extra SDK) and reuse the exact same
-    field-kind system prompt + keyword post-processing as AnthropicTranslator.
-    A single OpenRouter key fans out to many upstream models (Anthropic, OpenAI,
-    Google, etc.) selected by ``model`` slug.
+    we call it with raw ``httpx`` (no extra SDK); the prompt, post-processing
+    and char-limit handling come from :class:`_PromptedTranslator`, identical
+    to AnthropicTranslator. A single OpenRouter key fans out to many upstream
+    models (Anthropic, OpenAI, Google, etc.) selected by ``model`` slug.
     """
 
     def __init__(
@@ -168,18 +238,12 @@ class OpenRouterTranslator(AbstractTranslator):
     def model_name(self) -> str:
         return f"openrouter:{self._model}"
 
-    async def translate(
+    async def _complete(
         self,
-        text: str,
+        system: str,
         source_locale: str,
-        target_locale: str,
-        field_kind: FieldKind,
-        brand_allowlist: list[str] | None = None,
+        text: str,
     ) -> str:
-        char_limit = FIELD_CHAR_LIMITS.get(field_kind, 4000)
-        system = _build_system_prompt(
-            field_kind, target_locale, char_limit, brand_allowlist or [],
-        )
         payload = {
             "model": self._model,
             "max_tokens": 1024,
@@ -198,7 +262,9 @@ class OpenRouterTranslator(AbstractTranslator):
         url = f"{self._base_url}/chat/completions"
         if self._http_client is not None:
             response = await self._http_client.post(
-                url, headers=headers, json=payload,
+                url,
+                headers=headers,
+                json=payload,
             )
         else:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -206,14 +272,9 @@ class OpenRouterTranslator(AbstractTranslator):
         response.raise_for_status()
         data = response.json()
         choices = data.get("choices") or []
-        translated = ""
-        if choices:
-            translated = (choices[0].get("message", {}).get("content") or "").strip()
-
-        if field_kind == "keywords":
-            translated = _post_process_keywords(translated)
-
-        return translated[:char_limit]
+        if not choices:
+            return ""
+        return (choices[0].get("message", {}).get("content") or "").strip()
 
 
 class FallbackTranslator(AbstractTranslator):
@@ -221,7 +282,9 @@ class FallbackTranslator(AbstractTranslator):
 
     A provider error (auth, rate limit, network, bad model slug, …) is logged
     and the next provider is tried. Raises ``TranslatorUnavailableError`` only
-    when every provider has failed.
+    when every provider has failed. ``TranslationOverflowError`` counts as a
+    provider failure on purpose — a terser model may well fit the limit — and
+    is chained as ``__cause__`` when it is the last one.
     """
 
     def __init__(self, translators: list[AbstractTranslator]) -> None:
@@ -245,7 +308,11 @@ class FallbackTranslator(AbstractTranslator):
         for translator in self._translators:
             try:
                 return await translator.translate(
-                    text, source_locale, target_locale, field_kind, brand_allowlist,
+                    text,
+                    source_locale,
+                    target_locale,
+                    field_kind,
+                    brand_allowlist,
                 )
             except Exception as exc:  # noqa: BLE001 — providers raise diverse types
                 last_exc = exc
@@ -302,17 +369,20 @@ def _build_system_prompt(
     target_locale: str,
     char_limit: int,
     brand_allowlist: list[str],
+    overflow_by: int | None = None,
 ) -> str:
+    """System prompt for one translation attempt.
+
+    ``overflow_by`` is set only on the retry after an over-long first attempt;
+    it adds an explicit "must be under N characters" instruction.
+    """
     lines = [
         (
             f"You are a localization expert translating App Store metadata "
             f"to {target_locale}."
         ),
         f"Field type: {field_kind}. Hard character limit: {char_limit}.",
-        (
-            "Output ONLY the translated text — no quotes, explanations, "
-            "or commentary."
-        ),
+        ("Output ONLY the translated text — no quotes, explanations, or commentary."),
     ]
     if field_kind == "keywords":
         lines.append(
@@ -330,15 +400,40 @@ def _build_system_prompt(
             "Do NOT translate these brand/proper names — keep them verbatim: "
             f"{', '.join(brand_allowlist)}.",
         )
+    if overflow_by is not None:
+        lines.append(
+            f"Your previous attempt was {overflow_by} character(s) too long. "
+            f"The result MUST be under {char_limit + 1} characters "
+            f"(at most {char_limit}, counting spaces and punctuation). "
+            "Rewrite it shorter — do not cut a word in half.",
+        )
     return "\n".join(lines)
 
 
+def _post_process(text: str, field_kind: str) -> str:
+    """Field-kind normalization applied to every raw completion."""
+    if field_kind == "keywords":
+        return _post_process_keywords(text)
+    return text
+
+
 def _post_process_keywords(text: str) -> str:
-    """Normalize keyword field: lowercase, dedupe, comma-separated, no spaces."""
-    tokens = [t.strip().lower() for t in text.split(",") if t.strip()]
+    """Normalize keyword field: lowercase, dedupe, comma-separated, no spaces.
+
+    This is the ONE field allowed to truncate, because it is a comma-separated
+    list: whole trailing terms are dropped until the value fits. A partial term
+    is never emitted — half a keyword is a keyword nobody searches for.
+    """
+    limit = FIELD_CHAR_LIMITS["keywords"]
     # ``dict.fromkeys`` dedupes while preserving first-seen order.
-    deduped = dict.fromkeys(tokens)
-    return ",".join(deduped)[: FIELD_CHAR_LIMITS["keywords"]]
+    deduped = dict.fromkeys(t.strip().lower() for t in text.split(",") if t.strip())
+    out = ""
+    for token in deduped:
+        candidate = f"{out},{token}" if out else token
+        if len(candidate) > limit:
+            break
+        out = candidate
+    return out
 
 
 def source_hash(text: str) -> str:
@@ -368,6 +463,8 @@ async def translate_with_cache(
     ------
     TranslationQuotaExceededError: when the app has used >= ``monthly_cap``
         translations in the rolling last 30 days.
+    TranslationOverflowError: when the translation still exceeds the field's
+        char limit after the retry (nothing is billed or cached).
     """
     sh = source_hash(text)
 
@@ -387,7 +484,11 @@ async def translate_with_cache(
     # 2. Translate (outside the cap critical section — the network call is the
     #    slow part; we re-check the cap atomically just before billing/insert).
     translated = await translator.translate(
-        text, source_locale, target_locale, field_kind, brand_allowlist,
+        text,
+        source_locale,
+        target_locale,
+        field_kind,
+        brand_allowlist,
     )
 
     # 3. Atomically re-check the cap and persist the billed row.
@@ -428,7 +529,10 @@ async def translate_with_cache(
 
 
 async def _count_recent_translations(
-    session: AsyncSession, app_id: int, *, window_days: int = 30,
+    session: AsyncSession,
+    app_id: int,
+    *,
+    window_days: int = 30,
 ) -> int:
     """Count billed translations for ``app_id`` in the rolling window.
 

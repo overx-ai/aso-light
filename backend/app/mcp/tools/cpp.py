@@ -8,8 +8,6 @@ chain), builds an :class:`ASCClient`, and converts ASC API failures into
 """
 from __future__ import annotations
 
-import base64
-import binascii
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -26,6 +24,10 @@ from app.schemas.cpp import (
     Screenshot,
     ScreenshotSet,
     ScreenshotSetListResponse,
+)
+from app.schemas.screenshots import (
+    decode_screenshot_payload,
+    is_valid_display_type,
 )
 from app.services.asc.cpp import ASCCustomProductPageService
 from app.services.asc.errors import ASCAPIError
@@ -242,12 +244,12 @@ async def upload_cpp_screenshot(
     Returns:
         The created :class:`Screenshot`.
     """
+    if not is_valid_display_type(display_type):
+        raise ToolError(f"Unknown display_type '{display_type}'.")
     try:
-        file_bytes = base64.b64decode(file_base64, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise ToolError(f"Invalid base64 payload: {exc}")
-    if not file_bytes:
-        raise ToolError("Decoded screenshot payload is empty")
+        file_bytes = decode_screenshot_payload(file_base64)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
 
     async with session_scope() as session:
         app = await resolve_app(app_id, session)

@@ -46,3 +46,6 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "network: hits a live third-party API; skips itself when offline",
+]

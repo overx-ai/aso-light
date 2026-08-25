@@ -65,10 +65,10 @@ Migration chain: `001_preset_config → 002_territory_gdp → 003_metadata_table
 |------|---------|
 | `client.py` | `ASCMetadataService` — wraps AppInfo + AppStoreVersion read/write endpoints. State-machine guard refuses non-`promotionalText` mutations on `READY_FOR_DISTRIBUTION` (raises `MetadataNotEditableError` → 409). Exports `EDITABLE_VERSION_STATES`, `READ_ONLY_VERSION_STATES_PROMO_ONLY`, `PROMO_ONLY_FIELDS_ON_LIVE` constants. |
 | `snapshot.py` | `MetadataSnapshotService.sync_app(app)` — pulls both trees from ASC, upserts into snapshot tables, computes `editable_fields`, deletes stale rows. Idempotent. Returns `SnapshotResult` dataclass. Defensive AppInfo state field name handling (`appStoreState` vs `state`). |
-| `bulk.py` | `BulkMetadataService.preview/apply` — pure logic over snapshot + char-limit validation. `apply()` replays per-locale PATCHes and returns success/skip/error matrix mirroring `PriceApplyResponse`. `force=True` overrides only **soft** skips (unchanged value, state-machine guess) — never **hard** skips (char overflow, missing localization row). Logs `ASCAPIError` warnings + `logger.exception` for unexpected failures. |
+| `bulk.py` | `BulkMetadataService.preview/apply` — pure logic over snapshot + char-limit validation. `apply()` replays per-locale PATCHes and returns success/skip/error matrix mirroring `PriceApplyResponse`. `force=True` overrides only **soft** skips (unchanged value, state-machine guess) — never **hard** skips (char overflow, missing localization row). `create_missing=True` (default off) turns the missing-row skip into a **create**: the locale is POSTed via `ASCMetadataService.create_{app_info,version}_localization` under `app_metadata_state.app_info_id` / `editable_version_id` (whichever `kind` selects), mirrored straight into the snapshot (no per-locale full re-sync), and committed per locale so creates and updates interleave in one resumable pass. Each `BulkPreviewItem` carries `action: create\|update\|skip`. `create_missing` is **not** a way past validation — char limits and `editable_fields` are checked first and identically, with or without `force`. Logs `ASCAPIError` warnings + `logger.exception` for unexpected failures. |
 | `validation.py` | `FIELD_CHAR_LIMITS`, `URL_FIELDS`, `ALL_FIELDS`, `validate_field()`, `char_overflow()`, `is_valid_url()`. Reused by schemas, bulk service, and the AI translator's char-limit awareness. |
 | `coloring.py` | Pure `classify_keyword(keyword, name, subtitle, keywords_field) -> "title"\|"subtitle"\|"keywords"\|"none"`. Precedence: title > subtitle > keywords. Comma-token exact match for keywords field. Reused by both metadata router (coverage endpoint) and frontend. 18 unit tests. |
-| `translate.py` | `AbstractTranslator` ABC + `AnthropicTranslator` (default model: `claude-haiku-4-5-20251001`). Field-aware system prompt (char limit + brand allowlist). Keywords-field post-processing (split commas, dedupe, lowercase, hard-truncate 100). `translate_with_cache()` enforces rolling 30-day soft cap (default 500/app) via `MetadataTranslationCache`. Translations are **suggestion-only** — never auto-applied. |
+| `translate.py` | `AbstractTranslator` ABC + `_PromptedTranslator` base + `AnthropicTranslator` (default model: `claude-haiku-4-5-20251001`) / `OpenRouterTranslator`. Field-aware system prompt (char limit + brand allowlist). Char limits are imported from `validation.py` — **one** `FIELD_CHAR_LIMITS`, global (Apple counts code points uniformly). An over-long translation is retried once with an explicit length instruction and then raises `TranslationOverflowError`; only the comma-separated keywords field truncates, and only by whole trailing terms. `translate_with_cache()` enforces rolling 30-day soft cap (default 500/app) via `MetadataTranslationCache`. Translations are **suggestion-only** — never auto-applied. |
 
 ### API endpoints
 
@@ -81,8 +81,8 @@ All under `/api/v1/apps/{app_id}/metadata/*` (mounted via metadata router) plus 
 | POST | `/apps/{app_id}/metadata/{kind}/{locale}` | Create new locale row (requires prior sync — 409 otherwise) |
 | PATCH | `/apps/{app_id}/metadata/{kind}/{locale}` | Update single locale; updates snapshot row in-place |
 | DELETE | `/apps/{app_id}/metadata/{kind}/{locale}` | Delete locale + remove snapshot row |
-| POST | `/apps/{app_id}/metadata/bulk/preview` | `{field, value, target_locales[]}` → diff list with overflow + skip reasons |
-| POST | `/apps/{app_id}/metadata/bulk/apply` | `{field, value, target_locales[], force?}` → per-locale success/skip/error matrix; cap 50 |
+| POST | `/apps/{app_id}/metadata/bulk/preview` | `{field, value, target_locales[], create_missing?}` → diff list with overflow, skip reasons, and per-locale `action` |
+| POST | `/apps/{app_id}/metadata/bulk/apply` | `{field, value, target_locales[], force?, create_missing?}` → per-locale success/skip/error matrix; cap 50 |
 | POST | `/apps/{app_id}/metadata/translate` | `{source_locale, target_locales[], fields[]}` → suggestions only; never writes |
 | GET | `/apps/{app_id}/metadata/keyword-coverage` | tracked-keyword × locale → which field. Avoids N+1 via `selectinload(KeywordTracking.keyword)`. |
 | GET | `/keywords/cross-localization-grid` | Static cross-loc data joined with `Territory.gdp_per_capita_usd` for default sort |
@@ -169,7 +169,9 @@ For each (target_locale, field):
   AnthropicTranslator.translate(text, src, tgt, field_kind, brand_allowlist)
     ↳ field-aware system prompt (char limit + brand preserve list)
     ↳ Claude Haiku 4.5
-    ↳ keywords field: post-process (split commas, dedupe, hard-truncate 100)
+    ↳ keywords field: post-process (split commas, dedupe, drop whole trailing terms to 100)
+    ↳ over the limit? retry once with an explicit length instruction, then raise
+      TranslationOverflowError — never a mid-word cut
   cache row insert
   return suggestion
        │

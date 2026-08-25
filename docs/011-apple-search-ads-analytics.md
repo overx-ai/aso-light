@@ -155,6 +155,7 @@ ASA credential management lives in the Settings page (under the existing credent
 - Private key is decrypted in memory only for the duration of a token fetch, then discarded.
 - `_own_credential_for_user` guards every credential-scoped MCP operation.
 - Per-app endpoints run through `_get_verified_app` (same ownership chain as pricing/metadata).
+- **Two scopes, both enforced in the query**: analytics reads filter on `credential_id IN (credentials owned by user_id)` (cross-tenant) *and* on the app. Verifying `app_id` upstream is not enough — a user with several apps under one ASA credential passes the credential filter for all of them. `search_term_report_rows` therefore joins `asa_search_terms → asa_ad_groups → asa_campaigns` and filters `asa_campaigns.app_id`; `performance_rows` and the `joins.py` queries filter `ASAMetricDaily.app_adam_id`. Both fail closed on NULL (`credential_id`, `asa_campaigns.app_id`). Regressions: `backend/tests/test_asa_analytics_scoping.py`.
 
 ## Edge Cases & Constraints
 

@@ -174,7 +174,26 @@ Migration: `03e831a0b230_add_keyword_intel_cache.py`.
 A bad provider doesn't abort the refresh — it logs into `skipped_sources` and
 the rest still run.
 
-MCP tool mirror is **not yet shipped** — pending iteration.
+---
+
+## MCP surface
+
+| Tool | Mirrors | Notes |
+|---|---|---|
+| `keyword_intel_list(app_id, keyword?, locale?, source?, limit=200)` | `GET .../keyword-intel` | Cache read, newest first; `keyword` is a list |
+| `keyword_intel_refresh_providers(app_id, provider?, days=30)` | `POST .../keyword-intel/refresh` | `provider` narrows the run to one source; an unknown name is a `ToolError` |
+
+Both run the same `resolve_app` ownership chain as every other app-scoped tool
+and share their bodies with the REST routes via
+`app/services/keyword_intel/service.py`.
+
+Do **not** confuse `keyword_intel_refresh_providers` with
+`keywords_refresh_rankings` — the latter re-scrapes iTunes SERP ranks for
+tracked keywords and writes nothing to this cache. Two mislabeled aliases
+shipped before the real tools existed and were **both deleted**, not renamed —
+each duplicated a `keywords_*` tool verbatim: `keyword_intel_refresh` →
+`keywords_refresh_rankings`, `keyword_intel_list_for_app` →
+`keywords_list_for_app`.
 
 ---
 
@@ -212,7 +231,8 @@ AppTweak / AppFigures is two pieces:
    `KeywordIntelProvider`. Returns `KeywordIntel` rows with the same
    normalized 0–100 score range (each vendor's native scale gets mapped
    inside the provider; document the mapping in the file's docstring).
-2. Append the class to `_PROVIDERS_FACTORY` in `app/api/v1/keyword_intel.py`.
+2. Append the class to `PROVIDER_FACTORIES` in
+   `app/services/keyword_intel/service.py` (REST + MCP both read it).
 
 Consumers (Metadata grid, future Clash + Keywords pages) **don't change**.
 The cache key includes `source` so paid + free coexist; "best intel" picking
@@ -240,7 +260,9 @@ Ballpark pricing per vendor (2026):
 | Path A provider | `backend/app/services/keyword_intel/asa_recommendations.py` |
 | Path B provider | `backend/app/services/keyword_intel/asa_search_terms.py` |
 | Schema | `backend/app/schemas/keyword_intel.py` |
+| Shared read/refresh | `backend/app/services/keyword_intel/service.py` (`PROVIDER_FACTORIES`, `run_providers`, `list_intel`) |
 | REST route | `backend/app/api/v1/keyword_intel.py` |
+| MCP tools | `backend/app/mcp/tools/keywords.py` (`keyword_intel_list`, `keyword_intel_refresh_providers`) |
 | Migration | `backend/alembic/versions/03e831a0b230_add_keyword_intel_cache.py` |
 | Frontend hook + types | `frontend/src/lib/hooks.ts` (`useKeywordIntel`, `useRefreshKeywordIntel`, `bestIntelByKeyword`) |
 | Frontend consumer | `frontend/src/components/metadata/MetadataGrid.tsx` |
@@ -249,8 +271,6 @@ Ballpark pricing per vendor (2026):
 
 ## Limits + future work
 
-- **MCP tool mirror** (`keyword_intel.refresh` + `keyword_intel.list`) — not
-  yet shipped.
 - **Server-side cooldown** on `POST .../keyword-intel/refresh` — frontend
   button gating prevents user double-click but a CLI/MCP caller can hammer
   ASA. A 60s "minimum-interval" check against `max(fetched_at)` would fix
