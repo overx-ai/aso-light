@@ -31,3 +31,4 @@ backend/.cache/
 .hero/
 .playwright-mcp/
 frontend/.claude/
+.worktrees/
