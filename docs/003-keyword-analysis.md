@@ -21,10 +21,23 @@ The keyword analysis feature lets users track app rankings for search terms, dis
 
 ```
 GET https://search.itunes.apple.com/WebObjects/MZSearchHints.woa/wa/hints
-    ?media=software&term=<term>&l=<locale>
+    ?clientApplication=Software&media=software&term=<term>
+X-Apple-Store-Front: <storefront_id>-1,29
 ```
 
 Returns suggested keyword completions. Used for the Search tab's autocomplete input.
+
+**The `X-Apple-Store-Front` header is mandatory.** Without it Apple answers HTTP 200
+with an empty `<array/>` — no error, nothing logged — so the endpoint returns `[]`
+for every term. The `l=` query param does *not* select a storefront and is no
+longer sent; the header alone picks both the store and the language of the hints.
+
+Storefront ids live in `backend/app/data/storefronts.py`, keyed by ISO alpha-2
+country code (`us → 143441`, `de → 143443`). These are the **classic iTunes**
+storefront numbers, unrelated to `Territory.apple_territory_id` (an ASC id).
+`get_suggestions(term, country="us")` matches `ITunesSearchService.search_apps`;
+the old `locale=` kwarg is still accepted for one release (`en_us → us`). An empty
+result logs a warning with term + country, so a silent `[]` can never hide again.
 
 ## iTunes Search API (Ranking)
 

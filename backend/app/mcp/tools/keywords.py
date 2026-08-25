@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.v1.keywords import (
     COMPETITOR_KEYWORD_CAP,
+    _build_tracking_response,
     _compute_competitor_keyword_matrix,
 )
 from app.mcp.context import get_user_id, resolve_app, session_scope
@@ -36,6 +37,15 @@ from app.schemas.keyword import (
     RankDataPoint,
     SearchResult,
 )
+from app.schemas.keyword_intel import KeywordIntelOut, KeywordIntelRefreshOut
+from app.services.keyword_intel.service import (
+    DEFAULT_DAYS,
+    DEFAULT_LIMIT,
+    MAX_DAYS,
+    MAX_LIMIT,
+    list_intel,
+    run_providers,
+)
 from app.services.keywords.cross_localization import get_cross_localization_table
 from app.services.keywords.itunes_search import (
     ITunesSearchService,
@@ -48,83 +58,6 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _build_tracking_response(
-    tracking: KeywordTracking,
-) -> KeywordTrackingResponse:
-    """Build a KeywordTrackingResponse, computing latest_rank + delta."""
-    rankings = sorted(tracking.rankings, key=lambda r: r.recorded_at)
-
-    latest_rank: int | None = None
-    rank_change: int | None = None
-    if rankings:
-        latest_rank = rankings[-1].rank
-        if len(rankings) >= 2:
-            prev_rank = rankings[-2].rank
-            if latest_rank is not None and prev_rank is not None:
-                # Positive = improved (rank went down numerically).
-                rank_change = prev_rank - latest_rank
-
-    return KeywordTrackingResponse(
-        id=tracking.id,
-        keyword=tracking.keyword,
-        app_id=tracking.app_id,
-        latest_rank=latest_rank,
-        rank_change=rank_change,
-        added_at=tracking.created_at,
-    )
-
-
-async def _list_tracked_keywords(
-    app_id: int, with_paid: bool = False,
-) -> list[KeywordTrackingResponse]:
-    async with session_scope() as session:
-        await resolve_app(app_id, session)
-        result = await session.execute(
-            select(KeywordTracking)
-            .options(
-                selectinload(KeywordTracking.keyword),
-                selectinload(KeywordTracking.rankings),
-            )
-            .where(KeywordTracking.app_id == app_id)
-            .order_by(KeywordTracking.created_at.desc())
-        )
-        trackings = result.scalars().all()
-        rows = [_build_tracking_response(t) for t in trackings]
-
-        if with_paid:
-            from app.services.asa.joins import paid_organic_join
-
-            paid = await paid_organic_join(
-                session=session, app_id=app_id, user_id=get_user_id(), days=30,
-            )
-            paid_by_term = {p["term"].lower(): p for p in paid}
-            for row in rows:
-                match = paid_by_term.get((row.keyword.text or "").lower())
-                if match is None or match["paid_impressions_30d"] == 0:
-                    continue
-                row.paid_metrics_30d = KeywordPaidMetrics30d(
-                    impressions=match["paid_impressions_30d"],
-                    taps=match["paid_taps_30d"],
-                    installs=match["paid_installs_30d"],
-                    spend_amount=float(match["paid_spend_30d"]),
-                    spend_currency=match["paid_spend_currency"],
-                )
-        return rows
-
-
-async def _refresh_keyword_rankings(app_id: int) -> dict[str, int]:
-    async with session_scope() as session:
-        await resolve_app(app_id, session)
-        tracker = KeywordRankingTracker(session)
-        recorded = await tracker.refresh_rankings(app_id)
-        return {"recorded": recorded}
-
-
-# ---------------------------------------------------------------------------
 # Suggestions / search / cross-localization (not app-scoped)
 # ---------------------------------------------------------------------------
 
@@ -132,13 +65,20 @@ async def _refresh_keyword_rankings(app_id: int) -> dict[str, int]:
 @mcp.tool(name="keywords_suggestions")
 async def keyword_suggestions(
     term: str,
-    locale: str = "en_us",
+    country: str = "us",
+    locale: str | None = None,
 ) -> list[KeywordSuggestion]:
-    """Get autocomplete suggestions from iTunes hints API."""
+    """Get autocomplete suggestions from iTunes hints API.
+
+    ``country`` is a two-letter storefront code ("us", "de", …) and selects both
+    the store and the language of the hints. ``locale`` is a deprecated alias
+    ("en_us" → "us") that applies only while ``country`` is left at its "us"
+    default — an explicit ``country`` always wins.
+    """
     if not term:
         raise ToolError("term must be non-empty")
     service = ITunesSuggestionsService()
-    suggestions = await service.get_suggestions(term, locale)
+    suggestions = await service.get_suggestions(term, country, locale=locale)
     return [KeywordSuggestion(term=s) for s in suggestions]
 
 
@@ -179,17 +119,38 @@ async def list_tracked_keywords(
     impressions; otherwise it stays ``None``. The default (``False``) is
     backward-compatible — no shape change for existing callers.
     """
-    return await _list_tracked_keywords(app_id=app_id, with_paid=with_paid)
+    async with session_scope() as session:
+        await resolve_app(app_id, session)
+        result = await session.execute(
+            select(KeywordTracking)
+            .options(
+                selectinload(KeywordTracking.keyword),
+                selectinload(KeywordTracking.rankings),
+            )
+            .where(KeywordTracking.app_id == app_id)
+            .order_by(KeywordTracking.created_at.desc())
+        )
+        rows = [_build_tracking_response(t) for t in result.scalars().all()]
 
+        if with_paid:
+            from app.services.asa.joins import paid_organic_join
 
-@mcp.tool(name="keyword_intel_list_for_app")
-async def list_keyword_intel_rows(app_id: int) -> list[KeywordTrackingResponse]:
-    """List the cached keyword-intel rows for an app.
-
-    This is a parity alias for the REST-backed tracked-keywords table:
-    same ownership chain, same cached DB read, same response shape.
-    """
-    return await _list_tracked_keywords(app_id=app_id)
+            paid = await paid_organic_join(
+                session=session, app_id=app_id, user_id=get_user_id(), days=30,
+            )
+            paid_by_term = {p["term"].lower(): p for p in paid}
+            for row in rows:
+                match = paid_by_term.get((row.keyword.text or "").lower())
+                if match is None or match["paid_impressions_30d"] == 0:
+                    continue
+                row.paid_metrics_30d = KeywordPaidMetrics30d(
+                    impressions=match["paid_impressions_30d"],
+                    taps=match["paid_taps_30d"],
+                    installs=match["paid_installs_30d"],
+                    spend_amount=float(match["paid_spend_30d"]),
+                    spend_currency=match["paid_spend_currency"],
+                )
+        return rows
 
 
 @mcp.tool(name="keywords_add")
@@ -267,17 +228,11 @@ async def refresh_keyword_rankings(app_id: int) -> dict[str, int]:
 
     Returns ``{"recorded": <count>}``.
     """
-    return await _refresh_keyword_rankings(app_id=app_id)
-
-
-@mcp.tool(name="keyword_intel_refresh")
-async def refresh_keyword_intel(app_id: int) -> dict[str, int]:
-    """Refresh the cached keyword-intel rows for an app.
-
-    This is a parity alias for the REST ``POST /apps/{app_id}/keywords/refresh``
-    workflow, surfaced under the product-facing keyword-intel namespace.
-    """
-    return await _refresh_keyword_rankings(app_id=app_id)
+    async with session_scope() as session:
+        await resolve_app(app_id, session)
+        tracker = KeywordRankingTracker(session)
+        recorded = await tracker.refresh_rankings(app_id)
+        return {"recorded": recorded}
 
 
 @mcp.tool(name="keywords_get_rankings")
@@ -327,6 +282,69 @@ async def get_keyword_rankings(
             )
             for tc, points in by_territory.items()
         ]
+
+
+# ---------------------------------------------------------------------------
+# Keyword intelligence — volume/difficulty cache (app-scoped)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(name="keyword_intel_list")
+async def list_keyword_intel(
+    app_id: int,
+    keyword: list[str] | None = None,
+    locale: str | None = None,
+    source: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+) -> list[KeywordIntelOut]:
+    """Read the cached keyword-intel rows (volume + difficulty) for an app.
+
+    Mirrors ``GET /apps/{app_id}/keyword-intel``: a pure cache read, newest
+    first, optionally narrowed to specific ``keyword`` terms, a ``locale``, or
+    a single ``source`` (``asa_search_terms``, ``asa_recommendations``, …).
+    Call ``keyword_intel_refresh_providers`` first if the cache is cold.
+    """
+    if not 1 <= limit <= MAX_LIMIT:
+        raise ToolError(f"limit must be between 1 and {MAX_LIMIT}")
+    async with session_scope() as session:
+        await resolve_app(app_id, session)
+        return await list_intel(
+            session,
+            app_id,
+            keywords=keyword,
+            locale=locale,
+            source=source,
+            limit=limit,
+        )
+
+
+@mcp.tool(name="keyword_intel_refresh_providers")
+async def refresh_keyword_intel_providers(
+    app_id: int,
+    provider: str | None = None,
+    days: int = DEFAULT_DAYS,
+) -> KeywordIntelRefreshOut:
+    """Run the keyword-intel providers and upsert their rows into the cache.
+
+    Mirrors ``POST /apps/{app_id}/keyword-intel/refresh``. Runs every
+    registered provider unless ``provider`` names one. A provider that fails is
+    reported in ``skipped_sources`` while the rest still run. This is NOT
+    ``keywords_refresh_rankings`` — that one re-scrapes iTunes SERP ranks for
+    tracked keywords.
+    """
+    if not 1 <= days <= MAX_DAYS:
+        raise ToolError(f"days must be between 1 and {MAX_DAYS}")
+    async with session_scope() as session:
+        await resolve_app(app_id, session)
+        try:
+            return await run_providers(
+                session,
+                app_id,
+                days=days,
+                provider=provider,
+            )
+        except ValueError as exc:
+            raise ToolError(str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

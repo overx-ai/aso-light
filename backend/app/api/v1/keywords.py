@@ -89,18 +89,28 @@ def _build_tracking_response(
 @router.get("/keywords/suggestions", response_model=list[KeywordSuggestion])
 async def get_suggestions(
     term: str = Query(..., min_length=1),
-    locale: str = Query(default="en_us"),
+    country: str = Query(default="us"),
+    locale: str | None = Query(
+        default=None,
+        deprecated=True,
+        description=(
+            "Deprecated alias for `country` (en_us → us). Ignored whenever "
+            "`country` is set to anything but its `us` default."
+        ),
+    ),
     _current_user: dict[str, Any] = Depends(
         rate_limit("keywords.suggestions", per_min=30),
     ),
 ) -> list[KeywordSuggestion]:
     """Get autocomplete suggestions from iTunes hints API.
 
-    Rate-limited to 30 requests/minute per user: each call fetches Apple from
-    the shared backend IP.
+    ``country`` selects the storefront (`us`, `de`, …) and wins over the
+    deprecated ``locale`` alias when both are sent and disagree; ``locale``
+    applies only while ``country`` is left at its default. Rate-limited to 30
+    requests/minute per user: each call fetches Apple from the shared backend IP.
     """
     service = ITunesSuggestionsService()
-    suggestions = await service.get_suggestions(term, locale)
+    suggestions = await service.get_suggestions(term, country, locale=locale)
     return [KeywordSuggestion(term=s) for s in suggestions]
 
 

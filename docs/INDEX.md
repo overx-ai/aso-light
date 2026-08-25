@@ -25,6 +25,7 @@
 | [013 - Custom Product Pages + Visual Compare](013-custom-product-pages-and-visual-compare.md) | CPP CRUD + screenshot upload, Pillow before/after compositor, ASA→CPP ad-group wiring (`asa.assign_cpp` / `asa.unassign_cpp` / `asa.list_cpp_ads`) |
 | [014 - Reviews Module Security Findings](014-reviews-module-security-findings.md) | `/code` review-pass findings for Review Responses (cross-app IDOR, uncapped AI drafts, cap-signal + cache-namespace bugs) — report only, fixes paused pending the C1 ASC review→app linkage decision |
 | [015 - Product Page Optimization](015-product-page-optimization.md) | App Store Version Experiments (PPO): experiment CRUD + lifecycle, ≤3 treatments, treatment-localization screenshot upload; v1/v2 API split; results are ASC-Analytics-only (deep-link) |
+| [016 - Apple Ads Platform API (Research)](016-apple-ads-platform-api-research.md) | Research-only: Apple's new unified Ads API (v1.0, Aug 2026) supersedes the v5 Campaign Management API ASO-Light uses today, sunset Jan 26 2027 — comparison table + current-integration inventory, no migration work yet |
 
 ## Specs
 
@@ -34,6 +35,11 @@
 | [005 - GDP-Bracket Pricing](specs/005-gdp-bracket-pricing.md) | Absolute-price tiers driven by World Bank GDP/capita PPP | done |
 | [006 - Subscription Management](specs/006-subscription-management.md) | Group / subscription / intro-offer write paths | done |
 | [007 - Metadata Editor + Cross-Loc](specs/007-metadata-editor-and-cross-loc.md) | Phase 5 — metadata editor, AI translation, cross-loc grid | done |
+| [008 - Review Responses](specs/008-review-responses.md) | Read, AI-suggest, translate, post developer replies | draft |
+| [009 - Keyword Visibility Tracker](specs/009-asa-analytics.md) | Search Ads-style competitor intel / share-of-voice | draft |
+| [010 - MCP Main-Listing Screenshots](specs/010-mcp-main-listing-screenshots.md) | `screenshots_list` / `_upload` / `_delete` for the main product page | done |
+| [011 - App Price Schedules](specs/011-app-price-schedules.md) | Paid-app price schedules — read, preview, apply | draft |
+| [012 - Bulk Locale Creation + Keyword Fixes](specs/012-bulk-locale-creation-and-keyword-research-fixes.md) | `create_missing` on bulk metadata, `keywords_suggestions` storefront header, real `keyword_intel` MCP tools, char-limit dedupe, ASA app scoping | approved |
 
 ## Documentation Tree
 
@@ -78,8 +84,10 @@
 | Cross-Localization page | `frontend/src/pages/CrossLocalizationPage.tsx` |
 | Metadata components | `frontend/src/components/metadata/*` |
 | CPP service | `backend/app/services/asc/cpp.py` (CRUD + screenshot upload + default/CPP screenshot fetch) |
+| Screenshot helpers + main-listing service | `backend/app/services/asc/screenshots.py` (parent-agnostic set/asset helpers shared by CPP + PPO; `ASCVersionScreenshotService` for the main product page) |
+| Main-listing screenshot MCP tools | `backend/app/mcp/tools/screenshots.py` (`screenshots_list` / `screenshots_upload` / `screenshots_delete` / `screenshots_compare`) |
 | Visual compositor | `backend/app/services/visual/compare.py` (Pillow before/after montage) |
 | ASA→CPP ad wiring | `backend/app/services/asa/cpp_ads.py` + `backend/app/mcp/tools/asa.py` (`asa.assign_cpp` / `asa.unassign_cpp` / `asa.list_cpp_ads`) |
 
 ---
-*Last updated: 2026-07-16*
+*Last updated: 2026-08-24*

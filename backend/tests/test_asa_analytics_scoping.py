@@ -139,9 +139,67 @@ async def _seed_tenant(session, *, shared_adam_id: str) -> dict:
     return {
         "user_id": user.id,
         "app_id": app.id,
+        "asc_credential_id": asc_cred.id,
         "credential_id": asa_cred.id,
+        "org_id": org.id,
         "campaign_id": camp.id,
         "keyword_id": kw.id,
+        "search_term_id": st.id,
+    }
+
+
+async def _seed_second_app(session, tenant: dict, *, adam_id: str) -> dict:
+    """Add a SECOND app to an existing tenant, with its own ASA chain.
+
+    Same user, same ASA credential, same org — only the app differs. That is
+    what isolates app-scoping from credential-scoping: both apps' metric rows
+    pass the ``credential_id`` filter, so only an ``asa_campaigns.app_id``
+    filter can keep them apart.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    app = App(
+        credential_id=tenant["asc_credential_id"],
+        asc_app_id=adam_id,
+        bundle_id=f"b2-{suffix}",
+        name="n2",
+        platform="ios",
+    )
+    session.add(app)
+    await session.flush()
+
+    camp = ASACampaign(
+        org_id=tenant["org_id"],
+        asa_campaign_id=uuid.uuid4().int >> 96,
+        app_id=app.id,
+        app_adam_id=adam_id,
+        name="c2",
+        status="ENABLED",
+    )
+    session.add(camp)
+    await session.flush()
+
+    ag = ASAAdGroup(
+        campaign_id=camp.id,
+        asa_ad_group_id=uuid.uuid4().int >> 96,
+        name="ag2",
+        status="ENABLED",
+    )
+    session.add(ag)
+    await session.flush()
+
+    st = ASASearchTerm(
+        ad_group_id=ag.id,
+        text=f"term2-{suffix}",
+        match_type="BROAD",
+        source="SEARCHTERM",
+    )
+    session.add(st)
+    await session.flush()
+
+    return {
+        "app_id": app.id,
+        "campaign_id": camp.id,
+        "ad_group_id": ag.id,
         "search_term_id": st.id,
     }
 
@@ -219,10 +277,12 @@ def test_search_term_report_is_scoped_per_credential():
             await session.commit()
 
             _, a_rows = await search_term_report_rows(
-                session=session, user_id=a["user_id"], days=30,
+                session=session, user_id=a["user_id"], app_id=a["app_id"],
+                days=30,
             )
             _, b_rows = await search_term_report_rows(
-                session=session, user_id=b["user_id"], days=30,
+                session=session, user_id=b["user_id"], app_id=b["app_id"],
+                days=30,
             )
             return a, b, a_rows, b_rows
 
@@ -233,6 +293,59 @@ def test_search_term_report_is_scoped_per_credential():
     assert a_term_ids == {a["search_term_id"]}, a_term_ids
     assert b_term_ids == {b["search_term_id"]}, b_term_ids
     assert b["search_term_id"] not in a_term_ids
+
+
+def test_search_term_report_is_scoped_per_app():
+    """One tenant, two apps, one ASA credential — reports must not cross apps.
+
+    Regression for the missing ``asa_campaigns.app_id`` filter: ``app_id`` was
+    validated upstream by ``resolve_app`` and then never used, so every app
+    under the caller's credentials answered with every other app's search
+    terms. Credential scoping cannot catch this — both rows are owned by the
+    same credential. MUST fail if the campaign join/filter is removed.
+    """
+    adam_one = f"adam-one-{uuid.uuid4().hex[:8]}"
+    adam_two = f"adam-two-{uuid.uuid4().hex[:8]}"
+
+    async def go():
+        await _ensure_schema()
+        async with async_session_factory() as session:
+            one = await _seed_tenant(session, shared_adam_id=adam_one)
+            two = await _seed_second_app(session, one, adam_id=adam_two)
+            today = date.today()
+            session.add(ASAMetricDaily(
+                dim_kind="SEARCH_TERM", dim_id=one["search_term_id"],
+                app_adam_id=adam_one, credential_id=one["credential_id"],
+                date=today, impressions=50, taps=5, installs=1,
+                spend_amount=7, spend_currency="USD",
+            ))
+            session.add(ASAMetricDaily(
+                dim_kind="SEARCH_TERM", dim_id=two["search_term_id"],
+                app_adam_id=adam_two, credential_id=one["credential_id"],
+                date=today, impressions=500, taps=50, installs=10,
+                spend_amount=70, spend_currency="USD",
+            ))
+            await session.commit()
+
+            _, one_rows = await search_term_report_rows(
+                session=session, user_id=one["user_id"], app_id=one["app_id"],
+                days=30,
+            )
+            _, two_rows = await search_term_report_rows(
+                session=session, user_id=one["user_id"], app_id=two["app_id"],
+                days=30,
+            )
+            return one, two, one_rows, two_rows
+
+    one, two, one_rows, two_rows = asyncio.run(go())
+
+    one_term_ids = {r["search_term_id"] for r in one_rows}
+    two_term_ids = {r["search_term_id"] for r in two_rows}
+    # Each app sees only its own search terms — no cross-app bleed.
+    assert one_term_ids == {one["search_term_id"]}, one_term_ids
+    assert two_term_ids == {two["search_term_id"]}, two_term_ids
+    assert one_rows[0]["impressions"] == 50
+    assert two_rows[0]["impressions"] == 500
 
 
 def test_paid_organic_join_is_scoped_per_credential():

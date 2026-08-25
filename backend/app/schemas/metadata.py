@@ -19,6 +19,9 @@ from app.services.metadata.validation import ALL_FIELDS, validate_field
 MetadataKind = Literal["app_info", "version"]
 KeywordPlacement = Literal["title", "subtitle", "keywords", "none"]
 BulkApplyStatus = Literal["applied", "skipped", "failed"]
+# What a bulk plan intends to do with a locale. ``create`` only ever appears
+# when the request opted in via ``create_missing``.
+BulkAction = Literal["create", "update", "skip"]
 
 # Mirrors the ASC 50-locale-per-bulk-request guard documented in the spec.
 MAX_BULK_TARGET_LOCALES: int = 50
@@ -148,12 +151,17 @@ class BulkPreviewIn(BaseModel):
     * **Localized values** — set ``values_by_locale`` (locale → string) for
       translated metadata; every target locale must have an entry. ``value``
       is ignored in this mode.
+
+    ``create_missing`` opts the fan-out into creating locales that do not exist
+    yet (an App Store locale expansion) instead of hard-skipping them. It is
+    off by default so existing clients keep the update-only behaviour.
     """
 
     field: str
     value: str | None = None
     target_locales: list[str] = Field(default_factory=list)
     values_by_locale: dict[str, str | None] | None = None
+    create_missing: bool = False
 
     @field_validator("field")
     @classmethod
@@ -177,7 +185,12 @@ class BulkPreviewIn(BaseModel):
 
 
 class BulkPreviewItem(BaseModel):
-    """Per-locale row of the bulk preview diff."""
+    """Per-locale row of the bulk preview diff.
+
+    ``action`` is the plan's verdict for this locale: ``skip`` whenever
+    ``would_skip`` is set, ``create`` when the locale has no snapshot row and
+    the request passed ``create_missing``, ``update`` otherwise.
+    """
 
     locale: str
     current_value: str | None = None
@@ -185,6 +198,7 @@ class BulkPreviewItem(BaseModel):
     char_overflow_by: int = 0
     would_skip: bool = False
     reason: str | None = None
+    action: BulkAction = "update"
 
 
 class BulkPreviewOut(BaseModel):

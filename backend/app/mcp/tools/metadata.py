@@ -326,17 +326,24 @@ async def bulk_preview(
     target_locales: list[str],
     value: str | None = None,
     values_by_locale: dict[str, str | None] | None = None,
+    create_missing: bool = False,
 ) -> BulkPreviewOut:
     """Compute a per-locale diff for a bulk fan-out (no ASC writes).
 
     Pass ``value`` for same-value fan-out, or ``values_by_locale`` (locale →
     string, one per target locale) for localized/translated values.
+
+    ``create_missing=True`` plans locales that have no localization yet as
+    ``action="create"`` (an App Store locale expansion) instead of skipping
+    them. Char limits and field editability are checked exactly as on an
+    update, so an overflowing create still comes back ``would_skip=True``.
     """
     body = BulkPreviewIn(
         field=field,
         value=value,
         target_locales=target_locales,
         values_by_locale=values_by_locale,
+        create_missing=create_missing,
     )
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
@@ -346,6 +353,7 @@ async def bulk_preview(
                 items = await bulk.preview(
                     app, body.field, body.value, body.target_locales,
                     values_by_locale=body.values_by_locale,
+                    create_missing=body.create_missing,
                 )
             except ValueError as exc:
                 raise ToolError(str(exc))
@@ -360,11 +368,19 @@ async def bulk_apply(
     value: str | None = None,
     force: bool = False,
     values_by_locale: dict[str, str | None] | None = None,
+    create_missing: bool = False,
 ) -> BulkApplyOut:
     """Replay a bulk plan against ASC and persist the snapshot deltas.
 
     Pass ``value`` for same-value fan-out, or ``values_by_locale`` (locale →
     string, one per target locale) for localized/translated values.
+
+    ``create_missing=True`` creates locales that do not exist yet under the
+    app's editable AppInfo / AppStoreVersion parent instead of skipping them.
+    Creates and updates interleave in one pass, each committed per locale, so a
+    failure late in the batch keeps every earlier locale. It is not a way past
+    validation: over-limit or non-editable values are skipped as usual, and
+    ``force`` does not change that.
     """
     body = BulkApplyIn(
         field=field,
@@ -372,6 +388,7 @@ async def bulk_apply(
         target_locales=target_locales,
         force=force,
         values_by_locale=values_by_locale,
+        create_missing=create_missing,
     )
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
@@ -382,6 +399,7 @@ async def bulk_apply(
                     app, body.field, body.value, body.target_locales,
                     force=body.force,
                     values_by_locale=body.values_by_locale,
+                    create_missing=body.create_missing,
                 )
             except ValueError as exc:
                 raise ToolError(str(exc))

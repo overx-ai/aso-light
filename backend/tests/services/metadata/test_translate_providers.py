@@ -11,12 +11,17 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.metadata.translate import (
+    FIELD_CHAR_LIMITS,
     AbstractTranslator,
     AnthropicTranslator,
     FallbackTranslator,
     OpenRouterTranslator,
+    TranslationOverflowError,
     TranslatorUnavailableError,
     build_translator,
+)
+from app.services.metadata.validation import (
+    FIELD_CHAR_LIMITS as VALIDATION_FIELD_CHAR_LIMITS,
 )
 from tests._async_harness import run_async
 
@@ -112,13 +117,18 @@ class _FakeResponse:
 
 
 class _FakeClient:
-    def __init__(self, response: _FakeResponse) -> None:
-        self._response = response
+    """Stub httpx client. ``responses`` are returned in order; the last one
+    repeats, so a single response covers both the first attempt and the retry.
+    """
+
+    def __init__(self, *responses: _FakeResponse) -> None:
+        self._responses = list(responses)
         self.calls: list[dict] = []
 
     async def post(self, url, headers=None, json=None):  # noqa: A002
         self.calls.append({"url": url, "headers": headers, "json": json})
-        return self._response
+        idx = min(len(self.calls) - 1, len(self._responses) - 1)
+        return self._responses[idx]
 
 
 def _openrouter_payload(content: str) -> dict:
@@ -164,14 +174,60 @@ def test_openrouter_translate_post_processes_keywords() -> None:
     assert result == "meditation,ruhe,atem"
 
 
-def test_openrouter_translate_truncates_to_field_limit() -> None:
+def test_openrouter_translate_retries_once_on_overflow_then_raises() -> None:
+    """Never ship a mid-word cut: overflow retries once, then raises."""
     client = _FakeClient(_FakeResponse(_openrouter_payload("x" * 100)))
     translator = OpenRouterTranslator(
         api_key="sk-or-x", model="x/y", http_client=client,
     )
-    # name limit is 30
+
+    # name limit is 30; the stub answers over-long both times.
+    with pytest.raises(TranslationOverflowError) as excinfo:
+        run_async(translator.translate("src", "en-US", "de-DE", "name"))
+
+    assert "30-char limit" in str(excinfo.value)
+    # Exactly one retry — not a loop.
+    assert len(client.calls) == 2
+    retry_system = client.calls[1]["json"]["messages"][0]["content"]
+    assert "70 character(s) too long" in retry_system
+    assert "MUST be under 31 characters" in retry_system
+
+
+def test_openrouter_translate_returns_retry_when_it_fits() -> None:
+    """A retry that respects the limit is returned — no exception, no cut."""
+    client = _FakeClient(
+        _FakeResponse(_openrouter_payload("x" * 100)),
+        _FakeResponse(_openrouter_payload("Atmen & Fokus")),
+    )
+    translator = OpenRouterTranslator(
+        api_key="sk-or-x", model="x/y", http_client=client,
+    )
+
     result = run_async(translator.translate("src", "en-US", "de-DE", "name"))
-    assert len(result) == 30
+
+    assert result == "Atmen & Fokus"
+    assert len(client.calls) == 2
+
+
+def test_keywords_drop_whole_trailing_terms_never_a_partial_one() -> None:
+    """The comma-separated keywords field may truncate — by whole terms only."""
+    # 5 x 19-char terms = 99 chars with separators; a 6th cannot fit.
+    terms = [f"keyword{i}-{'x' * 10}" for i in range(6)]
+    client = _FakeClient(_FakeResponse(_openrouter_payload(", ".join(terms))))
+    translator = OpenRouterTranslator(
+        api_key="sk-or-x", model="x/y", http_client=client,
+    )
+
+    result = run_async(translator.translate("src", "en-US", "de-DE", "keywords"))
+
+    assert len(result) <= FIELD_CHAR_LIMITS["keywords"]
+    assert result.split(",") == terms[:5]  # whole terms, none clipped
+    assert len(client.calls) == 1  # fits after post-processing — no retry
+
+
+def test_field_char_limits_have_one_source_of_truth() -> None:
+    """translate.py must not re-declare the limits validation.py owns."""
+    assert FIELD_CHAR_LIMITS is VALIDATION_FIELD_CHAR_LIMITS
 
 
 # --- FallbackTranslator -----------------------------------------------------

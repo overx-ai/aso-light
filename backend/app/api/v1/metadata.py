@@ -288,7 +288,11 @@ async def bulk_preview(
     current_user: dict[str, Any] = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> BulkPreviewOut:
-    """Compute a per-locale diff for a bulk fan-out. No ASC writes."""
+    """Compute a per-locale diff for a bulk fan-out. No ASC writes.
+
+    Set ``create_missing`` to plan locales that do not exist yet as
+    ``action="create"`` instead of hard-skipping them.
+    """
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
 
@@ -300,6 +304,7 @@ async def bulk_preview(
             items = await bulk.preview(
                 app, body.field, body.value, body.target_locales,
                 values_by_locale=body.values_by_locale,
+                create_missing=body.create_missing,
             )
         except ValueError as exc:
             raise HTTPException(
@@ -318,7 +323,12 @@ async def bulk_apply(
     current_user: dict[str, Any] = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> BulkApplyOut:
-    """Replay a bulk plan against ASC and persist the snapshot deltas."""
+    """Replay a bulk plan against ASC and persist the snapshot deltas.
+
+    With ``create_missing`` set, locales absent from the snapshot are created
+    under the app's editable AppInfo / AppStoreVersion parent instead of being
+    skipped; char and editability validation is unchanged for them.
+    """
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
 
@@ -329,6 +339,7 @@ async def bulk_apply(
                 app, body.field, body.value, body.target_locales,
                 force=body.force,
                 values_by_locale=body.values_by_locale,
+                create_missing=body.create_missing,
             )
         except ValueError as exc:
             raise HTTPException(

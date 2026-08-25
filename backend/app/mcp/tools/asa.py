@@ -356,6 +356,7 @@ async def search_term_report(
         cutoff, rows = await search_term_report_rows(
             session=session,
             user_id=user_id,
+            app_id=app_id,
             days=days,
             ad_group_id=ad_group_id,
             min_impressions=min_impressions,

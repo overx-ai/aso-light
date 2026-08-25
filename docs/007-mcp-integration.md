@@ -113,11 +113,13 @@ Tools are namespaced `<module>.<action>`:
 | `clash`       | 1     | Side-by-side competitor comparison                               |
 | `indices`     | 3     | GDP / PPP / BigMac / Spotify / Netflix index status & refresh    |
 | `keywords`    | 13    | iTunes search/suggestions, keyword tracking, rankings, competitors |
+| `keyword_intel`| 2    | Cached keyword volume/difficulty: read the cache, refresh the providers |
 | `metadata`    | 10    | App-info / version metadata, locale CRUD, bulk apply, AI translate |
 | `presets`     | 5     | Pricing-formula preset CRUD                                      |
 | `pricing`     | 44    | Subscription/IAP/group/intro-offer/price CRUD + sync + apply + price points + bulk export/import |
 | `revenuecat`  | 23    | RC credential, products, entitlements, offerings, packages       |
 | `reviews`     | 7     | List, draft reply, translate, post/edit/delete responses         |
+| `screenshots` | 4     | Main product page: per locale × display-type counts + gap worklist (`screenshots_list`), idempotent positional upload (`screenshots_upload`), delete + empty-set prune (`screenshots_delete`), CPP-vs-default montage (`screenshots_compare`) |
 | `swap`        | 3     | Swap subscription / IAP productId end-to-end + suggest new id    |
 | `territories` | 1     | List App Store territories with currency / GDP / VAT             |
 | `visibility`  | 7     | Watches, snapshots, anomalies, share-of-voice                    |
@@ -139,14 +141,17 @@ return types are self-describing.
 **Optimize keywords for a locale**
 1. `aso_aso_check(app_id)` → see metadata gaps
 2. `metadata_get_snapshot(app_id)` → read current title/subtitle/keywords
-3. `keywords_list_for_app(app_id)` or `keyword_intel_list_for_app(app_id)` → see currently tracked keywords
-4. `keywords_search` / `keywords_suggestions` → find new candidates
-5. `clash_run(app_id)` → compare against competitors
-6. Propose edits, then `metadata_update_locale(...)` after user approval
+3. `keywords_list_for_app(app_id)` → see currently tracked keywords + ranks
+4. `keyword_intel_list(app_id)` → cached volume/difficulty per keyword
+5. `keywords_search` / `keywords_suggestions` → find new candidates
+6. `clash_run(app_id)` → compare against competitors
+7. Propose edits, then `metadata_update_locale(...)` after user approval
 
-To refresh the cached keyword-intel table from MCP, use
-`keywords_refresh_rankings(app_id)` or the parity alias
-`keyword_intel_refresh(app_id)`.
+Two different refreshes, easy to mix up:
+`keywords_refresh_rankings(app_id)` re-scrapes iTunes SERP ranks for tracked
+keywords, while `keyword_intel_refresh_providers(app_id)` re-runs the
+volume/difficulty providers into `keyword_intel_cache`
+([010](010-keyword-intelligence.md)).
 
 
 **Bulk price update**
@@ -155,6 +160,29 @@ To refresh the cached keyword-intel table from MCP, use
 3. `pricing_import_prices(app_id, file_base64)` → preview the import
 4. `pricing_preview_subscription_prices(app_id, sub_id, ...)` → see the diff
 5. `pricing_apply_subscription_prices(app_id, sub_id, ...)` → push to ASC
+
+**Repair an interrupted localized screenshot run**
+
+ASC's post-upload polling is flaky, so a 40-locale bulk upload can finish
+looking complete while some locales are silently short — and Apple only says so
+at submit time. The list tool is the API-side count that finds them:
+
+1. `screenshots_list(app_id)` → per locale × display-type counts. `gaps` is the
+   repair worklist (`locale`, `display_type`, `count`, `expected`, `missing`);
+   `expected` defaults to the highest count any locale reached, so the locales
+   that finished define the target. Pin it explicitly with `expected_count`.
+2. `screenshots_upload(app_id, locale, display_type, file_base64, file_name,
+   position=…)` per gap. Idempotent per (locale, display type, position): a
+   re-run replaces the slot instead of doubling the locale. `verified` is the
+   read-back verdict — `false` means Apple has not reported `COMPLETE` yet.
+3. `screenshots_delete(app_id, locale, display_type, position=… | screenshot_id=…
+   | delete_all=true)` to drop a wrong asset or clear a whole device family.
+   Emptying a set prunes it, so no orphan (configured but empty) set is left.
+4. `screenshots_list(app_id)` again → `complete: true`.
+
+All three resolve the app's **editable** App Store version; against a live or
+locked version they fail with a message naming the state
+([spec 010](specs/010-mcp-main-listing-screenshots.md)).
 
 There are pre-built MCP prompts (`swap_product_safely`, `optimize_keywords`)
 that walk through these flows. Most LLM clients show prompts as quick-pick

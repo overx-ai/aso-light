@@ -44,6 +44,38 @@ READ_ONLY_VERSION_STATES_PROMO_ONLY: frozenset[str] = frozenset({
 
 PROMO_ONLY_FIELDS_ON_LIVE: frozenset[str] = frozenset({"promotionalText"})
 
+# Values Apple accepts in ``filter[appStoreState]``. This is NOT the same
+# vocabulary as the *attribute* — Apple added ``READY_FOR_DISTRIBUTION`` as a
+# state an app can be IN, but never added it to the filter enum, so sending it
+# returns 409 "'READY_FOR_DISTRIBUTION' is not a valid filter value" and takes
+# the whole sync down with it. The sets above are about editability and must
+# keep naming every state a tenant can actually report; this set is about what
+# may go on the wire. ``list_app_store_versions`` intersects against it, so a
+# filter that would be rejected degrades into a broader query we filter
+# client-side rather than an error.
+FILTERABLE_VERSION_STATES: frozenset[str] = frozenset({
+    "ACCEPTED",
+    "DEVELOPER_REMOVED_FROM_SALE",
+    "DEVELOPER_REJECTED",
+    "IN_REVIEW",
+    "INVALID_BINARY",
+    "METADATA_REJECTED",
+    "NOT_APPLICABLE",
+    "PENDING_APPLE_RELEASE",
+    "PENDING_CONTRACT",
+    "PENDING_DEVELOPER_RELEASE",
+    "PREORDER_READY_FOR_SALE",
+    "PREPARE_FOR_SUBMISSION",
+    "PROCESSING_FOR_APP_STORE",
+    "READY_FOR_REVIEW",
+    "READY_FOR_SALE",
+    "REJECTED",
+    "REMOVED_FROM_SALE",
+    "REPLACED_WITH_NEW_VERSION",
+    "WAITING_FOR_EXPORT_COMPLIANCE",
+    "WAITING_FOR_REVIEW",
+})
+
 
 class MetadataNotEditableError(Exception):
     """Raised when a metadata write is attempted in a non-editable state.
@@ -117,13 +149,18 @@ class ASCMetadataService:
             asc_app_id: The App Store Connect numeric app identifier.
             filter_states: Optional list of ``appStoreState`` values
                 (e.g. ``["PREPARE_FOR_SUBMISSION", "READY_FOR_REVIEW"]``)
-                applied as ``filter[appStoreState]=A,B,C``.
+                applied as ``filter[appStoreState]=A,B,C``. Values outside
+                ``FILTERABLE_VERSION_STATES`` are dropped — Apple rejects the
+                whole request for one unknown value, and a broader result the
+                caller narrows itself beats a 409 that fails the sync.
 
         Returns the raw JSON:API resource list.
         """
         params: dict[str, str | int] = {"limit": 200}
         if filter_states:
-            params["filter[appStoreState]"] = ",".join(filter_states)
+            safe = sorted(set(filter_states) & FILTERABLE_VERSION_STATES)
+            if safe:
+                params["filter[appStoreState]"] = ",".join(safe)
         return await self.client._get_all_pages(
             f"/apps/{asc_app_id}/appStoreVersions",
             params=params,

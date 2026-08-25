@@ -541,6 +541,8 @@ export interface AppMetadataSnapshot {
   state: AppMetadataState;
 }
 
+export type BulkAction = "create" | "update" | "skip";
+
 export interface BulkPreviewItem {
   locale: string;
   current_value: string | null;
@@ -548,6 +550,8 @@ export interface BulkPreviewItem {
   char_overflow_by: number;
   would_skip: boolean;
   reason: string | null;
+  /** "create" only appears when the request opted in via create_missing. */
+  action?: BulkAction;
 }
 
 export interface BulkPreviewOut {
@@ -559,6 +563,8 @@ export interface BulkPreviewIn {
   value: string | null;
   target_locales: string[];
   values_by_locale?: Record<string, string | null> | null;
+  /** Create locales that have no localization yet instead of skipping them. */
+  create_missing?: boolean;
 }
 
 export interface BulkApplyIn extends BulkPreviewIn {

@@ -21,7 +21,13 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.data.territories import ALPHA2_TO_ALPHA3
-from app.models.asa import ASACredential, ASAMetricDaily, ASASearchTerm
+from app.models.asa import (
+    ASAAdGroup,
+    ASACampaign,
+    ASACredential,
+    ASAMetricDaily,
+    ASASearchTerm,
+)
 
 
 def owned_credential_ids(user_id: int):
@@ -103,11 +109,23 @@ async def performance_rows(
 def _search_term_report_stmt(
     *,
     user_id: int,
+    app_id: int,
     cutoff: date,
     ad_group_id: int | None,
     min_impressions: int | None,
 ) -> Select:
-    """Search-term rollup, grouped by currency so each row is single-currency."""
+    """Search-term rollup, grouped by currency so each row is single-currency.
+
+    Scoped twice over, and both are load-bearing: ``user_id`` keeps one tenant
+    out of another's metrics (via the credential join clause), while ``app_id``
+    keeps one app's search terms out of another app's report — a caller with
+    several apps under the same ASA credential passes the first check for all
+    of them. Search terms reach an app through
+    ``asa_search_terms -> asa_ad_groups -> asa_campaigns.app_id``.
+    ``ASACampaign.app_id`` is nullable (campaigns for apps not added to
+    ASO-Light), so the equality filter drops those rows: fail closed, like the
+    NULL ``credential_id`` rule.
+    """
     stmt = (
         select(
             ASASearchTerm.id,
@@ -124,6 +142,9 @@ def _search_term_report_stmt(
             ASAMetricDaily,
             _scoped_metric_join_clause(user_id, "SEARCH_TERM", cutoff),
         )
+        .join(ASAAdGroup, ASAAdGroup.id == ASASearchTerm.ad_group_id)
+        .join(ASACampaign, ASACampaign.id == ASAAdGroup.campaign_id)
+        .where(ASACampaign.app_id == app_id)
         .group_by(
             ASASearchTerm.id,
             ASASearchTerm.text,
@@ -143,19 +164,24 @@ async def search_term_report_rows(
     *,
     session: AsyncSession,
     user_id: int,
+    app_id: int,
     days: int,
     ad_group_id: int | None = None,
     min_impressions: int | None = None,
 ) -> tuple[date, list[dict[str, Any]]]:
-    """Search-term performance rollup over a window.
+    """Search-term performance rollup over a window, for one app.
 
     Returns ``(cutoff, rows)``. Each row is single-currency (the query groups
     by ``spend_currency``), so ``spend`` is a clean per-currency Decimal — a
     term advertised in two currencies yields two rows.
+
+    ``app_id`` is required (not defaulted): callers already resolve/verify the
+    app, and a silently-omitted scope is exactly the bug this parameter fixes.
     """
     cutoff = window_cutoff(days)
     stmt = _search_term_report_stmt(
         user_id=user_id,
+        app_id=app_id,
         cutoff=cutoff,
         ad_group_id=ad_group_id,
         min_impressions=min_impressions,

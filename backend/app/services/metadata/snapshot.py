@@ -114,7 +114,18 @@ class MetadataSnapshotService:
         version_locs: list[dict] = []
         if chosen_version is not None:
             version_id = chosen_version["id"]
-            version_state = chosen_version["attributes"].get("appStoreState")
+            # Three names for one thing across ASC API versions: newer
+            # responses carry ``appVersionState`` (and that is where
+            # ``READY_FOR_DISTRIBUTION`` shows up), older ones
+            # ``appStoreState``, some just ``state``. Reading only the first
+            # yields None on a live app, which silently drops
+            # ``promotional_text`` from editable_fields.
+            _version_attrs = chosen_version.get("attributes", {}) or {}
+            version_state = (
+                _version_attrs.get("appStoreState")
+                or _version_attrs.get("appVersionState")
+                or _version_attrs.get("state")
+            )
             version_locs = await self.asc.list_version_localizations(
                 version_id,
             )
