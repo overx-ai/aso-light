@@ -1,12 +1,20 @@
 ---
 id: 004
 title: "Cache Apple Price Points in DB"
-status: approved
+status: superseded
 created: 2026-04-01
+updated: 2026-08-26
 tasks: []
 ---
 
 # 004 - Cache Apple Price Points in DB
+
+> **Superseded 2026-08-26**: the problem this spec targets (`get_price_points()` hanging on
+> unfiltered ASC price-point fetches) is already solved by the filesystem-based `PricePointCache`
+> (`backend/app/services/asc/price_point_cache.py`), the project's documented architecture choice
+> (see CLAUDE.md — "Price point cache: filesystem-based ... not DB"). All five tasks below already
+> have working equivalents against that cache; the `SubscriptionPricePoint` DB model this spec
+> proposed was implemented but never wired up, and has been removed as dead code.
 
 ## Problem
 `get_price_points()` fetches ALL ~180k subscription price points from ASC API (200/page = 900 pages), which hangs forever. The preview and prices endpoints block on this, making the pricing page unusable.

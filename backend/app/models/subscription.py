@@ -85,34 +85,3 @@ class SubscriptionPrice(TimestampMixin, Base):
             f"<SubscriptionPrice sub_id={self.subscription_id} "
             f"territory_id={self.territory_id} price={self.customer_price}>"
         )
-
-
-class SubscriptionPricePoint(TimestampMixin, Base):
-    """Cached Apple price point tiers for a subscription + territory."""
-
-    __tablename__ = "subscription_price_points"
-    __table_args__ = (
-        UniqueConstraint(
-            "subscription_id", "price_point_id",
-            name="uq_sub_price_point",
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    subscription_id: Mapped[int] = mapped_column(
-        ForeignKey("subscriptions.id"), index=True,
-    )
-    territory_code: Mapped[str] = mapped_column(String(10))
-    currency_code: Mapped[str] = mapped_column(String(10))
-    customer_price: Mapped[float] = mapped_column()
-    proceeds: Mapped[float] = mapped_column()
-    price_point_id: Mapped[str] = mapped_column(String(255))
-    synced_at: Mapped[datetime | None] = mapped_column(
-        UTCDateTime, nullable=True,
-    )
-
-    def __repr__(self) -> str:
-        return (
-            f"<SubscriptionPricePoint sub_id={self.subscription_id} "
-            f"territory={self.territory_code} price={self.customer_price}>"
-        )
