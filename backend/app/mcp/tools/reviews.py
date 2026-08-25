@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from fastmcp.exceptions import ToolError
 
@@ -111,13 +112,16 @@ def _serialize_review(
 
 
 def _extract_cursor(payload: dict[str, Any]) -> str | None:
+    """Pull the decoded ``cursor`` value out of Apple's pagination ``next`` link.
+
+    Mirrors ``app.api.v1.reviews._extract_cursor`` — see that docstring for
+    why ``parse_qs`` (not a hand-rolled split) is required here.
+    """
     next_link = (payload.get("links") or {}).get("next")
-    if not next_link or "cursor=" not in next_link:
+    if not next_link:
         return None
-    try:
-        return next_link.split("cursor=", 1)[1].split("&", 1)[0]
-    except IndexError:
-        return None
+    values = parse_qs(urlsplit(next_link).query).get("cursor")
+    return values[0] if values else None
 
 
 def _wrap_asc(action: str, exc: ASCAPIError) -> ToolError:
