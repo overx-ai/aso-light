@@ -23,13 +23,19 @@ from app.schemas.review import (
     TranslateReviewIn,
     TranslateReviewOut,
 )
-from app.services.asc.errors import ASCAPIError
+from app.services.asc.errors import ASCAPIError, ChildResourceNotFoundError
 from app.services.asc.reviews import ASCReviewService
 from app.services.metadata.translate import (
     build_translator,
     translate_with_cache,
 )
 from app.services.reviews.draft import draft_reply
+from app.services.reviews.ownership import (
+    assert_response_belongs_to_app,
+    assert_review_belongs_to_app,
+    record_response_mapping,
+    record_review_app_mappings,
+)
 from app.services.reviews.templates import classify_review_theme
 
 logger = logging.getLogger(__name__)
@@ -46,6 +52,41 @@ def _asc_to_502(action: str) -> Iterator[None]:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="ASC API error",
+        ) from exc
+
+
+async def _assert_review_owned(
+    session: AsyncSession, review_id: str, app_id: int,
+) -> None:
+    """Cross-app IDOR guard (bug 001) — see app.services.reviews.ownership.
+
+    Runs before any ASC client is built: a 404 from our own DB map
+    shouldn't pay for a credential decrypt + client construction it
+    doesn't need.
+    """
+    try:
+        await assert_review_belongs_to_app(session, review_id, app_id)
+    except ChildResourceNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+        ) from exc
+
+
+async def _assert_response_owned(
+    session: AsyncSession,
+    response_id: str,
+    app_id: int,
+    *,
+    review_id: str | None = None,
+) -> str:
+    """Cross-app IDOR guard for response_id (bug 001). Returns the real review_id."""
+    try:
+        return await assert_response_belongs_to_app(
+            session, response_id, app_id, review_id=review_id,
+        )
+    except ChildResourceNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
         ) from exc
 
 
@@ -172,6 +213,11 @@ async def list_reviews(
     included = payload.get("included") or []
     items = [_serialize_review(r, included) for r in items_raw]
 
+    # Bug 001: the only app-scoped ASC read — record review_id -> app_id
+    # (+ response_id -> review_id) so every other entry point below can
+    # verify ownership of a bare id it's handed.
+    await record_review_app_mappings(session, app.id, items_raw)
+
     if has_response is True:
         items = [r for r in items if r.response is not None]
     elif has_response is False:
@@ -189,6 +235,7 @@ async def get_review(
 ) -> ReviewOut:
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
+    await _assert_review_owned(session, review_id, app.id)
 
     async with await _get_asc_client_for_app(app, session) as client:
         svc = ASCReviewService(client)
@@ -197,6 +244,7 @@ async def get_review(
 
     raw = payload.get("data") or {}
     included = payload.get("included") or []
+    await record_review_app_mappings(session, app.id, [raw] if raw else [])
     return _serialize_review(raw, included)
 
 
@@ -215,6 +263,7 @@ async def draft_review_reply(
 ) -> DraftOut:
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
+    await _assert_review_owned(session, review_id, app.id)
 
     if not settings.ANTHROPIC_API_KEY:
         raise HTTPException(
@@ -227,7 +276,9 @@ async def draft_review_reply(
         with _asc_to_502(f"get review {review_id} for draft"):
             payload = await svc.get_review(review_id)
 
-    review = _serialize_review(payload.get("data") or {})
+    raw = payload.get("data") or {}
+    await record_review_app_mappings(session, app.id, [raw] if raw else [])
+    review = _serialize_review(raw)
     if not review.body:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -270,6 +321,7 @@ async def translate_review(
 ) -> TranslateReviewOut:
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
+    await _assert_review_owned(session, review_id, app.id)
 
     translator = build_translator(settings)
     if translator is None:
@@ -286,7 +338,9 @@ async def translate_review(
         with _asc_to_502(f"get review {review_id} for translate"):
             payload = await svc.get_review(review_id)
 
-    review = _serialize_review(payload.get("data") or {})
+    raw = payload.get("data") or {}
+    await record_review_app_mappings(session, app.id, [raw] if raw else [])
+    review = _serialize_review(raw)
     if not review.body:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -342,15 +396,20 @@ async def create_reply(
 ) -> ReviewResponseOut:
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
+    await _assert_review_owned(session, review_id, app.id)
 
     async with await _get_asc_client_for_app(app, session) as client:
         svc = ASCReviewService(client)
         with _asc_to_502(f"create reply for review {review_id}"):
             data = await svc.create_response(review_id, body.body)
 
+    response_id = data.get("id", "")
+    if response_id:
+        await record_response_mapping(session, response_id, review_id)
+
     attrs = data.get("attributes") or {}
     return ReviewResponseOut(
-        id=data.get("id", ""),
+        id=response_id,
         # ASC's create-response payload sometimes omits responseBody; falling
         # back to what we sent is safe here because a non-2xx write already
         # raised via _asc_to_502 above, so a 2xx implies ASC accepted this body.
@@ -366,7 +425,7 @@ async def create_reply(
 )
 async def update_reply(
     app_id: int,
-    review_id: str,  # noqa: ARG001 — kept for URL symmetry / ownership scoping
+    review_id: str,
     response_id: str,
     body: ReplyIn,
     current_user: dict[str, Any] = Depends(get_current_user),
@@ -374,6 +433,7 @@ async def update_reply(
 ) -> ReviewResponseOut:
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
+    await _assert_response_owned(session, response_id, app.id, review_id=review_id)
 
     async with await _get_asc_client_for_app(app, session) as client:
         svc = ASCReviewService(client)
@@ -395,13 +455,14 @@ async def update_reply(
 )
 async def delete_reply(
     app_id: int,
-    review_id: str,  # noqa: ARG001
+    review_id: str,
     response_id: str,
     current_user: dict[str, Any] = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
+    await _assert_response_owned(session, response_id, app.id, review_id=review_id)
 
     async with await _get_asc_client_for_app(app, session) as client:
         svc = ASCReviewService(client)

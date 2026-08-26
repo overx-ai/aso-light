@@ -25,6 +25,7 @@ from app.models.metadata import (
 from app.models.personal_access_token import PersonalAccessToken
 from app.models.preset import PricePreset
 from app.models.revenuecat_credential import RevenueCatCredential
+from app.models.review_app_map import ReviewAppMap, ReviewResponseMap
 from app.models.review_theme import ReviewThemeCache
 from app.models.subscription import Subscription, SubscriptionGroup, SubscriptionPrice
 from app.models.territory import Territory
@@ -63,6 +64,8 @@ __all__ = [
     "PersonalAccessToken",
     "PricePreset",
     "RevenueCatCredential",
+    "ReviewAppMap",
+    "ReviewResponseMap",
     "ReviewThemeCache",
     "Subscription",
     "SubscriptionGroup",

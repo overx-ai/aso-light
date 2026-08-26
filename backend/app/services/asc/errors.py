@@ -16,9 +16,15 @@ class ChildResourceNotFoundError(Exception):
     Raised by the membership-assertion helpers in
     :mod:`app.services.asc.pricing` when a caller passes a
     localization / intro-offer id that is not a child of the parent
-    (subscription / IAP / group) they authorized against. This is the
-    IDOR guard: the parent is owned by the caller, but the child must
-    also be proven to belong to that parent before any mutate/delete.
+    (subscription / IAP / group) they authorized against, and by
+    :mod:`app.services.reviews.ownership` when a caller passes a
+    review_id / response_id that a DB-backed map has not recorded as
+    belonging to the app they authorized against (ASC exposes no reverse
+    "which app owns this review" lookup, so reviews can't use the same
+    live re-list-and-check approach the pricing helpers use). Either way
+    this is the IDOR guard: the parent is owned by the caller, but the
+    child must also be proven to belong to that parent before any
+    read/mutate/delete.
 
     REST maps this to 404; MCP maps it to ``ToolError``.
     """
