@@ -33,7 +33,9 @@ from app.services.reviews.draft import draft_reply
 from app.services.reviews.ownership import (
     assert_response_belongs_to_app,
     assert_review_belongs_to_app,
+    forget_response_mapping,
     record_response_mapping,
+    record_review_app_mapping,
     record_review_app_mappings,
 )
 from app.services.reviews.templates import classify_review_theme
@@ -131,7 +133,7 @@ def _serialize_review(raw: dict[str, Any], included: list[dict[str, Any]] | None
     rating = int(attrs.get("rating") or 0)
     response: ReviewResponseOut | None = None
 
-    rel = (raw.get("relationships") or {}).get("response", {}).get("data")
+    rel = ((raw.get("relationships") or {}).get("response") or {}).get("data")
     if rel and included:
         for inc in included:
             if inc.get("type") == "customerReviewResponses" and inc.get("id") == rel.get("id"):
@@ -244,7 +246,7 @@ async def get_review(
 
     raw = payload.get("data") or {}
     included = payload.get("included") or []
-    await record_review_app_mappings(session, app.id, [raw] if raw else [])
+    await record_review_app_mapping(session, app.id, raw)
     return _serialize_review(raw, included)
 
 
@@ -277,7 +279,7 @@ async def draft_review_reply(
             payload = await svc.get_review(review_id)
 
     raw = payload.get("data") or {}
-    await record_review_app_mappings(session, app.id, [raw] if raw else [])
+    await record_review_app_mapping(session, app.id, raw)
     review = _serialize_review(raw)
     if not review.body:
         raise HTTPException(
@@ -339,7 +341,7 @@ async def translate_review(
             payload = await svc.get_review(review_id)
 
     raw = payload.get("data") or {}
-    await record_review_app_mappings(session, app.id, [raw] if raw else [])
+    await record_review_app_mapping(session, app.id, raw)
     review = _serialize_review(raw)
     if not review.body:
         raise HTTPException(
@@ -468,3 +470,5 @@ async def delete_reply(
         svc = ASCReviewService(client)
         with _asc_to_502(f"delete reply {response_id}"):
             await svc.delete_response(response_id)
+
+    await forget_response_mapping(session, response_id)

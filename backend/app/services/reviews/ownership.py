@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.review_app_map import ReviewAppMap, ReviewResponseMap
@@ -70,8 +70,9 @@ async def record_review_app_mappings(
             # map fresh rather than latching onto a stale app_id.
             row.app_id = app_id
 
-        rel = (item.get("relationships") or {}).get("response", {}).get("data")
-        response_id = rel.get("id") if rel else None
+        relationships = item.get("relationships") or {}
+        response_rel = (relationships.get("response") or {}).get("data") or {}
+        response_id = response_rel.get("id")
         if response_id:
             response_pairs.append((response_id, review_id))
 
@@ -79,6 +80,19 @@ async def record_review_app_mappings(
         await _upsert_response_mappings(session, response_pairs)
 
     await session.flush()
+
+
+async def record_review_app_mapping(
+    session: AsyncSession, app_id: int, item_raw: dict[str, Any],
+) -> None:
+    """Record the mapping for one review resource, e.g. a ``get_review`` payload.
+
+    Thin singular wrapper over :func:`record_review_app_mappings` — the
+    defensive population done by ``get_review`` / ``draft`` / ``translate``
+    always has exactly one (possibly empty) resource in hand. An empty
+    payload records nothing, exactly as an empty page does.
+    """
+    await record_review_app_mappings(session, app_id, [item_raw])
 
 
 async def record_response_mapping(
@@ -92,6 +106,21 @@ async def record_response_mapping(
     if not response_id:
         return
     await _upsert_response_mappings(session, [(response_id, review_id)])
+    await session.flush()
+
+
+async def forget_response_mapping(session: AsyncSession, response_id: str) -> None:
+    """Delete a response_id -> review_id row after its ASC response is deleted.
+
+    Hygiene, not a security boundary: a stale row would still resolve to the
+    correct, still-app-scoped review_id (ASC itself 404s the dead
+    response_id on any further operation), but rows shouldn't survive their
+    target indefinitely. Called from ``delete_reply`` (REST + MCP) after the
+    ASC delete succeeds.
+    """
+    await session.execute(
+        delete(ReviewResponseMap).where(ReviewResponseMap.response_id == response_id)
+    )
     await session.flush()
 
 

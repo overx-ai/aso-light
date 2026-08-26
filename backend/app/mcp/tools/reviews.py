@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from fastmcp.exceptions import ToolError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.mcp.context import resolve_app, resolve_asc_client, session_scope
@@ -34,7 +35,9 @@ from app.services.reviews.draft import draft_reply
 from app.services.reviews.ownership import (
     assert_response_belongs_to_app,
     assert_review_belongs_to_app,
+    forget_response_mapping,
     record_response_mapping,
+    record_review_app_mapping,
     record_review_app_mappings,
 )
 from app.services.reviews.templates import classify_review_theme
@@ -84,7 +87,7 @@ def _serialize_review(
     rating = int(attrs.get("rating") or 0)
     response: ReviewResponseOut | None = None
 
-    rel = (raw.get("relationships") or {}).get("response", {}).get("data")
+    rel = ((raw.get("relationships") or {}).get("response") or {}).get("data")
     if rel and included:
         for inc in included:
             if (
@@ -135,7 +138,9 @@ def _wrap_asc(action: str, exc: ASCAPIError) -> ToolError:
     return ToolError(f"ASC API error: {action}")
 
 
-async def _assert_review_owned(session, review_id: str, app_id: int) -> None:
+async def _assert_review_owned(
+    session: AsyncSession, review_id: str, app_id: int,
+) -> None:
     """Cross-app IDOR guard (bug 001) — see app.services.reviews.ownership.
 
     Runs before any ASC client is built: a ToolError from our own DB map
@@ -148,7 +153,9 @@ async def _assert_review_owned(session, review_id: str, app_id: int) -> None:
         raise ToolError(str(exc)) from exc
 
 
-async def _assert_response_owned(session, response_id: str, app_id: int) -> str:
+async def _assert_response_owned(
+    session: AsyncSession, response_id: str, app_id: int,
+) -> str:
     """Cross-app IDOR guard for response_id (bug 001). Returns the real review_id."""
     try:
         return await assert_response_belongs_to_app(session, response_id, app_id)
@@ -229,7 +236,7 @@ async def get_review(app_id: int, review_id: str) -> ReviewOut:
                 raise _wrap_asc(f"get review {review_id}", exc) from exc
 
         raw = payload.get("data") or {}
-        await record_review_app_mappings(session, app.id, [raw] if raw else [])
+        await record_review_app_mapping(session, app.id, raw)
 
     included = payload.get("included") or []
     return _serialize_review(raw, included)
@@ -268,7 +275,7 @@ async def draft_review_reply(
                 raise _wrap_asc(f"get review {review_id} for draft", exc) from exc
 
         raw = payload.get("data") or {}
-        await record_review_app_mappings(session, app.id, [raw] if raw else [])
+        await record_review_app_mapping(session, app.id, raw)
 
     review = _serialize_review(raw)
     if not review.body:
@@ -328,7 +335,7 @@ async def translate_review(
                 ) from exc
 
         raw = payload.get("data") or {}
-        await record_review_app_mappings(session, app.id, [raw] if raw else [])
+        await record_review_app_mapping(session, app.id, raw)
 
         review = _serialize_review(raw)
         if not review.body:
@@ -449,4 +456,6 @@ async def delete_reply(
                 await svc.delete_response(response_id)
             except ASCAPIError as exc:
                 raise _wrap_asc(f"delete reply {response_id}", exc) from exc
+
+        await forget_response_mapping(session, response_id)
     return {"detail": "Response deleted"}

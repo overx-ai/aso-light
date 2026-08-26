@@ -42,8 +42,10 @@ from app.db.base import Base
 from app.db.session import async_session_factory, engine
 from app.models.app import App
 from app.models.credential import ASCCredential
+from app.models.review_app_map import ReviewResponseMap
 from app.models.user import User
 from app.schemas.review import DraftIn, ReplyIn, TranslateReviewIn
+from app.services.reviews.ownership import record_review_app_mappings
 from tests._async_harness import run_async
 
 
@@ -319,6 +321,39 @@ async def _rest_list_reviews_for_app_a(world: dict[str, Any]) -> None:
         )
 
 
+async def _rest_world(
+    monkeypatch: pytest.MonkeyPatch, *, with_ai: bool = False,
+) -> dict[str, Any]:
+    """Seed both tenants, patch the REST module, and list app A's reviews.
+
+    The ``list_reviews`` call is what populates the ownership map — and it
+    only ever runs for app A, so app B's ids stay unobserved. ``with_ai``
+    additionally stubs the draft/translate providers, needed only by the
+    entry points that call them.
+    """
+    await _ensure_schema()
+    world = await _seed_world()
+    _monkeypatch_rest_client(monkeypatch, world["client"])
+    if with_ai:
+        _monkeypatch_rest_ai(monkeypatch)
+    await _rest_list_reviews_for_app_a(world)
+    return world
+
+
+async def _mcp_world(
+    monkeypatch: pytest.MonkeyPatch, *, with_ai: bool = False,
+) -> dict[str, Any]:
+    """MCP-side counterpart of :func:`_rest_world` (also stubs PAT auth as user A)."""
+    await _ensure_schema()
+    world = await _seed_world()
+    _monkeypatch_mcp_client(monkeypatch, world["client"])
+    _monkeypatch_mcp_auth(monkeypatch, world["user_a_id"])
+    if with_ai:
+        _monkeypatch_mcp_ai(monkeypatch)
+    await mcp_reviews.list_reviews(app_id=world["app_a_id"])
+    return world
+
+
 # ----------------------------------------------------------------------
 # REST: 6 vulnerable entry points, app B's ids via app A's auth
 # ----------------------------------------------------------------------
@@ -326,10 +361,7 @@ async def _rest_list_reviews_for_app_a(world: dict[str, Any]) -> None:
 
 def test_rest_get_review_cross_app_404(monkeypatch: pytest.MonkeyPatch):
     async def go():
-        await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_rest_client(monkeypatch, world["client"])
-        await _rest_list_reviews_for_app_a(world)
+        world = await _rest_world(monkeypatch)
 
         async with _request_session() as session:
             await rest_reviews.get_review(
@@ -346,11 +378,7 @@ def test_rest_get_review_cross_app_404(monkeypatch: pytest.MonkeyPatch):
 
 def test_rest_draft_cross_app_404(monkeypatch: pytest.MonkeyPatch):
     async def go():
-        await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_rest_client(monkeypatch, world["client"])
-        _monkeypatch_rest_ai(monkeypatch)
-        await _rest_list_reviews_for_app_a(world)
+        world = await _rest_world(monkeypatch, with_ai=True)
 
         async with _request_session() as session:
             await rest_reviews.draft_review_reply(
@@ -368,11 +396,7 @@ def test_rest_draft_cross_app_404(monkeypatch: pytest.MonkeyPatch):
 
 def test_rest_translate_cross_app_404(monkeypatch: pytest.MonkeyPatch):
     async def go():
-        await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_rest_client(monkeypatch, world["client"])
-        _monkeypatch_rest_ai(monkeypatch)
-        await _rest_list_reviews_for_app_a(world)
+        world = await _rest_world(monkeypatch, with_ai=True)
 
         async with _request_session() as session:
             await rest_reviews.translate_review(
@@ -390,10 +414,7 @@ def test_rest_translate_cross_app_404(monkeypatch: pytest.MonkeyPatch):
 
 def test_rest_create_reply_cross_app_404(monkeypatch: pytest.MonkeyPatch):
     async def go():
-        await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_rest_client(monkeypatch, world["client"])
-        await _rest_list_reviews_for_app_a(world)
+        world = await _rest_world(monkeypatch)
 
         async with _request_session() as session:
             await rest_reviews.create_reply(
@@ -411,10 +432,7 @@ def test_rest_create_reply_cross_app_404(monkeypatch: pytest.MonkeyPatch):
 
 def test_rest_update_reply_cross_app_404(monkeypatch: pytest.MonkeyPatch):
     async def go():
-        await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_rest_client(monkeypatch, world["client"])
-        await _rest_list_reviews_for_app_a(world)
+        world = await _rest_world(monkeypatch)
 
         async with _request_session() as session:
             await rest_reviews.update_reply(
@@ -433,10 +451,7 @@ def test_rest_update_reply_cross_app_404(monkeypatch: pytest.MonkeyPatch):
 
 def test_rest_delete_reply_cross_app_404(monkeypatch: pytest.MonkeyPatch):
     async def go():
-        await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_rest_client(monkeypatch, world["client"])
-        await _rest_list_reviews_for_app_a(world)
+        world = await _rest_world(monkeypatch)
 
         async with _request_session() as session:
             await rest_reviews.delete_reply(
@@ -459,11 +474,7 @@ def test_rest_delete_reply_cross_app_404(monkeypatch: pytest.MonkeyPatch):
 
 def test_mcp_get_review_cross_app_toolerror(monkeypatch: pytest.MonkeyPatch):
     async def go():
-        await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_mcp_client(monkeypatch, world["client"])
-        _monkeypatch_mcp_auth(monkeypatch, world["user_a_id"])
-        await mcp_reviews.list_reviews(app_id=world["app_a_id"])
+        world = await _mcp_world(monkeypatch)
 
         await mcp_reviews.get_review(app_id=world["app_a_id"], review_id="rev-B1")
 
@@ -473,12 +484,7 @@ def test_mcp_get_review_cross_app_toolerror(monkeypatch: pytest.MonkeyPatch):
 
 def test_mcp_draft_cross_app_toolerror(monkeypatch: pytest.MonkeyPatch):
     async def go():
-        await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_mcp_client(monkeypatch, world["client"])
-        _monkeypatch_mcp_auth(monkeypatch, world["user_a_id"])
-        _monkeypatch_mcp_ai(monkeypatch)
-        await mcp_reviews.list_reviews(app_id=world["app_a_id"])
+        world = await _mcp_world(monkeypatch, with_ai=True)
 
         await mcp_reviews.draft_review_reply(app_id=world["app_a_id"], review_id="rev-B1")
 
@@ -488,12 +494,7 @@ def test_mcp_draft_cross_app_toolerror(monkeypatch: pytest.MonkeyPatch):
 
 def test_mcp_translate_cross_app_toolerror(monkeypatch: pytest.MonkeyPatch):
     async def go():
-        await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_mcp_client(monkeypatch, world["client"])
-        _monkeypatch_mcp_auth(monkeypatch, world["user_a_id"])
-        _monkeypatch_mcp_ai(monkeypatch)
-        await mcp_reviews.list_reviews(app_id=world["app_a_id"])
+        world = await _mcp_world(monkeypatch, with_ai=True)
 
         await mcp_reviews.translate_review(
             app_id=world["app_a_id"], review_id="rev-B1", target_locale="en-GB",
@@ -505,11 +506,7 @@ def test_mcp_translate_cross_app_toolerror(monkeypatch: pytest.MonkeyPatch):
 
 def test_mcp_create_reply_cross_app_toolerror(monkeypatch: pytest.MonkeyPatch):
     async def go():
-        await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_mcp_client(monkeypatch, world["client"])
-        _monkeypatch_mcp_auth(monkeypatch, world["user_a_id"])
-        await mcp_reviews.list_reviews(app_id=world["app_a_id"])
+        world = await _mcp_world(monkeypatch)
 
         await mcp_reviews.create_reply(
             app_id=world["app_a_id"], review_id="rev-B1", body="Thanks!",
@@ -521,11 +518,7 @@ def test_mcp_create_reply_cross_app_toolerror(monkeypatch: pytest.MonkeyPatch):
 
 def test_mcp_update_reply_cross_app_toolerror(monkeypatch: pytest.MonkeyPatch):
     async def go():
-        await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_mcp_client(monkeypatch, world["client"])
-        _monkeypatch_mcp_auth(monkeypatch, world["user_a_id"])
-        await mcp_reviews.list_reviews(app_id=world["app_a_id"])
+        world = await _mcp_world(monkeypatch)
 
         await mcp_reviews.update_reply(
             app_id=world["app_a_id"], response_id="resp-B1", body="Edited",
@@ -537,11 +530,7 @@ def test_mcp_update_reply_cross_app_toolerror(monkeypatch: pytest.MonkeyPatch):
 
 def test_mcp_delete_reply_cross_app_toolerror(monkeypatch: pytest.MonkeyPatch):
     async def go():
-        await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_mcp_client(monkeypatch, world["client"])
-        _monkeypatch_mcp_auth(monkeypatch, world["user_a_id"])
-        await mcp_reviews.list_reviews(app_id=world["app_a_id"])
+        world = await _mcp_world(monkeypatch)
 
         await mcp_reviews.delete_reply(app_id=world["app_a_id"], response_id="resp-B1")
 
@@ -556,12 +545,7 @@ def test_mcp_delete_reply_cross_app_toolerror(monkeypatch: pytest.MonkeyPatch):
 
 def test_rest_same_app_access_still_works(monkeypatch: pytest.MonkeyPatch):
     async def go():
-        await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_rest_client(monkeypatch, world["client"])
-        _monkeypatch_rest_ai(monkeypatch)
-        await _rest_list_reviews_for_app_a(world)
-
+        world = await _rest_world(monkeypatch, with_ai=True)
         current_user = {"user_id": world["user_a_id"]}
 
         async with _request_session() as session:
@@ -627,14 +611,93 @@ def test_rest_same_app_access_still_works(monkeypatch: pytest.MonkeyPatch):
     run_async(go())
 
 
-def test_mcp_same_app_access_still_works(monkeypatch: pytest.MonkeyPatch):
+def test_record_review_app_mappings_handles_null_response_relationship():
+    """ASC may send ``relationships: {"response": null}`` (key present, null
+    value) rather than omitting the key — distinct from the already-handled
+    ``{"response": {"data": null}}`` shape. Must not raise AttributeError.
+    """
     async def go():
         await _ensure_schema()
-        world = await _seed_world()
-        _monkeypatch_mcp_client(monkeypatch, world["client"])
-        _monkeypatch_mcp_auth(monkeypatch, world["user_a_id"])
-        _monkeypatch_mcp_ai(monkeypatch)
-        await mcp_reviews.list_reviews(app_id=world["app_a_id"])
+        _, app_id = await _seed_tenant(f"null-rel-{uuid.uuid4().hex[:8]}")
+        item = {
+            "id": "rev-null-rel",
+            "attributes": {"rating": 5, "title": "t", "body": "b", "territory": "USA"},
+            "relationships": {"response": None},
+        }
+        async with async_session_factory() as session:
+            await record_review_app_mappings(session, app_id, [item])
+            await session.commit()
+
+    run_async(go())
+
+
+def test_rest_delete_reply_removes_response_map_row(monkeypatch: pytest.MonkeyPatch):
+    """After delete_reply succeeds, the response_id -> review_id row must not
+    survive the ASC response it points to (bug 001 follow-up hygiene fix).
+    """
+    async def go():
+        world = await _rest_world(monkeypatch)
+
+        async with _request_session() as session:
+            await rest_reviews.delete_reply(
+                app_id=world["app_a_id"],
+                review_id="rev-A1",
+                response_id="resp-A1",
+                current_user={"user_id": world["user_a_id"]},
+                session=session,
+            )
+
+        async with async_session_factory() as session:
+            row = (
+                await session.execute(
+                    select(ReviewResponseMap).where(
+                        ReviewResponseMap.response_id == "resp-A1"
+                    )
+                )
+            ).scalar_one_or_none()
+        assert row is None
+
+    run_async(go())
+
+
+def test_rest_update_reply_mismatched_review_id_within_same_app_404(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Both ids belong to app A, but response_id resolves to a *different*
+    review than the review_id path param claims — must still 404, not
+    silently accept the caller's mismatched pairing.
+    """
+    async def go():
+        world = await _rest_world(monkeypatch)
+
+        client: _FakeReviewsASCClient = world["client"]
+        client.seed_review("rev-A2", response_id="resp-A2", territory="USA")
+        async with async_session_factory() as session:
+            app_a = (
+                await session.execute(select(App).where(App.id == world["app_a_id"]))
+            ).scalar_one()
+            asc_app_id_a = app_a.asc_app_id
+        client.seed_app_page(asc_app_id_a, ["rev-A1", "rev-A2"])
+        await _rest_list_reviews_for_app_a(world)
+
+        async with _request_session() as session:
+            await rest_reviews.update_reply(
+                app_id=world["app_a_id"],
+                review_id="rev-A1",
+                response_id="resp-A2",
+                body=ReplyIn(body="Edited"),
+                current_user={"user_id": world["user_a_id"]},
+                session=session,
+            )
+
+    with pytest.raises(HTTPException) as exc_info:
+        run_async(go())
+    assert exc_info.value.status_code == 404
+
+
+def test_mcp_same_app_access_still_works(monkeypatch: pytest.MonkeyPatch):
+    async def go():
+        world = await _mcp_world(monkeypatch, with_ai=True)
 
         got = await mcp_reviews.get_review(app_id=world["app_a_id"], review_id="rev-A1")
         assert got.id == "rev-A1"
