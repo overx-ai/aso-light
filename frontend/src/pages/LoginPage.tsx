@@ -35,10 +35,13 @@ export default function LoginPage() {
     try {
       await login(values);
       navigate("/");
-    } catch {
+    } catch (e) {
+      console.error("[login]", e);
       notifications.show({
         title: "Login failed",
-        message: "Invalid email or password",
+        message:
+          (e as { response?: { data?: { detail?: string } } })?.response?.data
+            ?.detail ?? "Invalid email or password",
         color: "red",
       });
     }

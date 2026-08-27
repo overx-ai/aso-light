@@ -1,15 +1,22 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
+
+# Email is matched byte-for-byte against users.email (no COLLATE NOCASE), so a
+# single capital from autofill/autocapitalize would miss the row and surface as
+# "invalid password". Normalize once, here, for every auth path — login must
+# lowercase the same way register does or the two disagree.
+NormalizedEmail = Annotated[EmailStr, AfterValidator(str.lower)]
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: NormalizedEmail
     password: str
 
 
 class RegisterRequest(BaseModel):
-    email: EmailStr
+    email: NormalizedEmail
     # bcrypt silently truncates input past 72 bytes; cap the length so two long
     # passwords sharing a 72-byte prefix can't be set and verify as equal.
     password: str = Field(min_length=8, max_length=72)
