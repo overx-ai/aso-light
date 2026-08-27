@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.auth import PATTokenVerifier
+from app.mcp.consent import ConsentGate
 
 mcp: FastMCP = FastMCP(
     name="aso-light",
@@ -18,6 +19,11 @@ mcp: FastMCP = FastMCP(
     ),
     auth=PATTokenVerifier(),
 )
+
+# One choke point for every destructive tool: refuses the first call, returns an
+# impact statement plus a single-use token. Registered before the tool modules
+# import so no tool can be registered outside its reach.
+mcp.add_middleware(ConsentGate())
 
 
 # Importing the tool modules registers tools, resources, and prompts on `mcp`.

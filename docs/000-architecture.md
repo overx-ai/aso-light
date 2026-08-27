@@ -137,6 +137,7 @@ backend/app/
 | DB (prod) | PostgreSQL + asyncpg | Multi-user SaaS needs real DB |
 | AI translation | Anthropic Claude Haiku 4.5 + `AbstractTranslator` ABC | Lowest cost for short-form translation; ABC keeps DeepL/OpenAI plug-in ready |
 | Translation safety | Suggestion-only + per-app rolling 30-day soft cap (500) + cache | No auto-apply ever; bounded spend |
+| Destructive-tool safety | `ConsentGate` middleware (`app/mcp/consent.py`) + `destructiveHint` | Extends "no auto-apply ever" to the 35 destructive MCP tools: per-operation single-use consent, never a session unlock. See `AUDITS.md` |
 
 ## Multi-Tenancy Model
 

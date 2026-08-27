@@ -849,7 +849,11 @@ def test_delete_by_position_keeps_the_rest(monkeypatch):
 
 
 def test_deleting_the_last_screenshot_prunes_the_set(monkeypatch):
-    """Acceptance criterion: no orphan (configured but empty) set is left."""
+    """No orphan (configured but empty) set is left — when pruning is asked for.
+
+    Pruning is opt-in: the default flipped to False so that deleting the last
+    screenshot cannot silently destroy the set configuration too.
+    """
     client = _client_with_two_locales()
     _patch_tools(monkeypatch, client)
 
@@ -860,6 +864,7 @@ def test_deleting_the_last_screenshot_prunes_the_set(monkeypatch):
             locale="de-DE",
             display_type="APP_IPHONE_67",
             screenshot_id="shot-de-0",
+            prune_empty_set=True,
         )
 
     result = run_async(go())
@@ -899,6 +904,7 @@ def test_delete_all_clears_the_whole_display_type(monkeypatch):
             locale="en-US",
             display_type="APP_IPHONE_67",
             delete_all=True,
+            prune_empty_set=True,
         )
 
     result = run_async(go())

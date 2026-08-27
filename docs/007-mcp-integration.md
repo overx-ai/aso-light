@@ -286,3 +286,40 @@ Wait or raise the cap by editing the `MetadataTranslationCache` row.
 re-pointing is missing. Fix RC manually (or re-run via
 `pricing` tools / RC dashboard), then iOS can proceed per the response's
 `ios_checklist`. See [006](006-product-swap-ios-integration.md) §8.
+
+
+## Destructive tools and consent
+
+35 of the 173 tools are destructive — they delete data, overwrite live App Store
+content, or are otherwise not undoable. They are listed in `DESTRUCTIVE` in
+`app/mcp/consent.py`, and `ConsentGate` middleware refuses the first call to any
+of them:
+
+```
+keywords_remove {"app_id": 3, "keyword_id": 42}
+-> CONSENT REQUIRED — keywords_remove is destructive and was not confirmed.
+   Deletes a tracked keyword and its entire ranking history.
+   Arguments this consent covers: { "app_id": 3, "keyword_id": 42 }
+   ... repeat the identical call with confirm="<token>".
+
+keywords_remove {"app_id": 3, "keyword_id": 42, "confirm": "<token>"}
+-> executes
+```
+
+**Consent is per operation, never a session unlock.** The token is single-use,
+expires in 300s, and is bound to the exact tool, the exact arguments and the user
+it was issued to. Repeating an approved call needs a fresh token; a token minted
+for one locale is refused for another. `confirm` is stripped before the tool runs,
+so no tool declares it.
+
+Tools are also stamped with `destructiveHint` on `tools/list`, which is what makes
+MCP clients prompt before calling them.
+
+**Adding a destructive tool.** Register it in `DESTRUCTIVE` with a sentence saying
+what it destroys. `tests/test_consent.py::test_no_destructive_shaped_tool_escapes_the_gate`
+fails the build if a tool named `*delete*`/`*remove*`/`*archive*`/`*detach*`/`*_apply*`/
+`*bulk_sync*` is neither gated nor listed in `REVIEWED_SAFE`.
+
+**`DELETE /api/v1/credentials/{id}`** has no MCP tool and so is not covered by the
+gate. It cascades away every bound app and its keyword history, and requires
+`?confirm_app_count=N` matching the real count.

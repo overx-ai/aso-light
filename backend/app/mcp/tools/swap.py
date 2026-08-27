@@ -182,8 +182,10 @@ async def swap_subscription_product(
     subscription_id: int,
     new_product_id: str,
     new_name: str | None = None,
-    auto_archive: bool = True,
-    swap_revenuecat: bool = True,
+    # Default off: the minimum-argument call used to archive a live revenue
+    # product at Apple (not reversible) and rewire RevenueCat. Opt in.
+    auto_archive: bool = False,
+    swap_revenuecat: bool = False,
 ) -> SwapResponse:
     """Swap a subscription's productId end-to-end (ASC + RevenueCat).
 
@@ -266,8 +268,10 @@ async def swap_iap(
     iap_id: int,
     new_product_id: str,
     new_name: str | None = None,
-    auto_archive: bool = True,
-    swap_revenuecat: bool = True,
+    # Default off: the minimum-argument call used to archive a live revenue
+    # product at Apple (not reversible) and rewire RevenueCat. Opt in.
+    auto_archive: bool = False,
+    swap_revenuecat: bool = False,
 ) -> SwapResponse:
     """Swap an IAP's productId end-to-end (ASC + RevenueCat).
 

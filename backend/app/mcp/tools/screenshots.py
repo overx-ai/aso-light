@@ -476,7 +476,9 @@ async def delete_version_screenshots(
     screenshot_id: str | None = None,
     position: int | None = None,
     delete_all: bool = False,
-    prune_empty_set: bool = True,
+    # Default off: deleting the last screenshot used to silently destroy the
+    # set configuration along with it.
+    prune_empty_set: bool = False,
 ) -> ScreenshotDeleteResult:
     """Delete screenshot(s) from the MAIN product page for a locale.
 

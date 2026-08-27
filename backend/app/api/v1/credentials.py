@@ -101,9 +101,25 @@ async def list_credentials(
 @router.delete("/{credential_id}", status_code=status.HTTP_200_OK)
 async def delete_credential(
     credential_id: int,
+    confirm_app_count: int | None = None,
     current_user: dict[str, Any] = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, str]:
+    """Delete a credential — and, by cascade, every app bound to it.
+
+    ``ASCCredential.apps`` is ``cascade="all, delete-orphan"``, so this does not
+    merely unlink: it destroys each ``App`` row and everything hanging off it —
+    keyword trackings and their whole ranking history, competitors, subscription
+    groups, IAPs. Retiring a superseded key would silently take that history
+    with it.
+
+    ``confirm_app_count`` must therefore match the number of bound apps. Passing
+    it is how the caller demonstrates it knows what it is about to destroy; a
+    mismatch (or omission) returns 409 naming the count.
+
+    This endpoint has no MCP tool, so it is out of reach of an agent; the guard
+    exists so a hand-rolled curl cannot fire it blind either.
+    """
     user_id = int(current_user["user_id"])
     result = await session.execute(
         select(ASCCredential).where(ASCCredential.id == credential_id)
@@ -120,9 +136,26 @@ async def delete_credential(
             detail="Not authorized to delete this credential",
         )
 
+    app_count = len(credential.apps)
+    if confirm_app_count != app_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Deleting this credential also destroys {app_count} app(s) and "
+                f"all their keyword tracking history, competitors, subscriptions "
+                f"and IAPs. Re-send with ?confirm_app_count={app_count} to "
+                f"confirm."
+            ),
+        )
+
     await session.delete(credential)
-    logger.info("Credential deleted: id=%s user_id=%s", credential_id, user_id)
-    return {"detail": "Credential deleted successfully"}
+    logger.info(
+        "Credential deleted: id=%s user_id=%s cascaded_apps=%s",
+        credential_id, user_id, app_count,
+    )
+    return {
+        "detail": f"Credential deleted successfully, along with {app_count} app(s)"
+    }
 
 
 @router.post("/{credential_id}/test", response_model=CredentialTestResponse)
