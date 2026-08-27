@@ -8,12 +8,14 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 
 from app.models.app import App
+# Runtime import (not TYPE_CHECKING): the sync upsert queries this table to
+# find the app across every credential the user owns.
+from app.models.credential import ASCCredential
 from app.services.asc.errors import ASCAPIError, CredentialDecryptError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from app.models.credential import ASCCredential
     from app.services.asc.client import ASCClient
 
 logger = logging.getLogger(__name__)
@@ -112,18 +114,37 @@ async def sync_apps_for_credentials(
             attrs = app_data.get("attributes", {})
             platform = "ios" if attrs.get("platform", "IOS") == "IOS" else "macos"
 
-            existing = await session.execute(
-                select(App).where(
-                    App.credential_id == cred.id,
-                    App.asc_app_id == asc_app_id,
-                )
+            # Match on the App Store identity across ALL of this user's
+            # credentials, not just the one being synced. Keying on
+            # (credential_id, asc_app_id) meant syncing the same app under a
+            # second, narrower key inserted a DUPLICATE row instead of reusing
+            # the existing one — and keyword tracking, competitors and the IAP
+            # cache then forked across the two and never merged.
+            owned_credentials = select(ASCCredential.id).where(
+                ASCCredential.user_id == cred.user_id
             )
-            app_record = existing.scalar_one_or_none()
+            existing = await session.execute(
+                select(App)
+                .where(
+                    App.asc_app_id == asc_app_id,
+                    App.credential_id.in_(owned_credentials),
+                )
+                .order_by(App.id)
+            )
+            # .first(), not .scalar_one_or_none(): an install predating this fix
+            # may already hold duplicates, and the sync that heals them must not
+            # be the thing that raises on them.
+            app_record = existing.scalars().first()
 
             if app_record:
                 app_record.name = attrs.get("name", app_record.name)
                 app_record.bundle_id = attrs.get("bundleId", app_record.bundle_id)
                 app_record.platform = platform
+                # Deliberate rebind: syncing with a key is how you say "this key
+                # owns this app now" — the migration path to a narrower
+                # credential. ASC only returns apps a key can actually see, so a
+                # scoped key rebinds only its own apps.
+                app_record.credential_id = cred.id
             else:
                 app_record = App(
                     credential_id=cred.id,
