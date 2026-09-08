@@ -17,9 +17,15 @@ resource, while treatments and treatment localizations are **v1**. The
 ``app.services.asc.pricing``). httpx uses an absolute URL as-is, so the client's
 throttling/auth/pagination all still apply.
 
-**No results via API:** Apple exposes no endpoint for experiment results
-(impressions, conversion, confidence) — those live only in the ASC Analytics
-UI, so this service intentionally has no results-reading method.
+**No *experiment* results via API:** Apple exposes no endpoint for per-treatment
+experiment results (impressions, conversion, confidence split by treatment) —
+those live only in the ASC Analytics UI, so this service intentionally has no
+results-reading method.
+
+This is narrower than it used to read. App-level impressions, product page
+views, Custom Product Page performance and downloads *are* available, via the
+Analytics Reports API — see :mod:`app.services.analytics`. Only the
+treatment-level A/B breakdown is missing.
 
 Treatment screenshots reuse the standard set/asset model, so the upload +
 shaping delegate to :mod:`app.services.asc.screenshots` (shared with CPP).

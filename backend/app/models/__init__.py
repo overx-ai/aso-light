@@ -1,3 +1,4 @@
+from app.models.analytics import AppAnalyticsDaily, AppAnalyticsReportRequest
 from app.models.app import App
 from app.models.asa import (
     ASAAdGroup,
@@ -38,6 +39,8 @@ from app.models.visibility import (
 
 __all__ = [
     "App",
+    "AppAnalyticsDaily",
+    "AppAnalyticsReportRequest",
     "ASAAdGroup",
     "ASACampaign",
     "ASACredential",

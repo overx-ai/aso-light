@@ -237,6 +237,24 @@ class ASCClient:
                 {"errors": [{"detail": response.text[:500]}]},
             )
 
+    async def _get_binary(self, url: str) -> bytes:
+        """GET raw bytes from an absolute URL (Apple download endpoint).
+
+        Analytics report segments are served from pre-signed URLs, the read
+        counterpart of :meth:`_put_binary`'s upload URLs. They must NOT carry
+        the ASC Bearer token — Apple rejects a signed URL that also presents
+        auth headers — so this uses a separate client with no auth.
+        """
+        await self._throttle()
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as dl:
+            response = await dl.get(url)
+        if response.status_code >= 400:
+            raise ASCAPIError(
+                response.status_code,
+                {"errors": [{"detail": response.text[:500]}]},
+            )
+        return response.content
+
     # ------------------------------------------------------------------
     # Pagination
     # ------------------------------------------------------------------

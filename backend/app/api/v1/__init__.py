@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1.apps import router as apps_router
 from app.api.v1.asa import router as asa_router
+from app.api.v1.analytics import router as analytics_router
 from app.api.v1.asa_app import router as asa_app_router
 from app.api.v1.aso_check import router as aso_check_router
 from app.api.v1.auth import router as auth_router
@@ -37,6 +38,7 @@ router.include_router(credentials_router, prefix="/credentials", tags=["credenti
 router.include_router(apps_router, prefix="/apps", tags=["apps"])
 router.include_router(asa_router, prefix="/asa", tags=["asa"])
 router.include_router(asa_app_router, prefix="/apps", tags=["asa"])
+router.include_router(analytics_router, prefix="/apps", tags=["analytics"])
 router.include_router(pricing_router, prefix="/apps", tags=["pricing"])
 router.include_router(clone_router, prefix="/apps", tags=["clone"])
 router.include_router(revenuecat_router, prefix="/apps", tags=["revenuecat"])
