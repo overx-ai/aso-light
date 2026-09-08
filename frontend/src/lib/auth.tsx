@@ -6,7 +6,7 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import api, { TOKEN_KEY } from "@/lib/api";
+import api, { REFRESH_TOKEN_KEY, TOKEN_KEY } from "@/lib/api";
 import type {
   User,
   AuthTokens,
@@ -25,7 +25,6 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const REFRESH_TOKEN_KEY = "aso_refresh_token";
 
 function storeTokens(tokens: AuthTokens) {
   localStorage.setItem(TOKEN_KEY, tokens.access_token);
