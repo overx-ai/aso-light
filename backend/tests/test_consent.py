@@ -16,7 +16,13 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import MiddlewareContext
 
 from app.mcp import consent
-from app.mcp.consent import CONFIRM_ARG, DESTRUCTIVE, ConsentGate, reset_consent_state
+from app.mcp.consent import (
+    CONFIRM_ARG,
+    DESTRUCTIVE,
+    READ_ONLY,
+    ConsentGate,
+    reset_consent_state,
+)
 from app.mcp.server import mcp
 from tests._async_harness import run_async
 
@@ -215,5 +221,79 @@ def test_gated_tools_are_annotated_destructive():
 
     assert by_name[GATED].annotations.destructiveHint is True
     assert by_name[GATED].annotations.readOnlyHint is False
-    assert by_name[READ].annotations is None or \
-        not by_name[READ].annotations.destructiveHint
+    assert by_name[READ].annotations.destructiveHint is False
+    assert by_name[READ].annotations.readOnlyHint is True
+
+
+# ---------------------------------------------------------------------------
+# Read-only classification
+#
+# Claude Code's plan mode prompts for approval on any tool whose annotations are
+# null, which made this server unusable for research. READ_ONLY is what lets it
+# skip the prompt — so a write landing in that set would hand a client
+# permission to mutate a live App Store listing unattended. These are the guards.
+# ---------------------------------------------------------------------------
+
+# Verbs that mean the tool changes something. Matched as substrings against the
+# whole tool name, so "keywords_add" and "pricing_apply_iap_prices" both trip.
+_WRITE_VERBS = (
+    "create", "update", "delete", "apply", "sync", "upload", "add", "remove",
+    "attach", "detach", "archive", "refresh", "poll", "draft", "respond",
+    "translate", "swap", "assign", "enroll", "import", "stop", "submit",
+    "ensure", "run", "check",
+)
+
+
+def test_read_only_and_destructive_are_disjoint():
+    """A tool cannot be both safe to call unattended and gated."""
+    assert not READ_ONLY & DESTRUCTIVE.keys()
+
+
+def test_every_read_only_name_is_a_real_tool():
+    """A typo or a rename would silently annotate nothing."""
+    assert not READ_ONLY - _registered_names()
+
+
+def test_no_write_shaped_tool_is_marked_read_only():
+    """Tripwire: a write must never be published as safe to call unattended.
+
+    This is the mistake the whole allowlist exists to prevent — "annotate
+    everything not in DESTRUCTIVE" would have swept in 64 writers, including
+    cpp_create, apps_sync and visibility_poll_watch.
+
+    If a genuinely-safe tool trips this, add it to reviewed_safe WITH a reason,
+    mirroring test_no_destructive_shaped_tool_escapes_the_gate.
+    """
+    reviewed_safe = {
+        # "add" appears inside "ad_groups"/"cpp_ads", not as a verb.
+        "asa_list_ad_groups",
+        "asa_list_cpp_ads",
+        # "check" is the noun in the ASO audit, and these only read + score.
+        "asa_suggest_negative_candidates",
+    }
+    offenders = {
+        name for name in READ_ONLY - reviewed_safe
+        if any(verb in name for verb in _WRITE_VERBS)
+    }
+    assert not offenders, f"write-shaped tools marked read-only: {sorted(offenders)}"
+
+
+def test_every_tool_is_classified():
+    """No tool may ship with null annotations — that is what caused the prompts."""
+    async def call_next(context):
+        getter = getattr(mcp, "list_tools", None) or getattr(mcp, "_list_tools")
+        return await getter()
+
+    tools = run_async(ConsentGate().on_list_tools(
+        MiddlewareContext(message=None), call_next))
+
+    unannotated = [t.name for t in tools if t.annotations is None]
+    assert not unannotated, f"tools with no annotations: {unannotated}"
+
+    read_only = {t.name for t in tools if t.annotations.readOnlyHint}
+    destructive = {t.name for t in tools if t.annotations.destructiveHint}
+    assert read_only == set(READ_ONLY)
+    assert destructive == DESTRUCTIVE.keys()
+    # Everything else is a write that still prompts. If this ever hits zero,
+    # something has mis-stamped the whole registry.
+    assert len(tools) - len(read_only) - len(destructive) > 0

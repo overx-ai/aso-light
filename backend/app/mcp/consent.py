@@ -185,6 +185,117 @@ DESTRUCTIVE: dict[str, str] = {
 }
 
 
+# Tools that only READ. Published as ``readOnlyHint: True`` so a client can skip
+# the approval prompt — Claude Code's plan mode prompts on any tool whose
+# annotations are null, which made the whole server unusable for research.
+#
+# An ALLOWLIST, deliberately, not "everything not in DESTRUCTIVE". That set is a
+# curated *high-risk* list, not the set of all writes: 64 tools mutate state
+# without being in it (``cpp_create``, ``keywords_add``, ``apps_sync``,
+# ``analytics_enroll``, ``indices_refresh``, ``visibility_poll_watch``…).
+# Name-prefix rules fail the same way — ``visibility_*`` contains
+# ``create_watch``/``delete_watch``/``poll_watch``.
+#
+# The direction matters: an allowlist fails CLOSED. A tool nobody classified is
+# simply unannotated and keeps prompting. A heuristic would fail OPEN — a future
+# ``pricing_bulk_fanout`` matches no write verb and would ship advertised as
+# safe to call unattended against a live listing.
+# ``test_consent.py::test_no_write_shaped_tool_is_marked_read_only`` is the
+# mechanical tripwire for exactly that mistake.
+READ_ONLY: frozenset[str] = frozenset({
+    "account_whoami",
+    # --- analytics (local fact-table reads) ---
+    "analytics_cpp_performance",
+    "analytics_downloads",
+    "analytics_engagement",
+    "analytics_status",
+    # --- apps ---
+    "apps_get",
+    "apps_list",
+    # --- Apple Search Ads (reports + suggestions; test_credential only probes) ---
+    "asa_get_campaign",
+    "asa_list_ad_groups",
+    "asa_list_campaigns",
+    "asa_list_cpp_ads",
+    "asa_list_credentials",
+    "asa_list_keywords",
+    "asa_list_negative_keywords",
+    "asa_list_orgs",
+    "asa_paid_organic_join",
+    "asa_performance_report",
+    "asa_search_term_report",
+    "asa_suggest_negative_candidates",
+    "asa_suggest_organic_keywords_to_track",
+    "asa_test_credential",
+    "availability_get",
+    # --- custom product pages ---
+    "cpp_get",
+    "cpp_list",
+    "cpp_list_screenshots",
+    # --- experiments (results are not exposed by Apple; these are config reads) ---
+    "experiment_get",
+    "experiment_list",
+    "experiment_list_treatment_screenshots",
+    "experiment_list_treatments",
+    "indices_list_gdp",
+    "indices_status",
+    "keyword_intel_list",
+    # --- keywords (search/suggestions proxy iTunes, but write nothing) ---
+    "keywords_cross_localization",
+    "keywords_get_rankings",
+    "keywords_list_competitor_keywords",
+    "keywords_list_competitors",
+    "keywords_list_for_app",
+    "keywords_search",
+    "keywords_suggestions",
+    # --- metadata (bulk_preview computes a diff; bulk_apply is the write) ---
+    "metadata_bulk_preview",
+    "metadata_get_locale",
+    "metadata_get_snapshot",
+    "metadata_keyword_coverage",
+    "presets_get",
+    "presets_list",
+    # --- pricing (preview/resolve compute, they do not apply) ---
+    "pricing_export_prices",
+    "pricing_get_iap_prices",
+    "pricing_get_iap_review_screenshot",
+    "pricing_get_subscription_availability",
+    "pricing_get_subscription_prices",
+    "pricing_get_subscription_review_screenshot",
+    "pricing_iap_price_points_status",
+    "pricing_list_iap_localizations",
+    "pricing_list_iaps",
+    "pricing_list_subscription_group_localizations",
+    "pricing_list_subscription_groups",
+    "pricing_list_subscription_intro_offers",
+    "pricing_list_subscription_localizations",
+    "pricing_preview_iap_prices",
+    "pricing_preview_subscription_prices",
+    "pricing_resolve_iap_price",
+    "pricing_resolve_subscription_price",
+    "pricing_subscription_price_points_status",
+    # --- RevenueCat ---
+    "revenuecat_get_credential",
+    "revenuecat_list_apps",
+    "revenuecat_list_entitlements",
+    "revenuecat_list_offerings",
+    "revenuecat_list_packages",
+    "revenuecat_list_products",
+    "revenuecat_test_credential",
+    "reviews_get",
+    "reviews_list",
+    "screenshots_compare",
+    "screenshots_list",
+    "territories_list",
+    # --- visibility (create/delete/poll_watch are writes and are NOT here) ---
+    "visibility_competitor_sites",
+    "visibility_get_sov",
+    "visibility_list_anomalies",
+    "visibility_list_snapshots",
+    "visibility_list_watches",
+})
+
+
 @dataclass(frozen=True)
 class _Pending:
     tool: str
@@ -262,22 +373,41 @@ def _challenge(tool: str, arguments: dict[str, Any], token: str) -> str:
     )
 
 
+def _annotations_for(name: str) -> ToolAnnotations:
+    """The risk hints a client sees for one tool. See :meth:`on_list_tools`."""
+    if name in DESTRUCTIVE:
+        return ToolAnnotations(
+            destructiveHint=True, readOnlyHint=False, idempotentHint=False
+        )
+    if name in READ_ONLY:
+        return ToolAnnotations(readOnlyHint=True, destructiveHint=False)
+    return ToolAnnotations(readOnlyHint=False, destructiveHint=False)
+
+
 class ConsentGate(Middleware):
     """Refuse destructive tool calls that carry no matching consent token."""
 
     async def on_list_tools(self, context: MiddlewareContext, call_next):  # type: ignore[override]
-        """Stamp ``destructiveHint`` on every gated tool.
+        """Stamp the protocol's risk hints on every tool.
 
-        This is the protocol's own marker: MCP clients read it to decide whether
-        to prompt a human before a call. Doing it here rather than on 35
-        decorators keeps it impossible for the annotations and :data:`DESTRUCTIVE`
-        to drift apart. Copies rather than mutating the shared registry objects.
+        MCP clients read these to decide whether to prompt a human. Doing it
+        here rather than on 179 decorators keeps it impossible for the
+        annotations and :data:`DESTRUCTIVE` / :data:`READ_ONLY` to drift apart.
+        Copies rather than mutating the shared registry objects.
+
+        Three tiers, because "not destructive" does not mean "safe":
+
+        * :data:`DESTRUCTIVE` — prompts, and the call itself needs a token.
+        * :data:`READ_ONLY` — safe to call unattended; this is what lets plan
+          mode skip the prompt.
+        * everything else — writes that are not catastrophic (``cpp_create``,
+          ``apps_sync``…). Explicitly ``readOnlyHint=False`` so they keep
+          prompting. Leaving them null would work too, but saying it outright
+          means no tool ships with an unanswered question about it.
         """
         tools = await call_next(context)
         return [
-            tool.model_copy(update={"annotations": ToolAnnotations(
-                destructiveHint=True, readOnlyHint=False, idempotentHint=False)})
-            if tool.name in DESTRUCTIVE else tool
+            tool.model_copy(update={"annotations": _annotations_for(tool.name)})
             for tool in tools
         ]
 
