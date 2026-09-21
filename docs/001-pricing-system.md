@@ -246,6 +246,12 @@ IAP price IDs are base64-encoded and contain `{s: iap_id, t: territory_alpha3, p
 
 **File**: `backend/app/services/asc/pricing.py` — `get_iap_price_schedule()`
 
+An IAP that has never been priced has **no schedule at all** and Apple 404s, with a body identical to
+the one for a nonexistent IAP. `get_iap_price_schedule()` probes `get_iap_detail()` to tell them apart
+and returns `[]` for the former. This is also why the IAP apply path carries a guard the subscription
+path does not — Apple replaces the whole schedule on every apply. Full detail:
+[017 - IAP Lifecycle + Price Schedule Semantics](017-iap-lifecycle-and-price-schedules.md).
+
 ## API Endpoints
 
 ### Subscription Pricing
@@ -266,6 +272,10 @@ IAP price IDs are base64-encoded and contain `{s: iap_id, t: territory_alpha3, p
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `.../iaps` | List IAPs (syncs from ASC) |
+| `POST` | `.../iaps` | Create an IAP (see [017](017-iap-lifecycle-and-price-schedules.md)) |
+| `PATCH` | `.../iaps/{iap_id}` | Update name / review note / family sharing |
+| `DELETE` | `.../iaps/{iap_id}` | Delete an IAP (state-dependent at Apple) |
+| `DELETE` | `.../iaps/{iap_id}/localizations/{loc_id}` | Delete an IAP localization |
 | `GET` | `.../iaps/{iap_id}/prices` | Read current IAP prices from DB |
 | `POST` | `.../iaps/{iap_id}/sync` | Sync IAP prices from ASC |
 | `POST` | `.../iaps/{iap_id}/price-points/sync` | Cache IAP price tiers |

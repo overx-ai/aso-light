@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any, get_args
 
@@ -15,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from app.api.v1._deps import _get_asc_client_for_app, _get_verified_app
 from app.core.security import get_current_user
 from app.db.session import get_session
+from app.models.app import App
 from app.models.iap import IAPPrice, InAppPurchase
 from app.models.subscription import (
     Subscription,
@@ -28,10 +30,12 @@ from app.schemas.pricing import (
     GroupLocalizationCreate,
     GroupLocalizationResponse,
     GroupLocalizationUpdate,
+    IAPCreate,
     IAPPricePointResponse,
     IAPPricePreviewResponse,
     IAPPricesResponse,
     IAPResponse,
+    IAPUpdate,
     IntroOfferCreate,
     IntroOfferDuration,
     IntroOfferMode,
@@ -65,7 +69,12 @@ from app.schemas.pricing import (
 from app.data.territories import ALPHA2_TO_ALPHA3
 from app.services.asc.availability import ASCAvailabilityService
 from app.services.asc.client import ASCClient
-from app.services.asc.errors import ASCAPIError, ChildResourceNotFoundError
+from app.services.asc.errors import (
+    ASCAPIError,
+    ASCRequestInvalidError,
+    ChildResourceNotFoundError,
+    IAPScheduleUnsyncedError,
+)
 from app.services.asc.price_point_cache import PricePointCache
 from app.services.asc.pricing import ASCPricingService
 from app.services.pricing.currency import effective_currency
@@ -1122,6 +1131,96 @@ async def apply_subscription_prices(
 # ------------------------------------------------------------------
 
 
+async def _upsert_iap_row(
+    session: AsyncSession, app: App, iap_data: dict[str, Any],
+) -> InAppPurchase:
+    """Mirror one ASC IAP resource into the local ``in_app_purchases`` table.
+
+    Shared by the list sync (REST and MCP) and the create path so they cannot
+    drift: a create that skipped this would leave the IAP invisible locally
+    until the next list call happened to run.
+    """
+    asc_iap_id = iap_data["id"]
+    attrs = iap_data.get("attributes", {})
+
+    result = await session.execute(
+        select(InAppPurchase).where(
+            InAppPurchase.app_id == app.id,
+            InAppPurchase.asc_iap_id == asc_iap_id,
+        )
+    )
+    record = result.scalar_one_or_none()
+
+    if record is None:
+        record = InAppPurchase(
+            app_id=app.id,
+            asc_iap_id=asc_iap_id,
+            name=attrs.get("name", "Unknown"),
+            product_id=attrs.get("productId", ""),
+            iap_type=attrs.get("inAppPurchaseType", ""),
+        )
+        session.add(record)
+    else:
+        record.name = attrs.get("name", record.name)
+        record.product_id = attrs.get("productId", record.product_id)
+        record.iap_type = attrs.get("inAppPurchaseType", record.iap_type)
+    return record
+
+
+async def _assert_iap_schedule_replaceable(
+    session: AsyncSession,
+    app: App,
+    iap: InAppPurchase,
+    current_prices: Sequence[IAPPrice],
+) -> None:
+    """Refuse an apply that would silently reset untouched territories.
+
+    Apple replaces the ENTIRE ``iapPriceSchedule`` on every apply, so the
+    preserve loop re-submits untouched territories from the local
+    ``IAPPrice`` cache. An empty cache has two very different causes and the
+    DB cannot tell them apart:
+
+    * the IAP has prices at Apple we have never synced — applying would wipe
+      every territory not in this request;
+    * the IAP has no prices at all (just created) — there is nothing to
+      preserve and the apply is safe.
+
+    Only Apple knows which, so ask, and only on the empty-cache path. Raises
+    :class:`IAPScheduleUnsyncedError` (REST → 409, MCP → ToolError) for the
+    first case.
+    """
+    if current_prices:
+        return
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        live_prices = await ASCPricingService(client).get_iap_price_schedule(
+            iap.asc_iap_id
+        )
+
+    if live_prices:
+        raise IAPScheduleUnsyncedError(
+            "Sync IAP prices before applying — the schedule replace "
+            "would reset untouched territories."
+        )
+
+
+def _assert_family_sharing_supported(
+    iap: InAppPurchase, family_sharable: bool | None,
+) -> None:
+    """Refuse a ``familySharable`` update on a type Apple ignores it for.
+
+    :class:`IAPCreate` already refuses it locally; without this, update was
+    the hole through which the same request reached Apple. ``iap_type`` is
+    immutable, so the locally mirrored value is authoritative.
+    """
+    if family_sharable is None or iap.iap_type == "NON_CONSUMABLE":
+        return
+    raise ASCRequestInvalidError(
+        "family_sharable applies only to NON_CONSUMABLE in-app purchases, "
+        f"not {iap.iap_type}"
+    )
+
+
 @router.get("/{app_id}/iaps", response_model=list[IAPResponse])
 async def list_iaps(
     app_id: int,
@@ -1137,34 +1236,7 @@ async def list_iaps(
         iaps_data = await pricing_service.list_iaps(app.asc_app_id)
 
     for iap_data in iaps_data:
-        asc_iap_id = iap_data["id"]
-        attrs = iap_data.get("attributes", {})
-
-        existing_result = await session.execute(
-            select(InAppPurchase).where(
-                InAppPurchase.app_id == app.id,
-                InAppPurchase.asc_iap_id == asc_iap_id,
-            )
-        )
-        iap_record = existing_result.scalar_one_or_none()
-
-        if iap_record:
-            iap_record.name = attrs.get("name", iap_record.name)
-            iap_record.product_id = attrs.get(
-                "productId", iap_record.product_id
-            )
-            iap_record.iap_type = attrs.get(
-                "inAppPurchaseType", iap_record.iap_type
-            )
-        else:
-            iap_record = InAppPurchase(
-                app_id=app.id,
-                asc_iap_id=asc_iap_id,
-                name=attrs.get("name", "Unknown"),
-                product_id=attrs.get("productId", ""),
-                iap_type=attrs.get("inAppPurchaseType", ""),
-            )
-            session.add(iap_record)
+        await _upsert_iap_row(session, app, iap_data)
 
     await session.flush()
 
@@ -1174,6 +1246,154 @@ async def list_iaps(
     )
     iaps = result.scalars().all()
     return [IAPResponse.model_validate(iap) for iap in iaps]
+
+
+@router.post(
+    "/{app_id}/iaps",
+    response_model=IAPResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_iap(
+    app_id: int,
+    body: IAPCreate,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> IAPResponse:
+    """Create an in-app purchase in ASC and mirror it locally.
+
+    The created IAP is a shell: it still needs a localization
+    (``POST .../localizations``) and a price (``POST .../prices``) before it
+    can be submitted. ``productId`` and ``inAppPurchaseType`` are immutable
+    from here on, so they are worth getting right.
+    """
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            created = await pricing_service.create_iap(
+                app_id=app.asc_app_id,
+                product_id=body.product_id,
+                name=body.name,
+                iap_type=body.iap_type,
+                review_note=body.review_note,
+                family_sharable=body.family_sharable,
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    record = await _upsert_iap_row(session, app, created)
+    await session.flush()
+    return IAPResponse.model_validate(record)
+
+
+@router.patch("/{app_id}/iaps/{iap_id}", response_model=IAPResponse)
+async def update_iap(
+    app_id: int,
+    iap_id: int,
+    body: IAPUpdate,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> IAPResponse:
+    """Update editable IAP metadata.
+
+    ``productId`` and ``inAppPurchaseType`` are immutable in ASC and cannot be
+    expressed by :class:`IAPUpdate`.
+    """
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    iap = await _get_verified_iap(iap_id, app.id, session)
+
+    try:
+        _assert_family_sharing_supported(iap, body.family_sharable)
+        async with await _get_asc_client_for_app(app, session) as client:
+            await ASCPricingService(client).update_iap(
+                iap.asc_iap_id,
+                name=body.name,
+                review_note=body.review_note,
+                family_sharable=body.family_sharable,
+            )
+    except ASCRequestInvalidError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        )
+    except ASCAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    if body.name is not None:
+        iap.name = body.name
+    await session.flush()
+    return IAPResponse.model_validate(iap)
+
+
+@router.delete(
+    "/{app_id}/iaps/{iap_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_iap(
+    app_id: int,
+    iap_id: int,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Delete an in-app purchase.
+
+    State-dependent on Apple's side — an IAP that has been approved or was
+    ever purchasable will be refused, and that refusal is surfaced verbatim
+    rather than worked around. Also drops the local cache row so the next
+    ``GET .../iaps`` reflects the new ASC state.
+    """
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    iap = await _get_verified_iap(iap_id, app.id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            await pricing_service.delete_iap(iap.asc_iap_id)
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    await session.delete(iap)
+    await session.flush()
+
+
+@router.delete(
+    "/{app_id}/iaps/{iap_id}/localizations/{localization_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_iap_localization(
+    app_id: int,
+    iap_id: int,
+    localization_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Delete an IAP localization.
+
+    Recovery path for a localization stuck in REJECTED state, mirroring the
+    subscription equivalent. Membership is asserted before the delete:
+    deleting by bare child id would let a caller who owns app A remove a
+    localization belonging to app B.
+    """
+    user_id = int(current_user["user_id"])
+    app = await _get_verified_app(app_id, user_id, session)
+    iap = await _get_verified_iap(iap_id, app.id, session)
+
+    async with await _get_asc_client_for_app(app, session) as client:
+        pricing_service = ASCPricingService(client)
+        try:
+            await pricing_service.assert_iap_localization(
+                iap.asc_iap_id, localization_id,
+            )
+            await pricing_service.delete_iap_localization(localization_id)
+        except ChildResourceNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
 
 @router.get(
@@ -1195,9 +1415,12 @@ async def get_iap_prices(
 
     async with await _get_asc_client_for_app(app, session) as client:
         pricing_service = ASCPricingService(client)
-        prices_data = await pricing_service.get_iap_price_schedule(
-            iap.asc_iap_id
-        )
+        try:
+            prices_data = await pricing_service.get_iap_price_schedule(
+                iap.asc_iap_id
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
     price_responses: list[IAPPricePointResponse] = []
     now = datetime.now(timezone.utc)
@@ -1287,9 +1510,12 @@ async def sync_iap_prices(
 
     async with await _get_asc_client_for_app(app, session) as client:
         pricing_service = ASCPricingService(client)
-        prices_data = await pricing_service.get_iap_price_schedule(
-            iap.asc_iap_id
-        )
+        try:
+            prices_data = await pricing_service.get_iap_price_schedule(
+                iap.asc_iap_id
+            )
+        except ASCAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
     now = datetime.now(timezone.utc)
     prices_synced = 0
@@ -1562,18 +1788,16 @@ async def apply_iap_prices(
     )
     current_prices = current_prices_result.scalars().all()
 
-    # Apple replaces the ENTIRE iapPriceSchedule on every apply. The
-    # preserve loop below can only re-add territories we already have a
-    # cached price_point_id for; with no cache, a partial apply would
-    # silently reset every untouched territory to auto-equalization.
-    if not current_prices:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Sync IAP prices before applying — the schedule replace "
-                "would reset untouched territories."
-            ),
+    try:
+        await _assert_iap_schedule_replaceable(
+            session, app, iap, current_prices,
         )
+    except IAPScheduleUnsyncedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc),
+        )
+    except ASCAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
     territory_map = await _get_territory_map(session)
     territory_by_id = {t.id: t for t in territory_map.values()}

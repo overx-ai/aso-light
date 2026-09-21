@@ -278,6 +278,25 @@ def test_no_write_shaped_tool_is_marked_read_only():
     assert not offenders, f"write-shaped tools marked read-only: {sorted(offenders)}"
 
 
+def test_iap_deletes_are_gated():
+    """Deleting an IAP burns its productId at Apple — never silently."""
+    assert "pricing_delete_iap" in DESTRUCTIVE
+    assert "pricing_delete_iap_localization" in DESTRUCTIVE
+
+
+def test_status_reads_are_callable_in_plan_mode():
+    """An agent that starts a swap must be able to read how it went.
+
+    These three are the reason plan mode was unusable mid-swap: without the
+    annotation every status poll prompted for approval.
+    """
+    assert {
+        "clone_get_operation",
+        "clone_list_operations",
+        "growth_recommendations",
+    } <= READ_ONLY
+
+
 def test_every_tool_is_classified():
     """No tool may ship with null annotations — that is what caused the prompts."""
     async def call_next(context):

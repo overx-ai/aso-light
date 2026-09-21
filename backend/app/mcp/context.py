@@ -47,6 +47,15 @@ def get_pat_id() -> int:
     return _get_token_claim_as_int("pat_id")
 
 
+def current_user_claims() -> dict[str, str]:
+    """Stand in for the REST ``get_current_user`` dependency.
+
+    Tools that delegate straight to a REST handler have to hand it the same
+    shape FastAPI would have injected.
+    """
+    return {"user_id": str(get_user_id())}
+
+
 @asynccontextmanager
 async def session_scope() -> AsyncIterator[AsyncSession]:
     """Yield a fresh DB session, committing on success."""
@@ -59,11 +68,13 @@ async def session_scope() -> AsyncIterator[AsyncSession]:
             raise
 
 
-def _http_to_tool_error(exc: HTTPException) -> ToolError:
+def http_to_tool_error(exc: HTTPException) -> ToolError:
     """Convert an HTTPException raised by a REST helper into a ToolError.
 
     Only the ``detail`` is forwarded — the HTTP status code framing is
-    irrelevant to an MCP client.
+    irrelevant to an MCP client. Tools that delegate to a REST handler must
+    route every ``HTTPException`` through here: one escaping the tool body is
+    an opaque transport failure to the client, not the handler's message.
     """
     return ToolError(str(exc.detail))
 
@@ -74,7 +85,7 @@ async def resolve_app(app_id: int, session: AsyncSession) -> App:
     try:
         return await _get_verified_app(app_id, user_id, session)
     except HTTPException as exc:
-        raise _http_to_tool_error(exc) from exc
+        raise http_to_tool_error(exc) from exc
 
 
 async def resolve_asc_client(app: App, session: AsyncSession):
@@ -89,7 +100,7 @@ async def resolve_asc_client(app: App, session: AsyncSession):
     except CredentialDecryptError as exc:
         raise ToolError(str(exc)) from exc
     except HTTPException as exc:
-        raise _http_to_tool_error(exc) from exc
+        raise http_to_tool_error(exc) from exc
 
 
 async def resolve_rc_credential(

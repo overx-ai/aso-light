@@ -4,10 +4,39 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.services.asc.errors import ASCAPIError, ChildResourceNotFoundError
+from app.services.asc.errors import (
+    ASCAPIError,
+    ASCRequestInvalidError,
+    ChildResourceNotFoundError,
+)
 
 if TYPE_CHECKING:
+    import httpx
+
     from app.services.asc.client import ASCClient
+
+
+def _raise_for_asc_error(raw: httpx.Response) -> None:
+    """Raise :class:`ASCAPIError` for a failed raw response.
+
+    The ``/v2`` IAP endpoints drive httpx directly instead of going through
+    ``ASCClient._get``/``_post`` (pinned to the v1 ``BASE_URL``), so they do
+    not inherit that layer's error handling.
+
+    An error body that is absent, not JSON (a gateway's HTML 502) or not a
+    JSON object still has to yield a well-formed ``errors`` list: otherwise
+    the decode blows up *instead of* the ASCAPIError and every caller's
+    ``except ASCAPIError`` is bypassed.
+    """
+    if raw.status_code < 400:
+        return
+    try:
+        body = raw.json() if raw.content else {}
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    raise ASCAPIError(raw.status_code, body)
 
 
 class ASCPricingService:
@@ -555,9 +584,7 @@ class ASCPricingService:
             f"&fields[inAppPurchases]=name"
         )
         raw = await http.get(url)
-        if raw.status_code >= 400:
-            body = raw.json() if raw.content else {"errors": []}
-            raise ASCAPIError(raw.status_code, body)
+        _raise_for_asc_error(raw)
 
         data = raw.json()
         return [
@@ -867,9 +894,7 @@ class ASCPricingService:
         url = f"{base_v2}/inAppPurchases/{iap_id}/pricePoints?{'&'.join(params_parts)}"
 
         raw = await http.get(url)
-        if raw.status_code >= 400:
-            body = raw.json() if raw.content else {"errors": []}
-            raise ASCAPIError(raw.status_code, body)
+        _raise_for_asc_error(raw)
 
         response = raw.json()
 
@@ -1017,6 +1042,11 @@ class ASCPricingService:
         price point for each manual price to resolve customerPrice,
         proceeds, and currency.
 
+        An IAP that has never been priced has no ``iapPriceSchedule`` at all
+        and Apple 404s. That is "no prices yet", not an error, so it returns
+        ``[]`` — otherwise a product created through the API could never be
+        read or priced through it.
+
         Returns:
             List of enriched price dicts with territory_code, customer_price,
             proceeds, currency_code, and price_point_id.
@@ -1032,9 +1062,15 @@ class ASCPricingService:
         raw = await http.get(
             f"{base_v2}/inAppPurchases/{iap_id}/iapPriceSchedule"
         )
-        if raw.status_code >= 400:
-            body = raw.json() if raw.content else {"errors": []}
-            raise ASCAPIError(raw.status_code, body)
+        if raw.status_code == 404:
+            # Apple sends a byte-identical NOT_FOUND whether the IAP exists
+            # without a schedule or does not exist at all — both name
+            # 'inAppPurchasePriceSchedules' and echo the IAP id. Verified
+            # live; do not try to tell them apart from the error body. Ask
+            # about the IAP instead: it answers, so there is no schedule yet.
+            await self.get_iap_detail(iap_id)
+            return []
+        _raise_for_asc_error(raw)
         related = (
             raw.json()
             .get("data", {})
@@ -1050,9 +1086,7 @@ class ASCPricingService:
         while next_url:
             await self.client._throttle()
             page_raw = await http.get(next_url)
-            if page_raw.status_code >= 400:
-                body = page_raw.json() if page_raw.content else {"errors": []}
-                raise ASCAPIError(page_raw.status_code, body)
+            _raise_for_asc_error(page_raw)
             page = page_raw.json()
             manual_items.extend(page.get("data", []))
             next_url = page.get("links", {}).get("next")
@@ -1452,7 +1486,7 @@ class ASCPricingService:
         if review_note is not None:
             attributes["reviewNote"] = review_note
         if iap_type == "NON_CONSUMABLE":
-            attributes["familyShareable"] = family_sharable
+            attributes["familySharable"] = family_sharable
 
         body = {
             "data": {
@@ -1468,10 +1502,75 @@ class ASCPricingService:
         base_v2 = self.client.BASE_URL.replace("/v1", "/v2")
         await self.client._throttle()
         raw = await http.post(f"{base_v2}/inAppPurchases", json=body)
-        if raw.status_code >= 400:
-            response_body = raw.json() if raw.content else {"errors": []}
-            raise ASCAPIError(raw.status_code, response_body)
+        _raise_for_asc_error(raw)
         return raw.json().get("data", {})
+
+    async def update_iap(
+        self,
+        iap_id: str,
+        name: str | None = None,
+        review_note: str | None = None,
+        family_sharable: bool | None = None,
+    ) -> dict:
+        """``PATCH /v2/inAppPurchases/{iap_id}``
+
+        ``productId`` and ``inAppPurchaseType`` are immutable per Apple once
+        the IAP exists, and are intentionally absent from this method — the
+        same rule :meth:`update_subscription` applies to ``productId`` and
+        ``subscriptionPeriod``.
+        """
+        attributes: dict[str, object] = {}
+        if name is not None:
+            attributes["name"] = name
+        if review_note is not None:
+            attributes["reviewNote"] = review_note
+        if family_sharable is not None:
+            attributes["familySharable"] = family_sharable
+        if not attributes:
+            raise ASCRequestInvalidError(
+                "No fields to update — pass at least one of name, "
+                "review_note or family_sharable."
+            )
+
+        body = {
+            "data": {
+                "type": "inAppPurchases",
+                "id": iap_id,
+                "attributes": attributes,
+            }
+        }
+        http = await self.client._get_client()
+        base_v2 = self.client.BASE_URL.replace("/v1", "/v2")
+        await self.client._throttle()
+        raw = await http.patch(f"{base_v2}/inAppPurchases/{iap_id}", json=body)
+        _raise_for_asc_error(raw)
+        return raw.json().get("data", {})
+
+    async def delete_iap(self, iap_id: str) -> None:
+        """``DELETE /v2/inAppPurchases/{iap_id}``
+
+        State-dependent on Apple's side: an IAP that has been approved or has
+        ever been purchasable will be refused. The error is surfaced verbatim
+        rather than retried — there is no force-delete, and inventing one would
+        mean deleting something a customer may already own.
+        """
+        http = await self.client._get_client()
+        base_v2 = self.client.BASE_URL.replace("/v1", "/v2")
+        await self.client._throttle()
+        raw = await http.delete(f"{base_v2}/inAppPurchases/{iap_id}")
+        _raise_for_asc_error(raw)
+
+    async def delete_iap_localization(self, localization_id: str) -> None:
+        """``DELETE /v1/inAppPurchaseLocalizations/{localization_id}``
+
+        Unlike the IAP itself this is a v1 resource. Callers must first prove
+        the localization belongs to the IAP via
+        :meth:`assert_iap_localization` — deleting by bare child id is exactly
+        the cross-parent IDOR shape fixed in ``9025647``.
+        """
+        await self.client._delete(
+            f"/inAppPurchaseLocalizations/{localization_id}"
+        )
 
     async def get_iap_detail(self, iap_id: str) -> dict:
         """``GET /v2/inAppPurchases/{id}`` — full IAP attributes for cloning."""
@@ -1481,11 +1580,9 @@ class ASCPricingService:
         raw = await http.get(
             f"{base_v2}/inAppPurchases/{iap_id}"
             "?fields[inAppPurchases]=name,productId,inAppPurchaseType,"
-            "state,reviewNote,familyShareable"
+            "state,reviewNote,familySharable"
         )
-        if raw.status_code >= 400:
-            response_body = raw.json() if raw.content else {"errors": []}
-            raise ASCAPIError(raw.status_code, response_body)
+        _raise_for_asc_error(raw)
         return raw.json().get("data", {})
 
     async def update_subscription(

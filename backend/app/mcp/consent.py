@@ -1,6 +1,6 @@
 """Per-operation consent gate for destructive MCP tools.
 
-aso-light drives a real, published App Store listing through 173 agent-callable
+aso-light drives a real, published App Store listing through 187 agent-callable
 tools, several of which are irreversible: ``screenshots_delete`` wipes a device
 family's screenshots and Apple does not hand the binaries back;
 ``metadata_delete_locale`` delists a language; ``swap_subscription_product``
@@ -110,6 +110,13 @@ DESTRUCTIVE: dict[str, str] = {
     ),
     "pricing_delete_subscription_localization": (
         "Deletes a live subscription localization at Apple."
+    ),
+    "pricing_delete_iap": (
+        "Deletes an in-app purchase at Apple and drops the local row with it. "
+        "The productId is burned — Apple never allows it to be reused."
+    ),
+    "pricing_delete_iap_localization": (
+        "Deletes a live IAP localization at Apple."
     ),
     "pricing_delete_subscription_group_localization": (
         "Deletes a live subscription group localization at Apple."
@@ -228,6 +235,9 @@ READ_ONLY: frozenset[str] = frozenset({
     "asa_suggest_organic_keywords_to_track",
     "asa_test_credential",
     "availability_get",
+    # --- clone/swap operation status (reads the local operation log) ---
+    "clone_get_operation",
+    "clone_list_operations",
     # --- custom product pages ---
     "cpp_get",
     "cpp_list",
@@ -237,6 +247,7 @@ READ_ONLY: frozenset[str] = frozenset({
     "experiment_list",
     "experiment_list_treatment_screenshots",
     "experiment_list_treatments",
+    "growth_recommendations",
     "indices_list_gdp",
     "indices_status",
     "keyword_intel_list",

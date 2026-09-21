@@ -10,6 +10,31 @@ class CredentialDecryptError(Exception):
     """
 
 
+class ASCRequestInvalidError(Exception):
+    """The request is malformed before it ever reaches Apple.
+
+    A distinct type rather than a bare ``ValueError`` on purpose: the service
+    methods that raise it also parse JSON, and ``json.JSONDecodeError`` *is* a
+    ``ValueError``. A caller catching ``ValueError`` around them would turn a
+    malformed upstream body into a confident 400 whose detail is a raw Python
+    message — which CLAUDE.md forbids.
+
+    REST maps this to 400; MCP maps it to ``ToolError``.
+    """
+
+
+class IAPScheduleUnsyncedError(Exception):
+    """Applying IAP prices would reset territories we have never read.
+
+    Apple replaces the ENTIRE ``iapPriceSchedule`` on every apply, so the
+    caller re-submits untouched territories from the local ``IAPPrice`` cache.
+    An empty cache while Apple holds manual prices means that padding is
+    impossible and the apply would silently reset live prices.
+
+    REST maps this to 409; MCP maps it to ``ToolError``.
+    """
+
+
 class ChildResourceNotFoundError(Exception):
     """A child resource id does not belong to its verified parent.
 

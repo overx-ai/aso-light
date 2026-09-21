@@ -7,7 +7,8 @@ Covers:
   * ``finalize_price`` charm modes are currency-aware (JPY/KRW/KWD).
   * ``exceeds_safety_band`` Decimal boundary (exactly ±50% passes).
   * 3-decimal currency rounding stays within the ±10% band.
-  * IAP apply refuses (409 / ToolError) when the price cache is empty.
+  * IAP apply refuses (409 / ToolError) when the price cache is empty but
+    Apple holds prices, and proceeds when neither side has any.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ import sys
 import uuid
 from decimal import Decimal
 from pathlib import Path
+
+import pytest
 
 TESTS_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = TESTS_DIR.parent
@@ -201,14 +204,21 @@ def test_three_decimal_charm_suffix_is_x99():
 
 
 # ------------------------------------------------------------------
-# I4: IAP apply refuses (409) when the price cache is empty
+# I4: IAP apply and the empty price cache
+#
+# An empty ``IAPPrice`` cache has two causes the DB cannot tell apart:
+# the IAP has prices at Apple we never synced (applying would wipe every
+# territory not in this request), or it has none at all (nothing to
+# preserve). Only Apple knows which, so the guard asks. These two tests
+# pin both answers — the second is the one a freshly created IAP hits.
 # ------------------------------------------------------------------
 
 
-def test_apply_iap_prices_refuses_when_cache_empty():
-    from fastapi import HTTPException
+async def _seed_iap_fixture() -> tuple[int, int, int]:
+    """Create user → credential → app → IAP with no cached prices.
 
-    from app.api.v1.pricing import apply_iap_prices
+    Returns ``(app_id, iap_id, user_id)``.
+    """
     from app.db.base import Base
     from app.db.session import async_session_factory, engine
     from app.models.app import App
@@ -216,74 +226,219 @@ def test_apply_iap_prices_refuses_when_cache_empty():
     from app.models.iap import InAppPurchase
     from app.models.territory import Territory
     from app.models.user import User
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+
+    suffix = uuid.uuid4().hex[:8]
+    async with async_session_factory() as session:
+        session.add_all([
+            Territory(code="US", name="United States",
+                      currency_code="USD", vat_rate=0.0),
+            Territory(code="DE", name="Germany",
+                      currency_code="EUR", vat_rate=0.0),
+            Territory(code="FR", name="France",
+                      currency_code="EUR", vat_rate=0.0),
+        ])
+        user = User(
+            email=f"iap-{suffix}@example.com",
+            password_hash="x",
+            name="IAP Test",
+        )
+        session.add(user)
+        await session.flush()
+
+        credential = ASCCredential(
+            user_id=user.id,
+            name="ASC",
+            issuer_id=f"iss-{suffix}",
+            key_id=f"key-{suffix}",
+            private_key_encrypted="fixture",
+        )
+        session.add(credential)
+        await session.flush()
+
+        app = App(
+            credential_id=credential.id,
+            asc_app_id=f"adam-{suffix}",
+            bundle_id=f"com.example.iap.{suffix}",
+            name="IAP App",
+            platform="ios",
+        )
+        session.add(app)
+        await session.flush()
+
+        iap = InAppPurchase(
+            app_id=app.id,
+            asc_iap_id=f"iap-{suffix}",
+            name="Coins",
+            product_id=f"com.example.iap.{suffix}.coins",
+            iap_type="CONSUMABLE",
+        )
+        session.add(iap)
+        await session.commit()
+        return app.id, iap.id, user.id
+
+
+class _StubClient:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _patch_asc(monkeypatch, *, live_schedule: list[dict]) -> list[dict]:
+    """Stub the ASC client, schedule read, tier ladder and the write.
+
+    Returns the list that captures ``set_iap_price`` calls.
+    """
+    from app.api.v1 import pricing as pricing_routes
+    from app.services.asc.price_point_cache import PricePointCache
+    from app.services.asc.pricing import ASCPricingService
+
+    submitted: list[dict] = []
+
+    async def _client(app, session):
+        return _StubClient()
+
+    async def _schedule(self, iap_id):
+        return live_schedule
+
+    async def _tiers(self, alpha2, product_asc_id):
+        return [{
+            "price_point_id": "pp-x",
+            "customer_price": 4.99,
+            "proceeds": 3.49,
+            "currency_code": "USD",
+        }]
+
+    async def _set(self, iap_id, price_entries, base_territory_alpha3="USA"):
+        submitted.append({
+            "iap_id": iap_id,
+            "entries": price_entries,
+            "base": base_territory_alpha3,
+        })
+        return {}
+
+    monkeypatch.setattr(pricing_routes, "_get_asc_client_for_app", _client)
+    monkeypatch.setattr(
+        ASCPricingService, "get_iap_price_schedule", _schedule,
+    )
+    monkeypatch.setattr(
+        PricePointCache, "get_with_price_point_ids", _tiers,
+    )
+    monkeypatch.setattr(ASCPricingService, "set_iap_price", _set)
+    return submitted
+
+
+async def _cache_prices(iap_id: int, codes: list[str]) -> None:
+    """Give the IAP a synced ``IAPPrice`` row per territory code."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from app.db.session import async_session_factory
+    from app.models.iap import IAPPrice
+    from app.models.territory import Territory
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(Territory).where(Territory.code.in_(codes))
+        )
+        for territory in result.scalars().all():
+            session.add(IAPPrice(
+                iap_id=iap_id,
+                territory_id=territory.id,
+                price_point_id=f"pp-{territory.code.lower()}",
+                customer_price=4.99,
+                proceeds=3.49,
+                synced_at=datetime.now(timezone.utc),
+            ))
+        await session.commit()
+
+
+async def _seed_then_apply_us_price(cached: list[str] | None = None):
+    """Seed a fresh IAP and apply a single US price to it."""
+    from app.api.v1.pricing import apply_iap_prices
+    from app.db.session import async_session_factory
     from app.schemas.pricing import PriceApplyItem, PriceApplyRequest
 
-    async def go() -> tuple[int, str]:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.run_sync(Base.metadata.create_all)
-
-        suffix = uuid.uuid4().hex[:8]
-        async with async_session_factory() as session:
-            session.add(
-                Territory(code="US", name="United States",
-                          currency_code="USD", vat_rate=0.0)
-            )
-            user = User(
-                email=f"iap-{suffix}@example.com",
-                password_hash="x",
-                name="IAP Test",
-            )
-            session.add(user)
-            await session.flush()
-
-            credential = ASCCredential(
-                user_id=user.id,
-                name="ASC",
-                issuer_id=f"iss-{suffix}",
-                key_id=f"key-{suffix}",
-                private_key_encrypted="fixture",
-            )
-            session.add(credential)
-            await session.flush()
-
-            app = App(
-                credential_id=credential.id,
-                asc_app_id=f"adam-{suffix}",
-                bundle_id=f"com.example.iap.{suffix}",
-                name="IAP App",
-                platform="ios",
-            )
-            session.add(app)
-            await session.flush()
-
-            iap = InAppPurchase(
-                app_id=app.id,
-                asc_iap_id=f"iap-{suffix}",
-                name="Coins",
-                product_id=f"com.example.iap.{suffix}.coins",
-                iap_type="CONSUMABLE",
-            )
-            session.add(iap)
-            await session.commit()
-            app_id, iap_id, user_id = app.id, iap.id, user.id
-
-        body = PriceApplyRequest(
-            items=[PriceApplyItem(territory_code="US", price_point_id="pp-x")]
+    app_id, iap_id, user_id = await _seed_iap_fixture()
+    if cached:
+        await _cache_prices(iap_id, cached)
+    body = PriceApplyRequest(
+        items=[PriceApplyItem(territory_code="US", price_point_id="pp-x")]
+    )
+    async with async_session_factory() as session:
+        return await apply_iap_prices(
+            app_id=app_id,
+            iap_id=iap_id,
+            body=body,
+            current_user={"user_id": str(user_id)},
+            session=session,
         )
-        async with async_session_factory() as session:
-            try:
-                await apply_iap_prices(
-                    app_id=app_id,
-                    iap_id=iap_id,
-                    body=body,
-                    current_user={"user_id": str(user_id)},
-                    session=session,
-                )
-            except HTTPException as exc:
-                return exc.status_code, str(exc.detail)
-        return 0, "no error raised"
 
-    status_code, detail = run_async(go())
-    assert status_code == 409, (status_code, detail)
-    assert "Sync IAP prices" in detail
+
+def test_apply_iap_prices_refuses_when_apple_has_unsynced_prices(monkeypatch):
+    """The guard's real case: Apple holds prices our cache has never seen."""
+    from fastapi import HTTPException
+
+    submitted = _patch_asc(monkeypatch, live_schedule=[
+        {"territory_code": "DE", "customer_price": 4.99,
+         "proceeds": 3.49, "currency_code": "EUR", "price_point_id": "pp-de"},
+    ])
+
+    with pytest.raises(HTTPException) as err:
+        run_async(_seed_then_apply_us_price())
+
+    assert err.value.status_code == 409
+    assert "Sync IAP prices" in str(err.value.detail)
+    assert submitted == [], "refused, but still wrote to Apple"
+
+
+def test_apply_iap_prices_proceeds_on_a_never_priced_iap(monkeypatch):
+    """A freshly created IAP must be priceable with no prior sync.
+
+    Empty cache + no schedule at Apple means there is nothing to preserve,
+    so the guard has nothing to protect. Refusing here made every IAP
+    created through the API unfinishable.
+    """
+    submitted = _patch_asc(monkeypatch, live_schedule=[])
+
+    result = run_async(_seed_then_apply_us_price())
+    assert result.applied == 1, (result.applied, result.errors)
+    assert result.failed == 0 and result.skipped == 0
+
+    assert len(submitted) == 1
+    # Only what was asked for — the preserve loop had nothing to pad with.
+    assert submitted[0]["entries"] == [
+        {"territory_code": "US", "price_point_id": "pp-x"},
+    ]
+    assert submitted[0]["base"] == "USA"
+
+
+def test_apply_iap_prices_preserves_untouched_territories(monkeypatch):
+    """The whole reason the guard exists: Apple replaces the entire schedule.
+
+    Applying US alone must re-submit the cached DE/FR prices verbatim, or
+    those two live territories silently revert to auto-equalization. The
+    stubbed schedule is deliberately non-empty: if the guard ever consulted
+    Apple on a warm cache this would 409 instead of asserting below.
+    """
+    submitted = _patch_asc(monkeypatch, live_schedule=[
+        {"territory_code": "DE", "customer_price": 4.99,
+         "proceeds": 3.49, "currency_code": "EUR", "price_point_id": "pp-de"},
+    ])
+
+    result = run_async(_seed_then_apply_us_price(cached=["DE", "FR"]))
+
+    # Preserved territories are padding, not changes.
+    assert result.applied == 1, (result.applied, result.errors)
+
+    entries = {e["territory_code"]: e["price_point_id"]
+               for e in submitted[0]["entries"]}
+    assert entries == {
+        "US": "pp-x", "DE": "pp-de", "FR": "pp-fr",
+    }

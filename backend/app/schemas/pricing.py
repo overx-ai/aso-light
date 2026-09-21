@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 GDPTier = Literal["top", "mid", "low", "special"]
+IAPType = Literal["CONSUMABLE", "NON_CONSUMABLE", "NON_RENEWING_SUBSCRIPTION"]
 SubscriptionPeriod = Literal[
     "ONE_WEEK", "ONE_MONTH", "TWO_MONTHS", "THREE_MONTHS",
     "SIX_MONTHS", "ONE_YEAR",
@@ -277,6 +278,48 @@ class PricePointCacheStatus(BaseModel):
 
     cached_territories: int
     synced_at: str | None = None
+
+
+class IAPCreate(BaseModel):
+    """Create an in-app purchase.
+
+    ``iap_type`` is constrained here rather than left to Apple: an unknown
+    value previously travelled all the way to ASC and came back as an opaque
+    400.
+    """
+
+    product_id: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=64)
+    iap_type: IAPType
+    family_sharable: bool = False
+    review_note: str | None = Field(default=None, max_length=4000)
+
+    @model_validator(mode="after")
+    def _family_sharing_is_non_consumable_only(self) -> IAPCreate:
+        """Apple only honours familySharable on NON_CONSUMABLE.
+
+        ``ASCPricingService.create_iap`` silently drops it for other types, so
+        accepting it here would quietly ignore what the caller asked for.
+        """
+        if self.family_sharable and self.iap_type != "NON_CONSUMABLE":
+            raise ValueError(
+                "family_sharable applies only to NON_CONSUMABLE in-app "
+                f"purchases, not {self.iap_type}"
+            )
+        return self
+
+
+class IAPUpdate(BaseModel):
+    """Update editable in-app purchase metadata.
+
+    ``productId`` and ``inAppPurchaseType`` are immutable in ASC and are
+    intentionally not exposed here — the same contract ``SubscriptionUpdate``
+    holds for ``productId``/``subscriptionPeriod``.
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    review_note: str | None = Field(default=None, max_length=4000)
+    family_sharable: bool | None = None
 
 
 class IAPResponse(BaseModel):

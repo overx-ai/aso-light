@@ -25,6 +25,7 @@
 | [013 - Custom Product Pages + Visual Compare](013-custom-product-pages-and-visual-compare.md) | CPP CRUD + screenshot upload, Pillow before/after compositor, ASA→CPP ad-group wiring (`asa.assign_cpp` / `asa.unassign_cpp` / `asa.list_cpp_ads`) |
 | [014 - Reviews Module Security Findings](014-reviews-module-security-findings.md) | `/code` review-pass findings for Review Responses (cross-app IDOR, uncapped AI drafts, cap-signal + cache-namespace bugs) — report only, fixes paused pending the C1 ASC review→app linkage decision |
 | [015 - Product Page Optimization](015-product-page-optimization.md) | App Store Version Experiments (PPO): experiment CRUD + lifecycle, ≤3 treatments, treatment-localization screenshot upload; v1/v2 API split; results are ASC-Analytics-only (deep-link) |
+| [017 - IAP Lifecycle + Price Schedules](017-iap-lifecycle-and-price-schedules.md) | IAP create/update/delete write paths, immutables, `familySharable` spelling, the never-priced 404 probe, the whole-schedule-replace apply guard, and the clone/growth MCP tools |
 | [016 - Apple Ads Platform API (Research)](016-apple-ads-platform-api-research.md) | Research-only: Apple's new unified Ads API (v1.0, Aug 2026) supersedes the v5 Campaign Management API ASO-Light uses today, sunset Jan 26 2027 — comparison table + current-integration inventory, no migration work yet |
 
 ## Specs
@@ -49,6 +50,7 @@
 │   └── → 002-asc-integration.md (ASC API layer)
 │       ├── → 004-localization-management.md
 │       ├── → 005-subscription-management.md
+│       ├── → 017-iap-lifecycle-and-price-schedules.md (IAP twin of 005; price-schedule semantics)
 │       └── → 006-metadata-editor.md (app-level metadata; sibling of 004)
 └── 003-keyword-analysis.md
     └── → 006-metadata-editor.md (keyword coverage classifier)
@@ -80,6 +82,9 @@
 | Metadata router | `backend/app/api/v1/metadata.py` |
 | Metadata services | `backend/app/services/metadata/{client,snapshot,bulk,validation,coloring,translate}.py` |
 | Shared API deps | `backend/app/api/v1/_deps.py` (ownership check + ASC client factory) |
+| ASC error types | `backend/app/services/asc/errors.py` (local-guard exceptions — never a bare `ValueError`) |
+| MCP request context | `backend/app/mcp/context.py` (`resolve_app`, `current_user_claims`, `http_to_tool_error`) |
+| MCP clone / growth tools | `backend/app/mcp/tools/{clone,growth}.py` (swap-operation status + retry, growth advisor) |
 | Metadata page | `frontend/src/pages/MetadataPage.tsx` |
 | Cross-Localization page | `frontend/src/pages/CrossLocalizationPage.tsx` |
 | Metadata components | `frontend/src/components/metadata/*` |
@@ -90,4 +95,4 @@
 | ASA→CPP ad wiring | `backend/app/services/asa/cpp_ads.py` + `backend/app/mcp/tools/asa.py` (`asa.assign_cpp` / `asa.unassign_cpp` / `asa.list_cpp_ads`) |
 
 ---
-*Last updated: 2026-08-24*
+*Last updated: 2026-09-22*

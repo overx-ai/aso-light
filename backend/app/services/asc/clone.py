@@ -703,13 +703,13 @@ class IAPCloner:
             attrs = detail.get("attributes", {})
             iap_type = attrs.get("inAppPurchaseType") or source.iap_type
             review_note = attrs.get("reviewNote")
-            family_sharable = bool(attrs.get("familyShareable", False))
+            family_sharable = bool(attrs.get("familySharable", False))
             # ASC requires the IAP reference name unique per app — same
             # rule as subscriptions. Default to the bumped productId.
             effective_name = new_name or new_product_id
             steps[-1] = _step(
                 "read_source", "done",
-                detail=f"type={iap_type} familyShareable={family_sharable}",
+                detail=f"type={iap_type} familySharable={family_sharable}",
             )
         except ASCAPIError as exc:
             steps[-1] = _step("read_source", "failed", detail=str(exc))

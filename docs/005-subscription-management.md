@@ -1,7 +1,7 @@
 # 005 - Subscription Management
 
 **Prerequisites**: [002 - ASC Integration](002-asc-integration.md), [004 - Localization Management](004-localization-management.md)
-**Related**: [001 - Pricing System](001-pricing-system.md)
+**Related**: [001 - Pricing System](001-pricing-system.md), [017 - IAP Lifecycle](017-iap-lifecycle-and-price-schedules.md) — the IAP-side twin of this doc
 **Spec**: [006 - Subscription Management](specs/006-subscription-management.md)
 
 ## Overview

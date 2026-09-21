@@ -102,33 +102,65 @@ permissive on the existing FastAPI app.
 
 ## Tool reference
 
-Tools are namespaced `<module>.<action>`:
+Tool names are `<module>_<action>` — **underscores, never dots**. The
+Anthropic tool-name regex is `^[a-zA-Z0-9_-]{1,64}$`, so a dotted name breaks
+Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
+
+187 tools across 23 modules:
 
 | Module        | Tools | Domain                                                           |
 | ------------- | ----- | ---------------------------------------------------------------- |
 | `account`     | 1     | Show the authenticated PAT, user, owned ASC credentials, and visible apps |
+| `analytics`   | 6     | App Store analytics: enrol, sync, downloads / engagement / CPP performance |
 | `apps`        | 3     | List/get/sync apps                                               |
+| `asa`         | 20    | Apple Search Ads: orgs, campaigns, ad groups, keywords, negatives, CPP ads, reports |
 | `aso`         | 1     | Run the ASO audit checklist on an app                            |
 | `availability`| 2     | Get / update the app's available territories                     |
 | `clash`       | 1     | Side-by-side competitor comparison                               |
+| `clone`       | 3     | Read and retry clone/swap operations — the status channel for the long-running `swap_*` tools |
+| `cpp`         | 8     | Custom Product Pages: CRUD, localizations, screenshots           |
+| `experiment`  | 14    | Product Page Optimization: experiments, treatments, treatment localizations + screenshots |
+| `growth`      | 1     | Ranked growth recommendations (pricing gaps, ASO gaps)           |
 | `indices`     | 3     | GDP / PPP / BigMac / Spotify / Netflix index status & refresh    |
 | `keywords`    | 13    | iTunes search/suggestions, keyword tracking, rankings, competitors |
 | `keyword_intel`| 2    | Cached keyword volume/difficulty: read the cache, refresh the providers |
 | `metadata`    | 10    | App-info / version metadata, locale CRUD, bulk apply, AI translate |
 | `presets`     | 5     | Pricing-formula preset CRUD                                      |
-| `pricing`     | 44    | Subscription/IAP/group/intro-offer/price CRUD + sync + apply + price points + bulk export/import |
+| `pricing`     | 48    | Subscription/IAP/group/intro-offer lifecycle + price CRUD, sync, apply, price points, bulk export/import |
 | `revenuecat`  | 23    | RC credential, products, entitlements, offerings, packages       |
 | `reviews`     | 7     | List, draft reply, translate, post/edit/delete responses         |
 | `screenshots` | 4     | Main product page: per locale × display-type counts + gap worklist (`screenshots_list`), idempotent positional upload (`screenshots_upload`), delete + empty-set prune (`screenshots_delete`), CPP-vs-default montage (`screenshots_compare`) |
 | `swap`        | 3     | Swap subscription / IAP productId end-to-end + suggest new id    |
 | `territories` | 1     | List App Store territories with currency / GDP / VAT             |
-| `visibility`  | 7     | Watches, snapshots, anomalies, share-of-voice                    |
+| `visibility`  | 8     | Watches, snapshots, anomalies, share-of-voice                    |
+
+Every tool carries an MCP annotation so a client knows whether to prompt:
+83 are `readOnlyHint` (safe to call unattended, e.g. in plan mode), 37 are
+`destructiveHint` and go through the consent gate below, and the remaining 67
+are writes that still prompt. The classification lives in
+`backend/app/mcp/consent.py` (`READ_ONLY` / `DESTRUCTIVE`) as an **allowlist**,
+so anything unclassified fails closed — it keeps prompting rather than
+silently advertising itself as safe.
 
 Get the live, authoritative list at session start from your MCP client. Each
 tool ships with the same Pydantic schema the REST API uses, so arguments and
 return types are self-describing.
 
 ### High-leverage workflows
+
+**Create a priceable in-app purchase from scratch**
+1. `pricing_create_iap(app_id, product_id, name, iap_type)` — `productId` and
+   `iap_type` are immutable from here, so get them right
+2. `pricing_create_iap_localization(app_id, iap_id, locale, name, description)`
+3. `pricing_preview_iap_prices(app_id, iap_id, index_type, base_price)`
+4. `pricing_apply_iap_prices(app_id, iap_id, request)`
+
+**No sync step is needed** — the price-point tier ladder is a global cache shared
+by every app and product. Steps 3–4 work on an IAP created seconds earlier.
+`pricing_sync_iap_prices` reads *this* product's existing prices and is only
+required when a product already has prices that our cache has never seen; the
+apply path will tell you so with a 409. Background:
+[017-iap-lifecycle-and-price-schedules.md](017-iap-lifecycle-and-price-schedules.md).
 
 **Swap a subscription productId safely** — the showcase
 1. `pricing_list_subscription_groups(app_id)` to find the local subscription id
@@ -137,6 +169,9 @@ return types are self-describing.
 4. Read the returned `ios_checklist` — it tells the operator exactly what
    their iOS app must change. Full guidance:
    [006-product-swap-ios-integration.md](006-product-swap-ios-integration.md).
+5. `clone_get_operation(app_id, op_id)` to read per-step status afterwards, and
+   `clone_retry_operation` to resume a partial failure — a swap is a long
+   multi-step operation, and these are how you avoid going blind mid-flight.
 
 **Optimize keywords for a locale**
 1. `aso_aso_check(app_id)` → see metadata gaps
