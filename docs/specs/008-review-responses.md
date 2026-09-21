@@ -9,6 +9,10 @@ tasks: []
 
 # 008 - Review Responses
 
+> **TL;DR** — One pane for App Store reviews: list with filters, AI-drafted reply in the
+> reviewer's language, translate, and post/edit/delete the response. Drafts never
+> auto-post. Done — but see 014 for the security findings this shipped with.
+
 ## Problem
 
 Developers need to triage and reply to App Store reviews across territories and languages. Today they juggle ASC web → translator → ASC web. We want a single pane: list reviews, filter, click → see full text, get an AI-drafted reply in the reviewer's language, edit, post — all without leaving aso-light.

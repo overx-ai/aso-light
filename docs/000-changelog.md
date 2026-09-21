@@ -1,4 +1,14 @@
+---
+status: current
+created: 2026-04-26
+updated: 2026-07-21
+---
+
 # 000 - Changelog
+
+> **TL;DR** — Reverse-chronological record of what shipped, newest under `[Unreleased]`.
+> Consult it to find when a feature landed and which doc covers it; each entry links
+> out. Nothing to do unless you are about to cut a release.
 
 ## [Unreleased]
 

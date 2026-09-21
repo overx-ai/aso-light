@@ -1,8 +1,19 @@
+---
+status: current
+created: 2026-05-05
+updated: 2026-09-22
+---
+
 # 005 - Subscription Management
+
+> **TL;DR** — Full auto-renewable subscription lifecycle from the UI: groups,
+> subscriptions, group localizations, intro offers. `productId` and `subscriptionPeriod`
+> are immutable after create, and state transitions plus submit-for-review stay manual
+> in App Store Connect. Doc 017 is the IAP twin.
 
 **Prerequisites**: [002 - ASC Integration](002-asc-integration.md), [004 - Localization Management](004-localization-management.md)
 **Related**: [001 - Pricing System](001-pricing-system.md), [017 - IAP Lifecycle](017-iap-lifecycle-and-price-schedules.md) — the IAP-side twin of this doc
-**Spec**: [006 - Subscription Management](specs/006-subscription-management.md)
+**Spec**: [006 - Subscription Management](archive/specs/006-subscription-management.md)
 
 ## Overview
 

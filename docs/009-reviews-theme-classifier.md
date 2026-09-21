@@ -1,4 +1,14 @@
+---
+status: current
+created: 2026-06-01
+updated: 2026-06-01
+---
+
 # 009 — Reviews Theme Classifier + Reply Queue
+
+> **TL;DR** — LLM-assigned theme and severity (1-5) on every App Store review, cached
+> and read on each list call, driving a priority-sorted reply queue with filter chips.
+> Classification is advisory — it never posts or edits a response on its own.
 
 LLM-driven theme tagging for App Store reviews, plus the reply-queue UX that
 turns those tags into a triage workflow.

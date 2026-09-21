@@ -12,6 +12,10 @@ files: backend/app/api/v1/reviews.py, backend/app/mcp/tools/reviews.py
 
 # BUG 003 - Reviews module: translate swallows the quota signal into a generic 502
 
+> **TL;DR** — The reviews translate handler wraps everything in a blanket `except
+> Exception` to 502, so hitting the AI cap reports "service unavailable" instead of 429.
+> The metadata path maps it correctly; reviews should match. Still open.
+
 ## Symptom
 
 Unlike `app/api/v1/metadata.py:652-661` (which maps `TranslationQuotaExceededError → 429` and

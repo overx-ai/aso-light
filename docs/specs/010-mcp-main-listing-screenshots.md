@@ -9,6 +9,11 @@ tasks: []
 
 # 010 - Main Product-Page Screenshots over MCP
 
+> **TL;DR** — Exposes the already parent-agnostic screenshot service for the app's main
+> product page over MCP, so a multi-locale upload no longer needs fastlane or the ASC
+> web UI. The harder half was counting, not uploading — ASC's post-upload polling is
+> flaky. Done.
+
 ## Problem
 
 `backend/app/services/asc/screenshots.py` is already **parent-agnostic**: `upload_screenshot_to_localization`

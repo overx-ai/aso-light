@@ -1,4 +1,15 @@
+---
+status: current
+created: 2026-06-01
+updated: 2026-08-26
+---
+
 # 011 - Apple Search Ads Analytics
+
+> **TL;DR** — Ingests ASA campaigns, ad groups, keywords and search terms into local
+> tables and surfaces them in the Paid Search page and MCP tools. Apple serves only 90
+> days of search-term data, so these rows are the sole long-term record. Analytics reads
+> are scoped by credential AND app.
 
 **Prerequisites**: [002 - ASC Integration](002-asc-integration.md), [003 - Keyword Analysis](003-keyword-analysis.md)
 **Related**: [007 - MCP Integration](007-mcp-integration.md), [010 - Keyword Intelligence](010-keyword-intelligence.md), [012 - Growth Recommendations](012-growth-recommendations.md)
@@ -164,3 +175,19 @@ ASA credential management lives in the Settings page (under the existing credent
 - **Apple rate limits**: 429 → backoff up to 5 retries (separate from the ASC 150ms throttle).
 - **Date range**: search-term granularity data older than 90 days is not available from the ASA API.
 - **adam_id linkage**: `ASACampaign.app_adam_id` (Apple's numeric app ID) is matched against `App.asc_app_id` to scope per-app queries; unlinked campaigns show in credential-level views only.
+
+## Follow-ups
+
+Carried over from the 2026-05-08 design doc when it was folded into this one
+(audit 020). All three were non-blocking then and remain open:
+
+- **`archived_at` cleanup policy** — keep ASA history forever, or compact
+  metrics older than 90 days? Apple only serves 90 days of search-term
+  granularity, so our rows are the sole long-term record.
+- **Partial index on `asa_metric_daily`** for `dim_kind='KEYWORD'`, once row
+  counts justify it.
+- **Expose `asa_sync_operation` over MCP** as `asa_list_sync_operations`,
+  mirroring the `clone_*` operation tools added in
+  [017](017-iap-lifecycle-and-price-schedules.md). The clone trio exists
+  precisely because an agent that starts a long operation needs to read its
+  status; ASA sync has the same shape and no such tool.

@@ -1,4 +1,14 @@
+---
+status: current
+created: 2026-04-26
+updated: 2026-09-22
+---
+
 # Documentation Index
+
+> **TL;DR** — The map of this documentation tree: quick links, every feature doc with a
+> one-line topic, the open spec queue, and a key-files reference. Start here when you do
+> not know which doc you need.
 
 ## Quick Links
 
@@ -26,6 +36,7 @@
 | [014 - Reviews Module Security Findings](014-reviews-module-security-findings.md) | `/code` review-pass findings for Review Responses (cross-app IDOR, uncapped AI drafts, cap-signal + cache-namespace bugs) — report only, fixes paused pending the C1 ASC review→app linkage decision |
 | [015 - Product Page Optimization](015-product-page-optimization.md) | App Store Version Experiments (PPO): experiment CRUD + lifecycle, ≤3 treatments, treatment-localization screenshot upload; v1/v2 API split; results are ASC-Analytics-only (deep-link) |
 | [017 - IAP Lifecycle + Price Schedules](017-iap-lifecycle-and-price-schedules.md) | IAP create/update/delete write paths, immutables, `familySharable` spelling, the never-priced 404 probe, the whole-schedule-replace apply guard, and the clone/growth MCP tools |
+| [020 - Documentation Audit (2026-09-22)](020-documentation-audit.md) | Tree map, what was archived/deleted/merged, and the open judgment calls |
 | [016 - Apple Ads Platform API (Research)](016-apple-ads-platform-api-research.md) | Research-only: Apple's new unified Ads API (v1.0, Aug 2026) supersedes the v5 Campaign Management API ASO-Light uses today, sunset Jan 26 2027 — comparison table + current-integration inventory, no migration work yet |
 
 ## Specs
@@ -34,8 +45,6 @@
 |------|-------|--------|
 | [004 - Cache Apple Price Points](specs/004-cache-apple-price-points.md) | DB caching for ASC price data | approved |
 | [005 - GDP-Bracket Pricing](specs/005-gdp-bracket-pricing.md) | Absolute-price tiers driven by World Bank GDP/capita PPP | done |
-| [006 - Subscription Management](specs/006-subscription-management.md) | Group / subscription / intro-offer write paths | done |
-| [007 - Metadata Editor + Cross-Loc](specs/007-metadata-editor-and-cross-loc.md) | Phase 5 — metadata editor, AI translation, cross-loc grid | done |
 | [008 - Review Responses](specs/008-review-responses.md) | Read, AI-suggest, translate, post developer replies | done — see [014](014-reviews-module-security-findings.md) for unresolved C1 IDOR |
 | [009 - Keyword Visibility Tracker](specs/009-asa-analytics.md) | Search Ads-style competitor intel / share-of-voice | draft |
 | [010 - MCP Main-Listing Screenshots](specs/010-mcp-main-listing-screenshots.md) | `screenshots_list` / `_upload` / `_delete` for the main product page | done |
@@ -57,7 +66,7 @@
 011-apple-search-ads-analytics.md
     └── → 013-custom-product-pages-and-visual-compare.md (CPP CRUD + visual compare + ASA→CPP wiring)
         └── → 015-product-page-optimization.md (PPO / App Store Version Experiments — CPP's A/B-testing sibling; shares the screenshot machinery)
-010-audit.md (planned — summarizes 001-009)
+020-documentation-audit.md (010 was taken by a feature doc)
 ```
 
 ## Key Files Reference
@@ -95,4 +104,4 @@
 | ASA→CPP ad wiring | `backend/app/services/asa/cpp_ads.py` + `backend/app/mcp/tools/asa.py` (`asa.assign_cpp` / `asa.unassign_cpp` / `asa.list_cpp_ads`) |
 
 ---
-*Last updated: 2026-09-22*
+*Last updated: 2026-09-22 — see [020](020-documentation-audit.md)*

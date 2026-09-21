@@ -1,4 +1,15 @@
+---
+status: current
+created: 2026-04-26
+updated: 2026-08-26
+---
+
 # 003 - Keyword Analysis
+
+> **TL;DR** — Keyword tracking built on unofficial iTunes endpoints: autocomplete for
+> suggestions, search position for rank, static data for cross-localization. Apple
+> Search Ads popularity is not wired in here — see 010 and 011. Ranks are best-effort,
+> not guaranteed.
 
 **Prerequisites**: [000 - Architecture](000-architecture.md)
 

@@ -9,6 +9,10 @@ tasks: []
 
 # 005 - GDP-Bracket Pricing Strategy
 
+> **TL;DR** — Adds a `gdp_brackets` strategy setting absolute prices per income tier
+> rather than scaling proportionally from one USD baseline, with a special-country list
+> taking priority over GDP thresholds. Done and shipped.
+
 ## Problem
 Existing pricing strategies (PPP, Big Mac, Netflix, Spotify, exchange rate) all do **proportional** scaling from a single USD baseline. There's no way to set **absolute prices per tier** — e.g. "all top-income countries pay $9.99, mid-income $4.99, low-income $1.99, and a custom country list (RU/BY/KZ/UA/PL) pays $2.99 regardless of GDP."
 

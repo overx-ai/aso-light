@@ -1,4 +1,14 @@
+---
+status: current
+created: 2026-06-16
+updated: 2026-06-16
+---
+
 # 013 — Custom Product Pages + Visual Old-vs-New Screenshot Compare
+
+> **TL;DR** — Custom Product Page CRUD plus screenshot upload, a Pillow before/after
+> compositor for judging creative, and ASA wiring so each ad group serves a tailored
+> page. Driven by Refresher's ~3.45% conversion, where screenshots were the bottleneck.
 
 ## Context & goal
 

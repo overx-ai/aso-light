@@ -1,4 +1,14 @@
+---
+status: current
+created: 2026-04-26
+updated: 2026-08-26
+---
+
 # 000 - Tasks
+
+> **TL;DR** — The backlog: Active, Completed and Backlog tables with owner, status and
+> priority. Four items are still pending, all low-to-medium priority. Update the table
+> when you start or finish work — this is the only place task state lives.
 
 ## Active
 

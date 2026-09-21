@@ -1,4 +1,15 @@
+---
+status: current
+created: 2026-04-26
+updated: 2026-08-27
+---
+
 # 000 - Architecture
+
+> **TL;DR** — Self-hosted ASO SaaS: FastAPI + SQLAlchemy async backend, React 19 +
+> Mantine frontend, SQLite in dev and Postgres in prod. Prices across 175+ territories
+> via economic multipliers, plus keyword tracking. Start here — every other doc assumes
+> this component map.
 
 ## Overview
 

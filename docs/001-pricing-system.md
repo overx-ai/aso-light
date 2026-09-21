@@ -1,4 +1,15 @@
+---
+status: current
+created: 2026-04-26
+updated: 2026-09-22
+---
+
 # 001 - Pricing System
+
+> **TL;DR** — How a suggested price is computed and applied: index or FX rate to VAT to
+> currency rounding to the nearest Apple price point, with a +/-50% safety band on
+> apply. Covers presets, the filesystem tier cache, manual pins, and export/import. Read
+> before touching any pricing path.
 
 **Prerequisites**: [000 - Architecture](000-architecture.md)
 

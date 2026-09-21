@@ -1,7 +1,18 @@
+---
+status: current
+created: 2026-05-09
+updated: 2026-09-22
+---
+
 # 007 — MCP Integration
 
+> **TL;DR** — The MCP server at `/mcp` exposing the full REST surface as 187 annotated
+> tools, authenticated with Personal Access Tokens. Read-only tools skip the approval
+> prompt; destructive ones go through a per-operation consent gate. Includes client
+> config and the high-leverage workflows.
+
 ASO-Light ships a Model Context Protocol (MCP) server mounted on the FastAPI
-backend at `/mcp`. It exposes the project's full REST surface (~124 tools
+backend at `/mcp`. It exposes the project's full REST surface (187 tools
 across apps, pricing, metadata, keywords, reviews, visibility, RevenueCat,
 ASO audit, swap, etc.) so an LLM client (Claude Desktop, OpenAI MCP client,
 custom agents) can drive the product programmatically.

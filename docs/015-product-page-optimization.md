@@ -1,4 +1,15 @@
+---
+status: current
+created: 2026-07-21
+updated: 2026-07-21
+---
+
 # 015 — Product Page Optimization (PPO / App Store Version Experiments)
+
+> **TL;DR** — Apple's built-in A/B test of the default product page: up to 3 treatments
+> varying screenshots, previews and icon, with Apple splitting live traffic. Experiment
+> CRUD is v2, treatments are v1. Results are ASC-Analytics-only, so the UI deep-links
+> out — there is no results tool.
 
 ## Context & goal
 

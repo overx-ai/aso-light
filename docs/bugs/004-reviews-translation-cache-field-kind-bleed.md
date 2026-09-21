@@ -12,6 +12,11 @@ files: backend/app/api/v1/reviews.py, backend/app/mcp/tools/reviews.py, backend/
 
 # BUG 004 - Reviews module: translation-cache cross-feature bleed via reused field_kind
 
+> **TL;DR** — Review translation reuses the metadata `"description"` field kind, so
+> identical text cached from an app description is returned for a review body and vice
+> versa — content bleed across features within one app. Needs its own field kind. Still
+> open.
+
 ## Symptom
 
 Review translate (`app/api/v1/reviews.py:305`, `field_kind="description"  # type: ignore`, MCP mirror)

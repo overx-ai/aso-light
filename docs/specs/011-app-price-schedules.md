@@ -4,9 +4,15 @@ title: "App-level price schedules (paid apps) — read, preview, apply"
 status: draft
 created: 2026-08-17
 tasks: []
+updated: 2026-08-26
 ---
 
+
 # 011 - App-Level Price Schedules
+
+> **TL;DR** — Deliberately draft. App-level price schedules matter only if a paid app
+> ships, and the whole portfolio is free-with-subscription. The design is ready; promote
+> to approved the day that changes. Building it now would be speculative.
 
 > **Deliberately `draft`, not `approved`.** This is only needed if a **paid** app ships. Everything in the
 > current portfolio is free-with-subscription, which the existing 44 pricing tools already cover fully.

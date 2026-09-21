@@ -1,8 +1,19 @@
+---
+status: current
+created: 2026-05-05
+updated: 2026-08-26
+---
+
 # 006 - Metadata Editor + Cross-Localization + AI Translation
+
+> **TL;DR** — Per-locale App Store metadata editing with bulk fan-out and diff preview,
+> optional Claude translation, and a cross-localization grid showing Apple's
+> secondary-language indexing. Translations are suggestions only — nothing auto-applies.
+> Editable fields depend on version state.
 
 **Prerequisites**: [002 - ASC Integration](002-asc-integration.md), [003 - Keyword Analysis](003-keyword-analysis.md), [004 - Localization Management](004-localization-management.md)
 **Related**: [001 - Pricing System](001-pricing-system.md) (mirror preview-then-apply pattern)
-**Spec**: [007 - Metadata Editor + Cross-Loc](specs/007-metadata-editor-and-cross-loc.md)
+**Spec**: [007 - Metadata Editor + Cross-Loc](archive/specs/007-metadata-editor-and-cross-loc.md)
 
 ## Overview
 
@@ -211,7 +222,7 @@ For an indie growing from zero downloads: filling secondary locales is high-leve
 
 ## See Also
 
-- [Spec 007](specs/007-metadata-editor-and-cross-loc.md) — Implementation plan with full task breakdown
+- [Spec 007](archive/specs/007-metadata-editor-and-cross-loc.md) — Implementation plan with full task breakdown
 - [002 - ASC Integration](002-asc-integration.md) — `ASCClient`, JWT auth, rate limiter
 - [003 - Keyword Analysis](003-keyword-analysis.md) — Cross-localization data, KeywordTracking model
 - [004 - Localization Management](004-localization-management.md) — Subscription/IAP localization (sibling system)

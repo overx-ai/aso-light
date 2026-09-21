@@ -4,9 +4,15 @@ title: "Keyword visibility tracker (Search Ads-style competitor intel)"
 status: draft
 created: 2026-05-06
 tasks: []
+updated: 2026-05-06
 ---
 
+
 # 009 - Keyword Visibility Tracker
+
+> **TL;DR** — Draft. A keyword-visibility tracker shaped like aso.dev's ASA intel but
+> powered by organic SERP data, because the public iTunes API exposes no paid
+> placements. Not built. Doc 011 covers the real ASA pipeline that was built instead.
 
 ## Problem
 

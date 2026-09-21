@@ -1,4 +1,15 @@
+---
+status: current
+created: 2026-08-26
+updated: 2026-08-26
+---
+
 # 016 - Apple Ads Platform API (Research)
+
+> **TL;DR** — Research only, no code changed. Apple's unified Ads Platform API (v1.0,
+> Aug 2026) supersedes the v5 Campaign Management API this project uses, which sunsets
+> Jan 26 2027. Comparison table plus an inventory of what would need migrating when that
+> work is scheduled.
 
 **Prerequisites**: [011 - Apple Search Ads Analytics](011-apple-search-ads-analytics.md)
 **Related**: [002 - ASC Integration](002-asc-integration.md)

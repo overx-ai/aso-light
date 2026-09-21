@@ -9,6 +9,11 @@ tasks: []
 
 # 004 - Cache Apple Price Points in DB
 
+> **TL;DR** — Superseded 2026-08-26. The unfiltered price-point fetch it targeted is
+> already solved by the filesystem `PricePointCache`, which is the documented
+> architecture; the DB model this proposed was removed as dead code. Kept for the
+> rationale only — do not implement.
+
 > **Superseded 2026-08-26**: the problem this spec targets (`get_price_points()` hanging on
 > unfiltered ASC price-point fetches) is already solved by the filesystem-based `PricePointCache`
 > (`backend/app/services/asc/price_point_cache.py`), the project's documented architecture choice

@@ -3,6 +3,7 @@
 | backend | backend | working tree | 2026-08-27 | fastmcp 3.2.4 | Destructive-operation audit — see below |
 | frontend | frontend | — | — | — | — |
 | (root)  | .    | — | — | — | — |
+| (docs)  | docs | — | 2026-09-22 | — | 33 docs @ 2026-09-22 — audit [020](docs/020-documentation-audit.md) |
 
 ## 2026-08-27 — Destructive MCP operations
 

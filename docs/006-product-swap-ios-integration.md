@@ -1,4 +1,15 @@
+---
+status: current
+created: 2026-05-09
+updated: 2026-05-09
+---
+
 # 006 — Product Swap & iOS Integration
+
+> **TL;DR** — What the iOS app must change when a productId is swapped. Using RevenueCat
+> offerings: usually nothing. Using hardcoded productIds or direct StoreKit: ship a new
+> version. Either way, entitlement checks must accept old and new ids during the
+> transition window.
 
 What the iOS app must change when a subscription or IAP `productId` is swapped
 in App Store Connect via this tool.

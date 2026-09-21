@@ -1,4 +1,14 @@
+---
+status: current
+created: 2026-06-16
+updated: 2026-06-16
+---
+
 # 014 — Review Responses Module: Security & Quality Findings
+
+> **TL;DR** — A `/code` review of the Reviews module that found four defects; C1, the
+> cross-app IDOR, is fixed (bug 001). C2, C3 and C4 remain open as bugs 002-004. Report
+> only — read it before touching reviews code, then work the bug docs.
 
 > **Status:** Findings only — **no code changed.** Produced by a `/code` review pass
 > on 2026-06-16. The Reviews module fixes were intentionally paused pending a

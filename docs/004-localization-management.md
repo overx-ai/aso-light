@@ -1,4 +1,14 @@
+---
+status: current
+created: 2026-04-26
+updated: 2026-04-26
+---
+
 # 004 - Localization Management
+
+> **TL;DR** — Subscription and IAP display names and descriptions, pushed straight to
+> ASC with no local storage. Apple caps name at 30 chars and description at 55; the
+> frontend enforces both before save. For app-level metadata see 006 instead.
 
 **Prerequisites**: [002 - ASC Integration](002-asc-integration.md)
 **Related**: [001 - Pricing System](001-pricing-system.md)

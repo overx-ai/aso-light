@@ -9,6 +9,10 @@ tasks: []
 
 # 012 - Bulk Locale Creation + Keyword-Research Fixes
 
+> **TL;DR** — Makes bulk metadata able to create locales rather than update-only, which
+> blocked a 5-to-36 locale expansion, and fixes three latent keyword-research bugs found
+> alongside it. Done.
+
 ## Problem
 
 A real 36-locale App Store expansion (Refresher, `app_id=1`: 5 live locales → 36) ran head-first into
@@ -215,7 +219,7 @@ metadata_get_locale(app_id=1, locale=<each>)   ← read back; a 2xx is not verif
 
 - [010 - Main product-page screenshots over MCP](010-mcp-main-listing-screenshots.md) — R4 is its
   implementation.
-- [007 - Metadata editor and cross-localization](007-metadata-editor-and-cross-loc.md) — the bulk
+- [007 - Metadata editor and cross-localization](../archive/specs/007-metadata-editor-and-cross-loc.md) — the bulk
   fan-out this extends.
 - [011 - Apple Search Ads Analytics](../011-apple-search-ads-analytics.md) — R6 fixes a scoping bug in
   the search-term report described there.

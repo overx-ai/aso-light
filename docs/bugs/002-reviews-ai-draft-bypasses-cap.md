@@ -12,6 +12,11 @@ files: backend/app/api/v1/reviews.py, backend/app/mcp/tools/reviews.py, backend/
 
 # BUG 002 - Reviews module: AI draft path bypasses the 500-call/month cap
 
+> **TL;DR** — `draft_review_reply` calls the translator directly instead of
+> `translate_with_cache`, so the documented 500-call/30-day per-app AI cap is never
+> checked or counted. Every draft is an uncapped, uncached Anthropic call — a spend-DoS
+> risk. Still open.
+
 ## Symptom
 
 `draft_review_reply` (`app/api/v1/reviews.py:234-242`, MCP mirror `app/mcp/tools/reviews.py:236-244`)

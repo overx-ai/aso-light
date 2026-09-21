@@ -1,4 +1,15 @@
+---
+status: current
+created: 2026-06-01
+updated: 2026-08-26
+---
+
 # 010 — Keyword Intelligence
+
+> **TL;DR** — A provider ABC feeding normalized volume and difficulty per keyword/locale
+> into a cache table. Two free Apple-Search-Ads-backed providers ship today; paid ones
+> (MobileAction, AppTweak) slot in behind the same interface. Consumers read the cache,
+> never a provider.
 
 A pluggable provider abstraction that feeds normalized **volume** + **difficulty**
 scores per keyword/locale into a cache table. Stage 0 ships two free providers

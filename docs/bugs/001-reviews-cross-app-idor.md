@@ -12,6 +12,10 @@ files: backend/app/api/v1/reviews.py, backend/app/mcp/tools/reviews.py, backend/
 
 # BUG 001 - Reviews module: cross-app IDOR on review_id/response_id
 
+> **TL;DR** — ASC scopes review endpoints to the whole Apple team, not per app, so bare
+> `review_id`/`response_id` let a caller reach another app's reviews. Fixed by a
+> DB-backed ownership map asserted before every read, mutate and delete.
+
 ## Symptom
 
 ASC scopes `/v1/customerReviews/*` and `/v1/customerReviewResponses/*` to the whole Apple

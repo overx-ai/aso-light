@@ -1,4 +1,14 @@
+---
+status: current
+created: 2026-06-01
+updated: 2026-06-01
+---
+
 # 012 - Growth Recommendations Advisor
+
+> **TL;DR** — A prioritized recommendation feed built by cross-referencing metadata,
+> keywords, paid search, reviews and pricing. Pure signal-based rules with evidence keys
+> and deep links — no AI generation. Exposed over MCP as `growth_recommendations`.
 
 **Prerequisites**: [003 - Keyword Analysis](003-keyword-analysis.md), [006 - Metadata Editor + Cross-Loc](006-metadata-editor.md), [009 - Reviews Theme Classifier](009-reviews-theme-classifier.md), [010 - Keyword Intelligence](010-keyword-intelligence.md), [011 - Apple Search Ads Analytics](011-apple-search-ads-analytics.md)
 **Related**: [001 - Pricing System](001-pricing-system.md)

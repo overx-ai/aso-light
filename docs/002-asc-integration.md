@@ -1,4 +1,15 @@
+---
+status: current
+created: 2026-04-26
+updated: 2026-04-26
+---
+
 # 002 - App Store Connect API Integration
+
+> **TL;DR** — The ASC API layer: ES256 JWT auth via PyJWT, a 150ms rate limiter with 429
+> backoff, and pre-signed S3 uploads that must not carry a Bearer token. Subscriptions
+> are v1, IAPs need v2 for localizations, price schedules and price points. Private keys
+> never leave the server.
 
 **Prerequisites**: [000 - Architecture](000-architecture.md)
 **Related**: [001 - Pricing System](001-pricing-system.md), [004 - Localization Management](004-localization-management.md)
