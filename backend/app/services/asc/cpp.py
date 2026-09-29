@@ -44,6 +44,10 @@ _EDITABLE_VERSION_STATES = (
 )
 
 
+def _cpp_version_state(version: dict) -> str | None:
+    return (version.get("attributes") or {}).get("state")
+
+
 class CPPVersionNotEditableError(shots.NotEditableError):
     def __init__(self, subject: str, states: list[str | None]) -> None:
         self.states = sorted({state or "unknown" for state in states})
@@ -306,16 +310,15 @@ class ASCCustomProductPageService:
         versions = await self.list_versions(cpp_id)
         for state in _EDITABLE_VERSION_STATES:
             for version in versions:
-                attrs = version.get("attributes") or {}
-                if attrs.get("state") == state:
+                if _cpp_version_state(version) == state:
                     return shots.EditableVersion(
                         id=version["id"],
                         state=state,
-                        version_string=attrs.get("version"),
+                        version_string=(version.get("attributes") or {}).get("version"),
                     )
         raise CPPVersionNotEditableError(
             f"Custom Product Page {cpp_id}",
-            [(version.get("attributes") or {}).get("state") for version in versions],
+            [_cpp_version_state(version) for version in versions],
         )
 
     async def get_editable_version_id(self, cpp_id: str) -> str:
@@ -328,13 +331,13 @@ class ASCCustomProductPageService:
             params={"include": "appCustomProductPageVersion"},
         )
         states = [
-            (item.get("attributes") or {}).get("state")
+            _cpp_version_state(item)
             for item in response.get("included", [])
             if item.get("type") == "appCustomProductPageVersions"
         ]
         if not any(state in _EDITABLE_VERSION_STATES for state in states):
             raise CPPVersionNotEditableError(
-                f"CPP localization {localization_id}", states
+                f"CPP localization {localization_id}", states or [None]
             )
 
     async def list_localizations(self, version_id: str) -> list[dict]:
@@ -414,16 +417,15 @@ class ASCCustomProductPageService:
         cpp = await self.create_cpp(asc_app_id, name, locale=locale, visible=True)
         cpp_id = cpp["id"]
 
-        version_id = await self.get_editable_version_id(cpp_id)
-        localization_id = await self.find_or_create_localization_id(
-            version_id, locale
-        )
-
-        # If any screenshot upload fails the page is left half-populated (and
-        # could still be attached to an ASA ad group), so best-effort delete the
-        # freshly-created CPP before surfacing the error to the caller.
+        # If any step after the create fails the page is left empty or
+        # half-populated (and could still be attached to an ASA ad group), so
+        # best-effort delete the freshly-created CPP before surfacing the error.
         uploaded_count = 0
         try:
+            version_id = await self.get_editable_version_id(cpp_id)
+            localization_id = await self.find_or_create_localization_id(
+                version_id, locale
+            )
             for file_name, file_bytes in files:
                 await self.upload_screenshot_to_cpp(
                     localization_id, display_type, file_bytes, file_name

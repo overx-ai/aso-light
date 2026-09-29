@@ -264,6 +264,31 @@ def test_a_rejected_version_is_editable_and_carries_its_version_string():
     )
 
 
+def test_a_localization_whose_version_is_not_returned_is_refused():
+    svc, _client = _service({
+        ("GET", "/appCustomProductPageLocalizations/loc-1"): {
+            "data": {"id": "loc-1"},
+        },
+    })
+    with pytest.raises(CPPVersionNotEditableError, match="found: unknown"):
+        run_async(svc.assert_localization_editable("loc-1"))
+
+
+def test_create_with_screenshots_deletes_a_page_it_cannot_populate():
+    """A new page whose version is not editable is removed, not orphaned."""
+    svc, client = _service({
+        ("POST", "/appCustomProductPages"): {"data": {"id": "cpp-new"}},
+        ("GET", "/appCustomProductPages/cpp-new/appCustomProductPageVersions"): {
+            "data": [{"id": "ver-1", "attributes": {"state": "IN_REVIEW"}}],
+        },
+    })
+    with pytest.raises(CPPVersionNotEditableError):
+        run_async(svc.create_cpp_with_screenshots(
+            "app-1", "Page", "en-US", "APP_IPHONE_67", [("01.png", b"png")],
+        ))
+    assert ("DELETE", "/appCustomProductPages/cpp-new", None) in client.calls
+
+
 def test_find_or_create_localization_reuses_matching_locale():
     """cpp.ensure_localization idempotency: an existing locale is reused (no POST)."""
     path = (

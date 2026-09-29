@@ -9,14 +9,19 @@ chain), builds an :class:`ASCClient`, and converts ASC API failures into
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 
 from fastmcp.exceptions import ToolError
 
 from app.api.v1._deps import _get_asc_client_for_app
 from app.mcp.context import resolve_app, session_scope
 from app.mcp.server import mcp
+from app.mcp.tools.screenshots import (
+    asc_tool_error,
+    check_delete_selectors,
+    delete_from_localization,
+    run_screenshot_sync,
+)
+from app.models.app import App
 from app.schemas.cpp import (
     CPPEnsureLocalizationResponse,
     CPPListResponse,
@@ -25,12 +30,6 @@ from app.schemas.cpp import (
     ScreenshotSet,
     ScreenshotSetListResponse,
 )
-from app.mcp.tools.screenshots import (
-    check_delete_selectors,
-    delete_from_localization,
-    run_screenshot_sync,
-)
-from app.models.app import App
 from app.schemas.screenshots import (
     ScreenshotDeleteResult,
     ScreenshotSyncResult,
@@ -39,29 +38,9 @@ from app.schemas.screenshots import (
 )
 from app.services.asc.client import ASCClient
 from app.services.asc.cpp import ASCCustomProductPageService, CPPScreenshotService
-from app.services.asc.errors import ASCAPIError
-from app.services.asc.screenshots import (
-    ASCVersionScreenshotService,
-    NotEditableError,
-    SyncTarget,
-)
+from app.services.asc.screenshots import ASCVersionScreenshotService, SyncTarget
 
 logger = logging.getLogger(__name__)
-
-
-@asynccontextmanager
-async def _asc_tool_error() -> AsyncIterator[None]:
-    """Translate an ``ASCAPIError`` raised within the block into a ``ToolError``.
-
-    Every CPP tool funnels its ASC call through this so Apple's failure
-    surfaces to MCP clients as a single-line message, never a traceback.
-    """
-    try:
-        yield
-    except NotEditableError as exc:
-        raise ToolError(exc.message)
-    except ASCAPIError as exc:
-        raise ToolError(f"ASC API error: {exc.message}")
 
 
 def _to_cpp_response(resource: dict) -> CPPResponse:
@@ -86,7 +65,7 @@ async def list_cpps(app_id: int) -> CPPListResponse:
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
             service = ASCCustomProductPageService(client)
-            async with _asc_tool_error():
+            async with asc_tool_error():
                 resources = await service.list_cpps(app.asc_app_id)
         return CPPListResponse(
             items=[_to_cpp_response(r) for r in resources]
@@ -100,7 +79,7 @@ async def get_cpp(app_id: int, cpp_id: str) -> CPPResponse:
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
             service = ASCCustomProductPageService(client)
-            async with _asc_tool_error():
+            async with asc_tool_error():
                 resource = await service.get_cpp(cpp_id)
         return _to_cpp_response(resource)
 
@@ -113,13 +92,13 @@ async def create_cpp(
 
     ASC requires the first version + a localization inline on create, so the
     page is seeded with a ``locale`` localization (default ``en-US``); add more
-    locales with ``cpp.ensure_localization``.
+    locales with ``cpp_ensure_localization``.
     """
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
             service = ASCCustomProductPageService(client)
-            async with _asc_tool_error():
+            async with asc_tool_error():
                 resource = await service.create_cpp(
                     app.asc_app_id, name, locale=locale, visible=visible,
                 )
@@ -138,7 +117,7 @@ async def update_cpp(
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
             service = ASCCustomProductPageService(client)
-            async with _asc_tool_error():
+            async with asc_tool_error():
                 try:
                     resource = await service.update_cpp(
                         cpp_id, name=name, visible=visible,
@@ -155,7 +134,7 @@ async def delete_cpp(app_id: int, cpp_id: str) -> dict[str, bool]:
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
             service = ASCCustomProductPageService(client)
-            async with _asc_tool_error():
+            async with asc_tool_error():
                 await service.delete_cpp(cpp_id)
         return {"deleted": True}
 
@@ -171,7 +150,7 @@ async def ensure_cpp_localization(
 ) -> CPPEnsureLocalizationResponse:
     """Resolve (or create) a CPP localization, returning its ``localization_id``.
 
-    ``cpp.upload_screenshot`` needs an ``appCustomProductPageLocalizations`` id,
+    ``cpp_upload_screenshot`` needs an ``appCustomProductPageLocalizations`` id,
     which otherwise requires manually walking the CPP's versions then
     localizations. This resolves the CPP's editable (draft) version, reuses the
     localization whose ``locale`` matches, and creates one if absent — so a
@@ -182,7 +161,7 @@ async def ensure_cpp_localization(
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
             service = ASCCustomProductPageService(client)
-            async with _asc_tool_error():
+            async with asc_tool_error():
                 version_id = await service.get_editable_version_id(cpp_id)
                 localization_id = await service.find_or_create_localization_id(
                     version_id, locale,
@@ -213,7 +192,7 @@ async def list_cpp_screenshots(
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
             service = ASCCustomProductPageService(client)
-            async with _asc_tool_error():
+            async with asc_tool_error():
                 sets = await service.get_cpp_screenshots(localization_id)
         return ScreenshotSetListResponse(
             items=[
@@ -267,7 +246,7 @@ async def upload_cpp_screenshot(
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
             service = ASCCustomProductPageService(client)
-            async with _asc_tool_error():
+            async with asc_tool_error():
                 await service.assert_localization_editable(localization_id)
                 resource = await service.upload_screenshot_to_cpp(
                     localization_id,
@@ -369,7 +348,7 @@ async def delete_cpp_screenshots(
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
             service = CPPScreenshotService(client)
-            async with _asc_tool_error():
+            async with asc_tool_error():
                 version = await service.cpp.get_editable_version(cpp_id)
                 localizations = await service.localizations_by_locale(version.id)
                 localization_id = localizations.get(locale)

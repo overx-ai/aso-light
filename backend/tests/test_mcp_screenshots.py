@@ -1891,6 +1891,33 @@ def test_cpp_sync_apply_replaces_as_a_unit_and_creates_the_missing_localization(
     assert result.inventory.gaps == []
 
 
+def test_cpp_sync_creates_a_locale_once_for_all_its_display_types(
+    export, monkeypatch
+):
+    out, md5s = export
+    ipad = _png(out / "fr-FR" / "10.png", IPAD_13)
+    client = _cpp_sync_client(md5s)
+    list_path = f"/appCustomProductPageVersions/{CPP_VERSION}/appCustomProductPageLocalizations"
+
+    result = _cpp_sync(
+        monkeypatch,
+        client,
+        out,
+        display_types=["APP_IPHONE_67", "APP_IPAD_PRO_3GEN_129"],
+        apply=True,
+    )
+
+    fr_loc = client.cpp_localizations[CPP_VERSION]["fr-FR"]
+    assert _cpp_checksums(client, fr_loc) == md5s["fr-FR"]
+    fr_ipad = client.set_for(fr_loc, "APP_IPAD_PRO_3GEN_129")
+    assert [client.screenshots[s]["checksum"] for s in fr_ipad["shots"]] == [ipad]
+    # bind reads the list once, the first fr-FR step once; the second reuses it.
+    assert client.calls.count(("GET", list_path)) == 2
+    assert client.calls.count(("POST", "/appCustomProductPageLocalizations")) == 1
+    counts = {(row.locale, row.display_type): row.count for row in result.rows}
+    assert counts[("fr-FR", "APP_IPAD_PRO_3GEN_129")] == 1
+
+
 def test_cpp_sync_rerun_is_all_skip_with_zero_writes(export, monkeypatch):
     out, md5s = export
     client = _cpp_sync_client(md5s)

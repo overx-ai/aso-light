@@ -629,9 +629,18 @@ class LocalizationScreenshotService:
             if display_type not in synced
         }
 
-    async def apply_sync_step(
-        self, step: SyncStep, version_id: str | None = None
-    ) -> None:
+    async def apply_sync(self, steps: list[SyncStep], version_id: str) -> None:
+        """Apply every non-``skip`` step. A localization created for one step
+        is handed to its locale's other steps rather than looked up again."""
+        for step in steps:
+            if step.action == "skip":
+                continue
+            await self.apply_sync_step(step, version_id)
+            for sibling in steps:
+                if sibling.locale == step.locale and sibling.localization_id is None:
+                    sibling.localization_id = step.localization_id
+
+    async def apply_sync_step(self, step: SyncStep, version_id: str) -> None:
         """Make one set exactly the step's files, in order, slot by slot.
 
         Each changed slot's old asset is deleted before its replacement is
@@ -664,7 +673,7 @@ class LocalizationScreenshotService:
             await self.delete_screenshot(extra["id"])
         await self.reorder_set(set_id, order)
 
-    async def _ensure_step_set(self, step: SyncStep, version_id: str | None) -> str:
+    async def _ensure_step_set(self, step: SyncStep, version_id: str) -> str:
         if step.localization_id is None:
             step.localization_id = await self.ensure_localization(
                 version_id, step.locale
@@ -903,7 +912,7 @@ def read_planned_bytes(export_file: ExportFile) -> bytes:
     if source_checksum(data) != export_file.md5:
         raise ExportChangedError(
             f"{export_file.path} changed after it was planned and was not "
-            "uploaded; rerun screenshots_sync."
+            "uploaded; rerun the sync."
         )
     return data
 

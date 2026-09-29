@@ -73,8 +73,8 @@ _VERIFY_DELAY_SECONDS = 1.0
 
 
 @asynccontextmanager
-async def _asc_tool_error() -> AsyncIterator[None]:
-    """Surface ASC failures as single-line ``ToolError``s (mirrors cpp tools).
+async def asc_tool_error() -> AsyncIterator[None]:
+    """Surface ASC failures as single-line ``ToolError``s (shared by the cpp tools).
 
     :class:`NotEditableError` is included here so "the version is live"
     reads as a sentence naming the state instead of a 409 several calls later.
@@ -327,7 +327,7 @@ async def list_version_screenshots(
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
             service = ASCVersionScreenshotService(client)
-            async with _asc_tool_error():
+            async with asc_tool_error():
                 version = await service.resolve_editable_version(app.asc_app_id)
                 localizations = await service.localizations_by_locale(version.id)
                 if locales:
@@ -407,7 +407,7 @@ async def upload_version_screenshot(
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
             service = ASCVersionScreenshotService(client)
-            async with _asc_tool_error():
+            async with asc_tool_error():
                 _version_id, localization_id = await _resolve_localization(
                     service, app.asc_app_id, locale
                 )
@@ -499,8 +499,8 @@ async def delete_version_screenshots(
 
     Pass exactly one selector: ``screenshot_id``, ``position``, or
     ``delete_all=True`` (the whole device family, for replacing a wrong set).
-    Emptying a set prunes it by default — an empty set is a *configured but
-    incomplete* device family, which is what Apple rejects at submit time.
+    ``prune_empty_set`` also deletes a set this empties — an empty set is a
+    *configured but incomplete* device family, which Apple rejects at submit.
 
     Args:
         app_id: The local app id.
@@ -509,7 +509,7 @@ async def delete_version_screenshots(
         screenshot_id: Delete this specific ``appScreenshots`` id.
         position: Delete the screenshot in this 0-based slot.
         delete_all: Delete every screenshot in the set.
-        prune_empty_set: Also delete the set once it is empty (default true).
+        prune_empty_set: Also delete the set once it is empty (default false).
 
     Returns:
         A :class:`ScreenshotDeleteResult` with the deleted ids, whether the set
@@ -521,7 +521,7 @@ async def delete_version_screenshots(
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
             service = ASCVersionScreenshotService(client)
-            async with _asc_tool_error():
+            async with asc_tool_error():
                 _version_id, localization_id = await _resolve_localization(
                     service, app.asc_app_id, locale
                 )
@@ -675,7 +675,7 @@ async def run_screenshot_sync(
         async with session_scope() as session:
             app = await resolve_app(app_id, session)
             async with await _get_asc_client_for_app(app, session) as client:
-                async with _asc_tool_error():
+                async with asc_tool_error():
                     target = await bind(client, app)
                     service, version = target.service, target.version
                     scan = await asyncio.to_thread(
@@ -689,9 +689,7 @@ async def run_screenshot_sync(
                     rows = [_sync_row(step) for step in scan.steps]
                     applied = apply and not any(step.error for step in scan.steps)
                     if applied:
-                        for step in scan.steps:
-                            if step.action != "skip":
-                                await service.apply_sync_step(step, version.id)
+                        await service.apply_sync(scan.steps, version.id)
                         inventory = await _sync_read_back(
                             service, app_id, version, scan.steps
                         )
