@@ -80,7 +80,7 @@ class Settings(BaseSettings):
             try:
                 return json.loads(v)
             except (json.JSONDecodeError, TypeError):
-                return [origin.strip() for origin in v.split(",") if origin.strip()]
+                return [item.strip() for item in v.split(",") if item.strip()]
         return v
 
 

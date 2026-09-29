@@ -25,7 +25,9 @@ The module has two halves:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import io
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,7 +36,11 @@ from typing import TYPE_CHECKING
 from PIL import Image, UnidentifiedImageError
 
 from app.core.config import settings
-from app.schemas.screenshots import MAX_SCREENSHOT_BYTES, MAX_SCREENSHOT_FILES
+from app.schemas.screenshots import (
+    MAX_SCREENSHOT_BYTES,
+    MAX_SCREENSHOT_FILES,
+    SyncAction,
+)
 from app.services.asc.errors import ASCAPIError
 from app.services.metadata.client import (
     EDITABLE_VERSION_STATES,
@@ -251,6 +257,17 @@ async def find_or_create_screenshot_set(
     return response["data"]["id"]
 
 
+def source_checksum(file_bytes: bytes) -> str:
+    # Apple requires md5 for the appScreenshots sourceFileChecksum — this is a
+    # content checksum for upload integrity, not a security primitive.
+    return hashlib.md5(file_bytes).hexdigest()  # noqa: S324
+
+
+def _missing_id_error(detail: str) -> ASCAPIError:
+    """The shaped ASC error every caller already turns into a one-line message."""
+    return ASCAPIError(502, {"errors": [{"detail": detail}]})
+
+
 async def upload_screenshot(
     client: ASCClient,
     set_id: str,
@@ -271,9 +288,7 @@ async def upload_screenshot(
     Returns:
         The committed ``appScreenshots`` resource dict.
     """
-    # Apple requires md5 for the appScreenshots sourceFileChecksum — this is a
-    # content checksum for upload integrity, not a security primitive.
-    checksum = hashlib.md5(file_bytes).hexdigest()  # noqa: S324
+    checksum = source_checksum(file_bytes)
 
     reserve_body = {
         "data": {
@@ -296,20 +311,10 @@ async def upload_screenshot(
     if not screenshot_id:
         # Without an id the commit below would PATCH ``/appScreenshots/`` — the
         # collection, not a resource — and the previous ``["id"]`` lookup would
-        # have raised a bare KeyError (an unhandled 500). Fail with the shaped
-        # ASC error every caller already translates to a single-line message.
-        raise ASCAPIError(
-            502,
-            {
-                "errors": [
-                    {
-                        "detail": (
-                            "App Store Connect returned no screenshot id when "
-                            f"reserving {file_name!r}; nothing was uploaded."
-                        ),
-                    },
-                ],
-            },
+        # have raised a bare KeyError (an unhandled 500).
+        raise _missing_id_error(
+            "App Store Connect returned no screenshot id when "
+            f"reserving {file_name!r}; nothing was uploaded."
         )
     operations = (reserved.get("attributes") or {}).get("uploadOperations", [])
 
@@ -630,58 +635,54 @@ class ASCVersionScreenshotService:
     async def plan_sync(self, steps: list[SyncStep]) -> set[str]:
         """Attach each step's current set and assets; return the display types
         the synced locales hold that the export does not touch."""
-        untouched: set[str] = set()
         set_ids_by_locale: dict[str, dict[str, str]] = {}
         for step in steps:
-            if step.error or step.localization_id is None:
+            if step.error:
                 continue
             if step.locale not in set_ids_by_locale:
                 set_ids_by_locale[step.locale] = await self.screenshot_set_ids(
                     step.localization_id
                 )
-            step.set_id = set_ids_by_locale[step.locale].get(step.display_type or "")
+            step.set_id = set_ids_by_locale[step.locale].get(step.display_type)
             if step.set_id:
                 step.existing = await self.list_set_screenshots(step.set_id)
         synced = {step.display_type for step in steps if not step.error}
-        for set_ids in set_ids_by_locale.values():
-            untouched.update(set(set_ids) - synced)
-        return untouched
+        return {
+            display_type
+            for set_ids in set_ids_by_locale.values()
+            for display_type in set_ids
+            if display_type not in synced
+        }
 
     async def apply_sync_step(self, step: SyncStep) -> None:
         """Make one set exactly the step's files, in order, slot by slot.
 
         Each changed slot's old asset is deleted before its replacement is
-        uploaded, so a full set never passes Apple's cap mid-replace.
+        uploaded, so a full set never passes Apple's cap mid-replace. Each
+        file is re-read and must still hash to the planned MD5, so what is
+        uploaded is exactly what the plan checked, and nothing in the slot (or
+        a new set) is written until it is.
         """
-        if step.localization_id is None or step.display_type is None:
-            return
-        set_id = step.set_id or await self.ensure_screenshot_set(
-            step.localization_id, step.display_type
-        )
+        set_id = step.set_id
         order: list[str] = []
         for index, export_file in enumerate(step.files):
             current = step.existing[index] if index < len(step.existing) else None
             if current is not None and _slot_matches(current, export_file):
                 order.append(current["id"])
                 continue
+            file_bytes = await asyncio.to_thread(read_planned_bytes, export_file)
             if current is not None:
                 await self.delete_screenshot(current["id"])
+            set_id = set_id or await self.ensure_screenshot_set(
+                step.localization_id, step.display_type
+            )
             uploaded = await self.upload_to_set(
-                set_id, export_file.path.read_bytes(), export_file.path.name
+                set_id, file_bytes, export_file.path.name
             )
             if not uploaded.get("id"):
-                raise ASCAPIError(
-                    502,
-                    {
-                        "errors": [
-                            {
-                                "detail": (
-                                    "App Store Connect returned no screenshot id "
-                                    f"for {step.locale}/{export_file.path.name}."
-                                ),
-                            },
-                        ],
-                    },
+                raise _missing_id_error(
+                    "App Store Connect returned no screenshot id "
+                    f"for {step.locale}/{export_file.path.name}."
                 )
             order.append(uploaded["id"])
         for extra in step.existing[len(step.files) :]:
@@ -713,6 +714,7 @@ DISPLAY_TYPE_BY_SIZE: dict[tuple[int, int], str] = {
     (312, 390): "APP_WATCH_SERIES_3",
 }
 SYNC_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
+SYNC_IMAGE_FORMATS = frozenset({"PNG", "JPEG"})
 # The studio's Custom Product Page exports live beside the locales (spec 015).
 SYNC_SKIPPED_DIRS = frozenset({"variants"})
 
@@ -723,6 +725,10 @@ def display_type_for_size(width: int, height: int) -> str | None:
 
 class SyncPathError(Exception):
     """The export directory itself is refused; nothing was read or written."""
+
+
+class ExportChangedError(Exception):
+    """A planned file no longer holds the bytes the plan checked."""
 
 
 class _FileRefused(Exception):
@@ -765,7 +771,7 @@ class SyncStep:
         return replaced + max(len(self.existing) - len(self.files), 0)
 
     @property
-    def action(self) -> str:
+    def action(self) -> SyncAction:
         if self.error:
             return "error"
         if not self.existing:
@@ -783,7 +789,9 @@ def _slot_matches(existing: dict, export_file: ExportFile) -> bool:
 
 
 def _sync_roots() -> list[Path]:
-    return [Path(root).resolve() for root in settings.SCREENSHOT_SYNC_ROOTS]
+    return [
+        Path(root).expanduser().resolve() for root in settings.SCREENSHOT_SYNC_ROOTS
+    ]
 
 
 def _within_roots(path: Path) -> bool:
@@ -803,29 +811,50 @@ def resolve_sync_dir(directory: str) -> Path:
         )
     if not root.is_dir():
         raise SyncPathError(f"{directory} is not a directory.")
-    return root
+    return root.resolve()
 
 
-def _read_export_file(path: Path) -> tuple[str, ExportFile]:
+def _read_export_file(path: Path) -> tuple[str, bytes]:
+    """``(display type, bytes)``; size, type and checksum all come from one read."""
     if not _within_roots(path):
         raise _FileRefused("resolves outside SCREENSHOT_SYNC_ROOTS")
-    if not path.is_file() or path.suffix.lower() not in SYNC_IMAGE_SUFFIXES:
+    if not path.is_file():
+        raise _FileRefused("not a file")
+    if path.suffix.lower() not in SYNC_IMAGE_SUFFIXES:
         raise _FileRefused("not a PNG or JPEG file")
-    size = path.stat().st_size
-    if size > MAX_SCREENSHOT_BYTES:
-        raise _FileRefused(f"{size} bytes, over the {MAX_SCREENSHOT_BYTES}-byte cap")
-    data = path.read_bytes()
     try:
-        with Image.open(path) as image:
+        with path.open("rb") as handle:
+            data = handle.read(MAX_SCREENSHOT_BYTES + 1)
+    except OSError as exc:
+        raise _FileRefused(f"unreadable ({exc.strerror})") from exc
+    if len(data) > MAX_SCREENSHOT_BYTES:
+        raise _FileRefused(f"over the {MAX_SCREENSHOT_BYTES}-byte cap")
+    try:
+        with Image.open(io.BytesIO(data)) as image:
             width, height = image.size
-    except (UnidentifiedImageError, OSError) as exc:
+            image_format = image.format
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
         raise _FileRefused("not a readable image") from exc
+    if image_format not in SYNC_IMAGE_FORMATS:
+        raise _FileRefused(f"a {image_format} image, not a PNG or JPEG")
     display_type = display_type_for_size(width, height)
     if display_type is None:
         raise _FileRefused(f"{width}x{height} is not an App Store screenshot size")
-    # Apple's sourceFileChecksum is an MD5; this compares against it, it is not
-    # a security primitive.
-    return display_type, ExportFile(path, hashlib.md5(data).hexdigest())  # noqa: S324
+    return display_type, data
+
+
+def read_planned_bytes(export_file: ExportFile) -> bytes:
+    """The file's bytes, refused unless they still hash to the planned MD5."""
+    try:
+        _, data = _read_export_file(export_file.path)
+    except _FileRefused as exc:
+        raise ExportChangedError(f"{export_file.path}: {exc}.") from exc
+    if source_checksum(data) != export_file.md5:
+        raise ExportChangedError(
+            f"{export_file.path} changed after it was planned and was not "
+            "uploaded; rerun screenshots_sync."
+        )
+    return data
 
 
 def _scan_locale(
@@ -835,49 +864,41 @@ def _scan_locale(
     if not _within_roots(locale_dir):
         return [SyncStep(locale, error=f"{locale}/ resolves outside SCREENSHOT_SYNC_ROOTS.")]
 
-    errors: list[SyncStep] = []
+    steps: list[SyncStep] = []
     by_type: dict[str, list[ExportFile]] = {}
     for path in sorted(locale_dir.iterdir()):
         if path.name.startswith("."):
             continue
         try:
-            display_type, export_file = _read_export_file(path)
+            display_type, data = _read_export_file(path)
         except _FileRefused as exc:
-            errors.append(SyncStep(locale, error=f"{locale}/{path.name}: {exc}."))
+            steps.append(SyncStep(locale, error=f"{locale}/{path.name}: {exc}."))
             continue
         if display_types and display_type not in display_types:
             continue
-        by_type.setdefault(display_type, []).append(export_file)
+        by_type.setdefault(display_type, []).append(
+            ExportFile(path, source_checksum(data))
+        )
 
     if len(by_type) > 1 and not display_types:
         listing = "; ".join(
             f"{display_type}: {', '.join(f.path.name for f in files)}"
             for display_type, files in sorted(by_type.items())
         )
-        return [
-            *errors,
-            SyncStep(
-                locale,
-                error=(
-                    f"{locale}/ mixes display types ({listing}). Pass "
-                    "display_types, or export one directory per device family."
-                ),
-            ),
-        ]
+        mixed = (
+            f"{locale}/ mixes display types ({listing}). Pass "
+            "display_types, or export one directory per device family."
+        )
+        steps.append(SyncStep(locale, error=mixed))
+        return steps
 
-    steps = errors
     for display_type, files in sorted(by_type.items()):
         if len(files) > MAX_SCREENSHOT_FILES:
-            steps.append(
-                SyncStep(
-                    locale,
-                    display_type,
-                    error=(
-                        f"{locale}/ holds {len(files)} {display_type} files; "
-                        f"Apple's cap is {MAX_SCREENSHOT_FILES}."
-                    ),
-                )
+            over_cap = (
+                f"{locale}/ holds {len(files)} {display_type} files; "
+                f"Apple's cap is {MAX_SCREENSHOT_FILES}."
             )
+            steps.append(SyncStep(locale, display_type, error=over_cap))
         else:
             steps.append(
                 SyncStep(locale, display_type, files, localization_id=localization_id)

@@ -241,10 +241,13 @@ class ScreenshotDeleteResult(BaseModel):
 # ------------------------------------------------------------------
 
 
+SyncAction = Literal["skip", "replace", "upload", "error"]
+
+
 class ScreenshotSyncRow(BaseModel):
     locale: str
     display_type: str | None = None
-    action: Literal["skip", "replace", "upload", "error"]
+    action: SyncAction
     files: int = 0
     existing: int = 0
     uploads: int = 0

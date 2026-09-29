@@ -1448,25 +1448,19 @@ def test_sync_rerun_is_all_skip_and_writes_nothing(export, monkeypatch):
 def test_sync_leaves_every_other_display_type_byte_identical(export, monkeypatch):
     out, md5s = export
     client = _sync_client(md5s)
-    others = ("set-en-watch", "set-en-ipad")
-    before = copy.deepcopy(
-        {
+    def other_sets():
+        return copy.deepcopy({
             set_id: (client.sets[set_id], [
                 client.screenshots[s] for s in client.sets[set_id]["shots"]
             ])
-            for set_id in others
-        }
-    )
+            for set_id in ("set-en-watch", "set-en-ipad")
+        })
+
+    before = other_sets()
 
     result = _sync(monkeypatch, client, out, apply=True)
 
-    after = {
-        set_id: (client.sets[set_id], [
-            client.screenshots[s] for s in client.sets[set_id]["shots"]
-        ])
-        for set_id in others
-    }
-    assert after == before
+    assert other_sets() == before
     touched = " ".join(path for _method, path in client.calls)
     assert "set-en-watch" not in touched
     assert "set-en-ipad" not in touched
@@ -1603,3 +1597,105 @@ def test_sync_two_display_types_in_one_locale_need_a_filter(export, monkeypatch)
     narrowed = _sync(monkeypatch, client, out, display_types=["APP_IPHONE_67"])
     assert _errors(narrowed) == []
     assert _actions(narrowed)[("en-US", "APP_IPHONE_67")] == "skip"
+
+
+def test_sync_refuses_files_that_are_not_screenshots(export, monkeypatch):
+    out, md5s = export
+    locale_dir = out / "en-US"
+    (locale_dir / "03.png").write_text("not an image")
+    PILImage.new("RGB", IPHONE_69).save(locale_dir / "04.png", format="GIF")
+    (locale_dir / "05").mkdir()
+    (locale_dir / "notes.txt").write_text("x")
+    client = _sync_client(md5s)
+
+    result = _sync(monkeypatch, client, out, apply=True)
+
+    errors = " ".join(_errors(result))
+    assert "en-US/03.png: not a readable image" in errors
+    assert "en-US/04.png: a GIF image" in errors
+    assert "en-US/05: not a file" in errors
+    assert "en-US/notes.txt: not a PNG or JPEG file" in errors
+    assert result.applied is False
+    assert _writes(client) == []
+
+
+def test_sync_refuses_a_file_over_the_size_cap(export, monkeypatch):
+    out, md5s = export
+    monkeypatch.setattr(shots, "MAX_SCREENSHOT_BYTES", 100)
+    client = _sync_client(md5s)
+
+    result = _sync(monkeypatch, client, out, apply=True)
+
+    assert any("over the 100-byte cap" in e for e in _errors(result))
+    assert result.applied is False
+    assert _writes(client) == []
+
+
+def test_sync_refuses_a_locale_directory_symlinked_out_of_the_allowlist(
+    export, monkeypatch
+):
+    out, md5s = export
+    escape = out.parent.parent / "outside" / "fr-FR"
+    _export(escape.parent, {"fr-FR": 2})
+    for png in (out / "fr-FR").iterdir():
+        png.unlink()
+    (out / "fr-FR").rmdir()
+    (out / "fr-FR").symlink_to(escape, target_is_directory=True)
+    client = _sync_client(md5s)
+
+    result = _sync(monkeypatch, client, out, apply=True)
+
+    assert _actions(result)[("fr-FR", None)] == "error"
+    assert result.applied is False
+    assert _writes(client) == []
+
+
+def test_sync_apply_uploads_only_the_bytes_the_plan_checked(export):
+    out, md5s = export
+    path = out / "en-US" / "01.png"
+    planned = shots.ExportFile(path, md5s["en-US"][0])
+    original = path.read_bytes()
+    assert shots.read_planned_bytes(planned) == original
+
+    _png(path, shade=99)
+    with pytest.raises(shots.ExportChangedError, match="changed after"):
+        shots.read_planned_bytes(planned)
+
+    # Same bytes as planned, but now reached through a link out of the roots.
+    escape = out.parent.parent / "outside" / "01.png"
+    escape.parent.mkdir(parents=True)
+    escape.write_bytes(original)
+    path.unlink()
+    path.symlink_to(escape)
+    with pytest.raises(shots.ExportChangedError, match="SCREENSHOT_SYNC_ROOTS"):
+        shots.read_planned_bytes(planned)
+
+
+def test_sync_stops_when_a_file_changes_between_plan_and_apply(export, monkeypatch):
+    out, md5s = export
+    client = _sync_client(md5s)
+    plan_sync = shots.ASCVersionScreenshotService.plan_sync
+
+    async def plan_then_edit(self, steps):
+        planned = await plan_sync(self, steps)
+        _png(out / "de-DE" / "01.png", shade=99)
+        return planned
+
+    monkeypatch.setattr(shots.ASCVersionScreenshotService, "plan_sync", plan_then_edit)
+
+    with pytest.raises(ToolError, match="changed after it was planned"):
+        _sync(monkeypatch, client, out, apply=True)
+    # de-DE is the first step: its stale slot is not deleted for a refused file.
+    assert _writes(client) == []
+
+
+def test_sync_replaces_a_failed_asset_even_when_its_checksum_matches(tmp_path):
+    export_file = shots.ExportFile(tmp_path / "01.png", "abc")
+    step = shots.SyncStep(
+        "en-US",
+        "APP_IPHONE_67",
+        [export_file],
+        existing=[{"id": "s1", "checksum": "abc", "state": shots.ASSET_STATE_FAILED}],
+    )
+
+    assert (step.action, step.uploads, step.deletes) == ("replace", 1, 1)

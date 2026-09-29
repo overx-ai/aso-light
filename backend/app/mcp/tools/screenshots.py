@@ -47,7 +47,9 @@ from app.services.asc.screenshots import (
     ASSET_STATE_FAILED,
     ASCVersionScreenshotService,
     EditableVersion,
+    ExportChangedError,
     SyncPathError,
+    SyncStep,
     VersionNotEditableError,
     resolve_sync_dir,
     scan_export_dir,
@@ -574,6 +576,43 @@ async def delete_version_screenshots(
     )
 
 
+def _sync_row(step: SyncStep) -> ScreenshotSyncRow:
+    return ScreenshotSyncRow(
+        locale=step.locale,
+        display_type=step.display_type,
+        action=step.action,
+        files=len(step.files),
+        existing=len(step.existing),
+        uploads=step.uploads,
+        deletes=step.deletes,
+        error=step.error,
+    )
+
+
+async def _sync_read_back(
+    service: ASCVersionScreenshotService,
+    app_id: int,
+    version: EditableVersion,
+    localizations: dict[str, str],
+    steps: list[SyncStep],
+) -> VersionScreenshotInventory:
+    """The 010 inventory of the synced locales and display types, re-read from ASC."""
+    synced = {step.locale: step.localization_id for step in steps}
+    sets_by_locale = {
+        locale: await service.get_screenshot_sets(localization_id)
+        for locale, localization_id in synced.items()
+    }
+    return _build_inventory(
+        app_id=app_id,
+        version=version,
+        localizations={locale: localizations[locale] for locale in synced},
+        sets_by_locale=sets_by_locale,
+        display_types_filter=sorted({step.display_type for step in steps}),
+        expected_count=None,
+        include_assets=False,
+    )
+
+
 @mcp.tool(name="screenshots_sync")
 async def sync_version_screenshots(
     app_id: int,
@@ -612,74 +651,44 @@ async def sync_version_screenshots(
     """
     for display_type in display_types or []:
         _require_display_type(display_type)
-    try:
-        root = resolve_sync_dir(dir)
-    except SyncPathError as exc:
-        raise ToolError(str(exc)) from exc
 
     inventory: VersionScreenshotInventory | None = None
-    async with session_scope() as session:
-        app = await resolve_app(app_id, session)
-        async with await _get_asc_client_for_app(app, session) as client:
-            service = ASCVersionScreenshotService(client)
-            async with _asc_tool_error():
-                version = await service.resolve_editable_version(app.asc_app_id)
-                localizations = await service.localizations_by_locale(version.id)
-                try:
-                    scan = scan_export_dir(
+    try:
+        root = resolve_sync_dir(dir)
+        async with session_scope() as session:
+            app = await resolve_app(app_id, session)
+            async with await _get_asc_client_for_app(app, session) as client:
+                service = ASCVersionScreenshotService(client)
+                async with _asc_tool_error():
+                    version = await service.resolve_editable_version(app.asc_app_id)
+                    localizations = await service.localizations_by_locale(version.id)
+                    scan = await asyncio.to_thread(
+                        scan_export_dir,
                         root,
                         localizations,
                         version.version_string or version.id,
                         locales=locales,
                         display_types=display_types,
                     )
-                except SyncPathError as exc:
-                    raise ToolError(str(exc)) from exc
-                other_types = await service.plan_sync(scan.steps)
-                rows = [
-                    ScreenshotSyncRow(
-                        locale=step.locale,
-                        display_type=step.display_type,
-                        action=step.action,
-                        files=len(step.files),
-                        existing=len(step.existing),
-                        uploads=step.uploads,
-                        deletes=step.deletes,
-                        error=step.error,
-                    )
-                    for step in scan.steps
-                ]
-                applied = apply and not any(step.error for step in scan.steps)
-                if applied:
-                    for step in scan.steps:
-                        if step.action != "skip":
-                            await service.apply_sync_step(step)
-                    synced = {step.locale: step.localization_id for step in scan.steps}
-                    sets_by_locale = {
-                        locale: await service.get_screenshot_sets(localization_id)
-                        for locale, localization_id in synced.items()
-                        if localization_id is not None
-                    }
-                    inventory = _build_inventory(
-                        app_id=app_id,
-                        version=version,
-                        localizations={
-                            locale: localizations[locale] for locale in sets_by_locale
-                        },
-                        sets_by_locale=sets_by_locale,
-                        display_types_filter=sorted(
-                            {s.display_type for s in scan.steps if s.display_type}
-                        ),
-                        expected_count=None,
-                        include_assets=False,
-                    )
-                    counts = {
-                        (row.locale, status.display_type): status.count
-                        for row in inventory.locales
-                        for status in row.display_types
-                    }
-                    for row in rows:
-                        row.count = counts.get((row.locale, row.display_type))
+                    other_types = await service.plan_sync(scan.steps)
+                    rows = [_sync_row(step) for step in scan.steps]
+                    applied = apply and not any(step.error for step in scan.steps)
+                    if applied:
+                        for step in scan.steps:
+                            if step.action != "skip":
+                                await service.apply_sync_step(step)
+                        inventory = await _sync_read_back(
+                            service, app_id, version, localizations, scan.steps
+                        )
+                        counts = {
+                            (row.locale, status.display_type): status.count
+                            for row in inventory.locales
+                            for status in row.display_types
+                        }
+                        for row in rows:
+                            row.count = counts.get((row.locale, row.display_type))
+    except (SyncPathError, ExportChangedError) as exc:
+        raise ToolError(str(exc)) from exc
 
     return ScreenshotSyncResult(
         app_id=app_id,
