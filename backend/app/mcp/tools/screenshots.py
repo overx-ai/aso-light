@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import Image
@@ -48,13 +49,19 @@ from app.services.asc.screenshots import (
     ASCVersionScreenshotService,
     EditableVersion,
     ExportChangedError,
+    LocalizationScreenshotService,
+    NotEditableError,
     SyncPathError,
     SyncStep,
-    VersionNotEditableError,
+    SyncTarget,
     resolve_sync_dir,
     scan_export_dir,
 )
 from app.services.visual.compare import build_comparison
+
+if TYPE_CHECKING:
+    from app.models.app import App
+    from app.services.asc.client import ASCClient
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +76,12 @@ _VERIFY_DELAY_SECONDS = 1.0
 async def _asc_tool_error() -> AsyncIterator[None]:
     """Surface ASC failures as single-line ``ToolError``s (mirrors cpp tools).
 
-    :class:`VersionNotEditableError` is included here so "the version is live"
+    :class:`NotEditableError` is included here so "the version is live"
     reads as a sentence naming the state instead of a 409 several calls later.
     """
     try:
         yield
-    except VersionNotEditableError as exc:
+    except NotEditableError as exc:
         raise ToolError(exc.message)
     except ASCAPIError as exc:
         raise ToolError(f"ASC API error: {exc.message}")
@@ -508,14 +515,7 @@ async def delete_version_screenshots(
         A :class:`ScreenshotDeleteResult` with the deleted ids, whether the set
         was pruned, and how many screenshots remain.
     """
-    _require_display_type(display_type)
-    selectors = [screenshot_id is not None, position is not None, delete_all]
-    if sum(selectors) != 1:
-        raise ToolError(
-            "Pass exactly one of screenshot_id, position, or delete_all=True."
-        )
-    if position is not None and position < 0:
-        raise ToolError("position must be 0 or greater.")
+    check_delete_selectors(display_type, screenshot_id, position, delete_all)
 
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
@@ -525,46 +525,82 @@ async def delete_version_screenshots(
                 _version_id, localization_id = await _resolve_localization(
                     service, app.asc_app_id, locale
                 )
-                shot_set = await service.find_screenshot_set(
-                    localization_id, display_type
+                return await delete_from_localization(
+                    service,
+                    localization_id,
+                    locale,
+                    display_type,
+                    screenshot_id=screenshot_id,
+                    position=position,
+                    delete_all=delete_all,
+                    prune_empty_set=prune_empty_set,
                 )
-                if shot_set is None:
-                    raise ToolError(
-                        f"{locale} has no {display_type} screenshot set on the "
-                        "editable version — nothing to delete."
-                    )
-                set_id = shot_set["id"]
-                existing = await service.list_set_screenshots(set_id)
 
-                if delete_all:
-                    targets = list(existing)
-                elif position is not None:
-                    if position >= len(existing):
-                        raise ToolError(
-                            f"position {position} is out of range for the "
-                            f"{display_type} set of {locale}, which holds "
-                            f"{len(existing)} screenshot(s)."
-                        )
-                    targets = [existing[position]]
-                else:
-                    match = next(
-                        (s for s in existing if s["id"] == screenshot_id), None
-                    )
-                    if match is None:
-                        raise ToolError(
-                            f"Screenshot {screenshot_id} is not in the "
-                            f"{display_type} set for {locale}."
-                        )
-                    targets = [match]
 
-                for shot in targets:
-                    await service.delete_screenshot(shot["id"])
+def check_delete_selectors(
+    display_type: str,
+    screenshot_id: str | None,
+    position: int | None,
+    delete_all: bool,
+) -> None:
+    _require_display_type(display_type)
+    selectors = [screenshot_id is not None, position is not None, delete_all]
+    if sum(selectors) != 1:
+        raise ToolError(
+            "Pass exactly one of screenshot_id, position, or delete_all=True."
+        )
+    if position is not None and position < 0:
+        raise ToolError("position must be 0 or greater.")
 
-                remaining = len(existing) - len(targets)
-                deleted_set = False
-                if remaining == 0 and prune_empty_set:
-                    await service.delete_set(set_id)
-                    deleted_set = True
+
+async def delete_from_localization(
+    service: LocalizationScreenshotService,
+    localization_id: str,
+    locale: str,
+    display_type: str,
+    *,
+    screenshot_id: str | None,
+    position: int | None,
+    delete_all: bool,
+    prune_empty_set: bool,
+) -> ScreenshotDeleteResult:
+    """Delete by id, position or all from one localization's display-type set."""
+    shot_set = await service.find_screenshot_set(localization_id, display_type)
+    if shot_set is None:
+        raise ToolError(
+            f"{locale} has no {display_type} screenshot set on the "
+            "editable version — nothing to delete."
+        )
+    set_id = shot_set["id"]
+    existing = await service.list_set_screenshots(set_id)
+
+    if delete_all:
+        targets = list(existing)
+    elif position is not None:
+        if position >= len(existing):
+            raise ToolError(
+                f"position {position} is out of range for the "
+                f"{display_type} set of {locale}, which holds "
+                f"{len(existing)} screenshot(s)."
+            )
+        targets = [existing[position]]
+    else:
+        match = next((s for s in existing if s["id"] == screenshot_id), None)
+        if match is None:
+            raise ToolError(
+                f"Screenshot {screenshot_id} is not in the "
+                f"{display_type} set for {locale}."
+            )
+        targets = [match]
+
+    for shot in targets:
+        await service.delete_screenshot(shot["id"])
+
+    remaining = len(existing) - len(targets)
+    deleted_set = False
+    if remaining == 0 and prune_empty_set:
+        await service.delete_set(set_id)
+        deleted_set = True
 
     return ScreenshotDeleteResult(
         locale=locale,
@@ -590,10 +626,9 @@ def _sync_row(step: SyncStep) -> ScreenshotSyncRow:
 
 
 async def _sync_read_back(
-    service: ASCVersionScreenshotService,
+    service: LocalizationScreenshotService,
     app_id: int,
     version: EditableVersion,
-    localizations: dict[str, str],
     steps: list[SyncStep],
 ) -> VersionScreenshotInventory:
     """The 010 inventory of the synced locales and display types, re-read from ASC."""
@@ -605,11 +640,95 @@ async def _sync_read_back(
     return _build_inventory(
         app_id=app_id,
         version=version,
-        localizations={locale: localizations[locale] for locale in synced},
+        localizations=synced,
         sets_by_locale=sets_by_locale,
         display_types_filter=sorted({step.display_type for step in steps}),
         expected_count=None,
         include_assets=False,
+    )
+
+
+SyncBinder = Callable[["ASCClient", "App"], Awaitable[SyncTarget]]
+
+
+async def run_screenshot_sync(
+    app_id: int,
+    directory: str,
+    bind: SyncBinder,
+    *,
+    locales: list[str] | None,
+    display_types: list[str] | None,
+    apply: bool,
+) -> ScreenshotSyncResult:
+    """Scan, plan and (with ``apply``) execute a sync into ``bind``'s target.
+
+    The one sync path behind ``screenshots_sync`` and ``cpp_screenshots_sync``.
+    ``bind`` resolves the source's editable version and localizations; the
+    root allowlist runs before it, so a refused ``dir`` makes no ASC call.
+    """
+    for display_type in display_types or []:
+        _require_display_type(display_type)
+
+    inventory: VersionScreenshotInventory | None = None
+    try:
+        root = resolve_sync_dir(directory)
+        async with session_scope() as session:
+            app = await resolve_app(app_id, session)
+            async with await _get_asc_client_for_app(app, session) as client:
+                async with _asc_tool_error():
+                    target = await bind(client, app)
+                    service, version = target.service, target.version
+                    scan = await asyncio.to_thread(
+                        scan_export_dir,
+                        root,
+                        target,
+                        locales=locales,
+                        display_types=display_types,
+                    )
+                    other_types = await service.plan_sync(scan.steps)
+                    rows = [_sync_row(step) for step in scan.steps]
+                    applied = apply and not any(step.error for step in scan.steps)
+                    if applied:
+                        for step in scan.steps:
+                            if step.action != "skip":
+                                await service.apply_sync_step(step, version.id)
+                        inventory = await _sync_read_back(
+                            service, app_id, version, scan.steps
+                        )
+                        counts = {
+                            (row.locale, status.display_type): status.count
+                            for row in inventory.locales
+                            for status in row.display_types
+                        }
+                        for row in rows:
+                            row.count = counts.get((row.locale, row.display_type))
+    except (SyncPathError, ExportChangedError) as exc:
+        raise ToolError(str(exc)) from exc
+
+    return ScreenshotSyncResult(
+        app_id=app_id,
+        dir=str(root),
+        version_id=version.id,
+        version_string=version.version_string,
+        applied=applied,
+        rows=rows,
+        untouched=ScreenshotSyncUntouched(
+            locales=sorted(set(target.localizations) - scan.locales),
+            display_types=sorted(other_types),
+            entries=scan.skipped,
+        ),
+        inventory=inventory,
+    )
+
+
+async def _bind_main_listing(client: ASCClient, app: App) -> SyncTarget:
+    service = ASCVersionScreenshotService(client)
+    version = await service.resolve_editable_version(app.asc_app_id)
+    return SyncTarget(
+        service=service,
+        version=version,
+        localizations=await service.localizations_by_locale(version.id),
+        label=f"App Store version {version.version_string or version.id}",
     )
 
 
@@ -649,60 +768,13 @@ async def sync_version_screenshots(
         | ``error``), what was left ``untouched``, and after an apply the
         read-back ``count`` per row plus the 010 ``inventory`` with its gaps.
     """
-    for display_type in display_types or []:
-        _require_display_type(display_type)
-
-    inventory: VersionScreenshotInventory | None = None
-    try:
-        root = resolve_sync_dir(dir)
-        async with session_scope() as session:
-            app = await resolve_app(app_id, session)
-            async with await _get_asc_client_for_app(app, session) as client:
-                service = ASCVersionScreenshotService(client)
-                async with _asc_tool_error():
-                    version = await service.resolve_editable_version(app.asc_app_id)
-                    localizations = await service.localizations_by_locale(version.id)
-                    scan = await asyncio.to_thread(
-                        scan_export_dir,
-                        root,
-                        localizations,
-                        version.version_string or version.id,
-                        locales=locales,
-                        display_types=display_types,
-                    )
-                    other_types = await service.plan_sync(scan.steps)
-                    rows = [_sync_row(step) for step in scan.steps]
-                    applied = apply and not any(step.error for step in scan.steps)
-                    if applied:
-                        for step in scan.steps:
-                            if step.action != "skip":
-                                await service.apply_sync_step(step)
-                        inventory = await _sync_read_back(
-                            service, app_id, version, localizations, scan.steps
-                        )
-                        counts = {
-                            (row.locale, status.display_type): status.count
-                            for row in inventory.locales
-                            for status in row.display_types
-                        }
-                        for row in rows:
-                            row.count = counts.get((row.locale, row.display_type))
-    except (SyncPathError, ExportChangedError) as exc:
-        raise ToolError(str(exc)) from exc
-
-    return ScreenshotSyncResult(
-        app_id=app_id,
-        dir=str(root),
-        version_id=version.id,
-        version_string=version.version_string,
-        applied=applied,
-        rows=rows,
-        untouched=ScreenshotSyncUntouched(
-            locales=sorted(set(localizations) - scan.locales),
-            display_types=sorted(other_types),
-            entries=scan.skipped,
-        ),
-        inventory=inventory,
+    return await run_screenshot_sync(
+        app_id,
+        dir,
+        _bind_main_listing,
+        locales=locales,
+        display_types=display_types,
+        apply=apply,
     )
 
 

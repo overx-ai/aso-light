@@ -33,15 +33,27 @@ _CPP_SET_RELATIONSHIP = "appCustomProductPageLocalization"
 logger = logging.getLogger(__name__)
 
 
-# CPP version states Apple uses for the editable/draft version. A freshly
-# created Custom Product Page auto-creates a single version in one of these
-# pre-publish states; that is the version localizations + screenshots attach
-# to. Ordered by preference when more than one version exists.
+# CPP version states that accept localization and screenshot writes, in order
+# of preference. ``WAITING_FOR_REVIEW`` / ``IN_REVIEW`` are deliberately absent:
+# a write there lands on a page Apple is reviewing.
 _EDITABLE_VERSION_STATES = (
     "PREPARE_FOR_SUBMISSION",
-    "WAITING_FOR_REVIEW",
-    "IN_REVIEW",
+    "REJECTED",
+    "DEVELOPER_REJECTED",
+    "METADATA_REJECTED",
 )
+
+
+class CPPVersionNotEditableError(shots.NotEditableError):
+    def __init__(self, subject: str, states: list[str | None]) -> None:
+        self.states = sorted({state or "unknown" for state in states})
+        found = ", ".join(self.states) or "no versions"
+        super().__init__(
+            f"No editable version for {subject} (found: {found}). A Custom "
+            "Product Page's localizations and screenshots change only on a "
+            f"version in one of: {', '.join(_EDITABLE_VERSION_STATES)}. Create "
+            "a new version of the page in App Store Connect first."
+        )
 
 
 class ASCCustomProductPageService:
@@ -283,27 +295,47 @@ class ASCCustomProductPageService:
             },
         )
 
-    async def get_editable_version_id(self, cpp_id: str) -> str | None:
-        """Resolve a CPP's editable (draft) version id.
+    async def get_editable_version(self, cpp_id: str) -> shots.EditableVersion:
+        """The CPP version localizations and screenshots may be written to.
 
-        A freshly-created Custom Product Page auto-creates one draft version
-        in a pre-publish state (``PREPARE_FOR_SUBMISSION`` and friends). This
-        walks :meth:`list_versions`, preferring a version in one of the known
-        editable states, and falls back to the first version returned when
-        none of them match.
-
-        Returns:
-            The ``appCustomProductPageVersions`` id to attach a localization
-            to, or ``None`` when the CPP has no versions.
+        Raises:
+            CPPVersionNotEditableError: No version is editable. There is no
+                fallback to another version, which could be in review or
+                published; the message names every state found.
         """
         versions = await self.list_versions(cpp_id)
-        if not versions:
-            return None
         for state in _EDITABLE_VERSION_STATES:
             for version in versions:
-                if version.get("attributes", {}).get("state") == state:
-                    return version["id"]
-        return versions[0]["id"]
+                attrs = version.get("attributes") or {}
+                if attrs.get("state") == state:
+                    return shots.EditableVersion(
+                        id=version["id"],
+                        state=state,
+                        version_string=attrs.get("version"),
+                    )
+        raise CPPVersionNotEditableError(
+            f"Custom Product Page {cpp_id}",
+            [(version.get("attributes") or {}).get("state") for version in versions],
+        )
+
+    async def get_editable_version_id(self, cpp_id: str) -> str:
+        return (await self.get_editable_version(cpp_id)).id
+
+    async def assert_localization_editable(self, localization_id: str) -> None:
+        """Refuse a localization whose CPP version is not editable."""
+        response = await self.client._get(
+            f"/{_CPP_LOCALIZATION_TYPE}/{localization_id}",
+            params={"include": "appCustomProductPageVersion"},
+        )
+        states = [
+            (item.get("attributes") or {}).get("state")
+            for item in response.get("included", [])
+            if item.get("type") == "appCustomProductPageVersions"
+        ]
+        if not any(state in _EDITABLE_VERSION_STATES for state in states):
+            raise CPPVersionNotEditableError(
+                f"CPP localization {localization_id}", states
+            )
 
     async def list_localizations(self, version_id: str) -> list[dict]:
         """Fetch the localizations of a CPP version.
@@ -383,11 +415,6 @@ class ASCCustomProductPageService:
         cpp_id = cpp["id"]
 
         version_id = await self.get_editable_version_id(cpp_id)
-        if version_id is None:
-            raise RuntimeError(
-                "Custom Product Page has no editable version to populate"
-            )
-
         localization_id = await self.find_or_create_localization_id(
             version_id, locale
         )
@@ -569,3 +596,20 @@ class ASCCustomProductPageService:
             file_bytes,
             file_name,
         )
+
+
+class CPPScreenshotService(shots.LocalizationScreenshotService):
+    """A Custom Product Page as a localization source for the shared sync."""
+
+    localization_type = _CPP_LOCALIZATION_TYPE
+    set_relationship = _CPP_SET_RELATIONSHIP
+
+    def __init__(self, client: ASCClient) -> None:
+        super().__init__(client)
+        self.cpp = ASCCustomProductPageService(client)
+
+    async def localizations_by_locale(self, version_id: str) -> dict[str, str]:
+        return shots.locales_of(await self.cpp.list_localizations(version_id))
+
+    async def ensure_localization(self, version_id: str, locale: str) -> str:
+        return await self.cpp.find_or_create_localization_id(version_id, locale)

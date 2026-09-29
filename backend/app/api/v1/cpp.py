@@ -40,7 +40,10 @@ from app.schemas.cpp import (
     CPPResponse,
     is_valid_display_type,
 )
-from app.services.asc.cpp import ASCCustomProductPageService
+from app.services.asc.cpp import (
+    ASCCustomProductPageService,
+    CPPVersionNotEditableError,
+)
 from app.services.asc.errors import ASCAPIError
 
 logger = logging.getLogger(__name__)
@@ -213,10 +216,10 @@ async def create_cpp_from_upload(
                 result = await service.create_cpp_with_screenshots(
                     app.asc_app_id, name, locale, display_type, payload,
                 )
-            except RuntimeError as exc:
+            except CPPVersionNotEditableError as exc:
                 raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=str(exc),
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=exc.message,
                 ) from exc
 
     return CPPFromUploadResponse(

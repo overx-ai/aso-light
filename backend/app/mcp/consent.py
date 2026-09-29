@@ -78,6 +78,11 @@ DESTRUCTIVE: dict[str, str] = {
         "Search Ads campaigns, so deleting one breaks the traffic pointing at "
         "it."
     ),
+    "cpp_screenshots_delete": (
+        "Permanently deletes screenshots from a Custom Product Page. With "
+        "delete_all, the entire device family goes, and Apple does not return "
+        "the binaries."
+    ),
     "availability_update": (
         "Changes which territories the app is on sale in. Removing territories "
         "pulls it from those stores."

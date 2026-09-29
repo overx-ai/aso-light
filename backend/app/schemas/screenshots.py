@@ -237,11 +237,11 @@ class ScreenshotDeleteResult(BaseModel):
 
 
 # ------------------------------------------------------------------
-# Main product-page sync from an export directory (spec 013)
+# Sync from an export directory — main listing (spec 013) or a CPP (spec 015)
 # ------------------------------------------------------------------
 
 
-SyncAction = Literal["skip", "replace", "upload", "error"]
+SyncAction = Literal["skip", "replace", "upload", "create_localization", "error"]
 
 
 class ScreenshotSyncRow(BaseModel):

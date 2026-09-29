@@ -9,7 +9,7 @@ Experiment) treatment localization. Both
 3-step reserve -> PUT -> commit upload, the set resolution, and the CDN
 ``source_url`` shaping live in exactly one place.
 
-The module has two halves:
+The module has three parts:
 
 * **Parent-agnostic helpers** (everything up to
   :func:`upload_screenshot_to_localization`). Every function takes the
@@ -17,10 +17,12 @@ The module has two halves:
   differs by the parent localization's resource *type* and its
   ``appScreenshotSets`` relationship *key* — the two values that change between
   parents. CPP and PPO consume these.
-* :class:`ASCVersionScreenshotService` — the *main* product page
-  (``appStoreVersionLocalizations``) bound to those helpers, adding the one
-  thing only the main listing needs: resolving the app's **editable**
-  App Store version before anything may be written.
+* :class:`LocalizationScreenshotService` — those helpers bound to one parent
+  type, plus the plan/apply of an export directory into it (spec 013). Its
+  subclasses are the *localization sources*: :class:`ASCVersionScreenshotService`
+  (the main product page, which resolves the app's **editable** App Store
+  version first) and ``app.services.asc.cpp.CPPScreenshotService``.
+* The export-directory scan: size table, root allowlist, per-locale steps.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ import io
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from PIL import Image, UnidentifiedImageError
 
@@ -436,17 +438,19 @@ async def delete_screenshot_set(client: ASCClient, set_id: str) -> None:
 
 
 # ==================================================================
-# Main product page — appStoreVersionLocalizations
+# Localization sources — the main listing here, a CPP in cpp.py
 # ==================================================================
 
-# The parent localization type + set relationship key for the app's MAIN
-# product page, mirroring the ``_CPP_*`` pair in ``app.services.asc.cpp`` and
-# the treatment pair in ``app.services.asc.experiment``.
-MAIN_LOCALIZATION_TYPE = "appStoreVersionLocalizations"
-MAIN_SET_RELATIONSHIP = "appStoreVersionLocalization"
+
+class NotEditableError(Exception):
+    """No version of the parent accepts screenshot writes; ``message`` names why."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
 
 
-class VersionNotEditableError(Exception):
+class VersionNotEditableError(NotEditableError):
     """Raised when an app has no App Store version accepting screenshot writes.
 
     Carries the offending ``state`` so the caller can name it — a live or
@@ -459,19 +463,19 @@ class VersionNotEditableError(Exception):
         self.version_string = version_string
         label = f" {version_string}" if version_string else ""
         if state is None:
-            self.message = (
+            message = (
                 "This app has no App Store version to attach screenshots to. "
                 "Create a new version in App Store Connect first."
             )
         else:
-            self.message = (
+            message = (
                 f"App Store version{label} is in state {state}, which has no "
                 "editable screenshot sets. Screenshots can only be changed on a "
                 "version in one of: "
                 f"{', '.join(sorted(EDITABLE_VERSION_STATES))}. Create a new "
                 "version in App Store Connect first."
             )
-        super().__init__(self.message)
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -506,26 +510,192 @@ def _most_recent(versions: list[dict]) -> dict | None:
     )[0]
 
 
-class ASCVersionScreenshotService:
+def locales_of(localizations: list[dict]) -> dict[str, str]:
+    """``locale -> localization id`` from raw localization resources."""
+    result: dict[str, str] = {}
+    for resource in localizations:
+        locale = (resource.get("attributes", {}) or {}).get("locale")
+        if locale:
+            result[locale] = resource["id"]
+    return result
+
+
+class LocalizationScreenshotService:
+    """Set/asset operations on one parent localization type, and the spec 013
+    plan/apply of an export directory into it.
+
+    A subclass is a *localization source*: it names the parent type and the
+    set's relationship back to it, maps a version's locales to localization
+    ids and, where the source allows it, creates a missing localization. The
+    main listing and a Custom Product Page are the two sources, so the sync
+    loop below exists once.
+    """
+
+    localization_type: ClassVar[str]
+    set_relationship: ClassVar[str]
+
+    def __init__(self, client: ASCClient) -> None:
+        self.client = client
+
+    async def localizations_by_locale(self, version_id: str) -> dict[str, str]:
+        raise NotImplementedError
+
+    async def ensure_localization(self, version_id: str, locale: str) -> str:
+        raise NotImplementedError(
+            f"{type(self).__name__} does not create localizations ({locale})."
+        )
+
+    # ------------------------------------------------------------------
+    # Sets + assets
+    # ------------------------------------------------------------------
+
+    async def get_screenshot_sets(self, localization_id: str) -> list[dict]:
+        """Shaped screenshot sets for one localization (with states)."""
+        return await fetch_screenshot_sets(
+            self.client,
+            f"/{self.localization_type}/{localization_id}/appScreenshotSets",
+            include_delivery_state=True,
+        )
+
+    async def find_screenshot_set(
+        self, localization_id: str, display_type: str
+    ) -> dict | None:
+        """The existing set for a display type, or ``None`` if not configured."""
+        for shot_set in await self.get_screenshot_sets(localization_id):
+            if shot_set.get("display_type") == display_type:
+                return shot_set
+        return None
+
+    async def ensure_screenshot_set(
+        self, localization_id: str, display_type: str
+    ) -> str:
+        return await find_or_create_screenshot_set(
+            self.client,
+            self.localization_type,
+            localization_id,
+            self.set_relationship,
+            display_type,
+        )
+
+    async def list_set_screenshots(self, set_id: str) -> list[dict]:
+        return await list_set_screenshots(self.client, set_id)
+
+    async def upload_to_set(
+        self, set_id: str, file_bytes: bytes, file_name: str
+    ) -> dict:
+        return await upload_screenshot(self.client, set_id, file_bytes, file_name)
+
+    async def read_back(self, screenshot_id: str) -> dict:
+        return await fetch_screenshot(self.client, screenshot_id)
+
+    async def reorder_set(self, set_id: str, screenshot_ids: list[str]) -> None:
+        await set_screenshot_order(self.client, set_id, screenshot_ids)
+
+    async def delete_screenshot(self, screenshot_id: str) -> None:
+        await delete_screenshot(self.client, screenshot_id)
+
+    async def delete_set(self, set_id: str) -> None:
+        """Delete a set (use after emptying it, so no orphan set is left)."""
+        await delete_screenshot_set(self.client, set_id)
+
+    async def screenshot_set_ids(self, localization_id: str) -> dict[str, str]:
+        return await screenshot_set_ids(
+            self.client, self.localization_type, localization_id
+        )
+
+    # ------------------------------------------------------------------
+    # Sync (spec 013, generalised over the source by spec 015)
+    # ------------------------------------------------------------------
+
+    async def plan_sync(self, steps: list[SyncStep]) -> set[str]:
+        """Attach each step's current set and assets; return the display types
+        the synced locales hold that the export does not touch."""
+        set_ids_by_locale: dict[str, dict[str, str]] = {}
+        for step in steps:
+            if step.error or step.localization_id is None:
+                continue
+            if step.locale not in set_ids_by_locale:
+                set_ids_by_locale[step.locale] = await self.screenshot_set_ids(
+                    step.localization_id
+                )
+            step.set_id = set_ids_by_locale[step.locale].get(step.display_type)
+            if step.set_id:
+                step.existing = await self.list_set_screenshots(step.set_id)
+        synced = {step.display_type for step in steps if not step.error}
+        return {
+            display_type
+            for set_ids in set_ids_by_locale.values()
+            for display_type in set_ids
+            if display_type not in synced
+        }
+
+    async def apply_sync_step(
+        self, step: SyncStep, version_id: str | None = None
+    ) -> None:
+        """Make one set exactly the step's files, in order, slot by slot.
+
+        Each changed slot's old asset is deleted before its replacement is
+        uploaded, so a full set never passes Apple's cap mid-replace. Each
+        file is re-read and must still hash to the planned MD5, so what is
+        uploaded is exactly what the plan checked, and nothing in the slot (or
+        a new set, or a new localization) is written until it is.
+        """
+        set_id = step.set_id
+        order: list[str] = []
+        for index, export_file in enumerate(step.files):
+            current = step.existing[index] if index < len(step.existing) else None
+            if current is not None and _slot_matches(current, export_file):
+                order.append(current["id"])
+                continue
+            file_bytes = await asyncio.to_thread(read_planned_bytes, export_file)
+            if current is not None:
+                await self.delete_screenshot(current["id"])
+            set_id = set_id or await self._ensure_step_set(step, version_id)
+            uploaded = await self.upload_to_set(
+                set_id, file_bytes, export_file.path.name
+            )
+            if not uploaded.get("id"):
+                raise _missing_id_error(
+                    "App Store Connect returned no screenshot id "
+                    f"for {step.locale}/{export_file.path.name}."
+                )
+            order.append(uploaded["id"])
+        for extra in step.existing[len(step.files) :]:
+            await self.delete_screenshot(extra["id"])
+        await self.reorder_set(set_id, order)
+
+    async def _ensure_step_set(self, step: SyncStep, version_id: str | None) -> str:
+        if step.localization_id is None:
+            step.localization_id = await self.ensure_localization(
+                version_id, step.locale
+            )
+        return await self.ensure_screenshot_set(
+            step.localization_id, step.display_type
+        )
+
+
+# The parent localization type + set relationship key for the app's MAIN
+# product page, mirroring the ``_CPP_*`` pair in ``app.services.asc.cpp`` and
+# the treatment pair in ``app.services.asc.experiment``.
+MAIN_LOCALIZATION_TYPE = "appStoreVersionLocalizations"
+MAIN_SET_RELATIONSHIP = "appStoreVersionLocalization"
+
+
+class ASCVersionScreenshotService(LocalizationScreenshotService):
     """Screenshot reads/writes for the app's MAIN product page.
 
     Every write is scoped to the app's *editable* App Store version: the
     localizations (and therefore the screenshot sets) of a live or in-review
     version are read-only, so :meth:`resolve_editable_version` runs first and
     raises :class:`VersionNotEditableError` naming the state.
-
-    Version + localization reads reuse :class:`ASCMetadataService`; the set /
-    asset operations reuse the parent-agnostic helpers above — this class adds
-    no third copy of either.
     """
 
-    def __init__(self, client: ASCClient) -> None:
-        self.client = client
-        self.metadata = ASCMetadataService(client)
+    localization_type = MAIN_LOCALIZATION_TYPE
+    set_relationship = MAIN_SET_RELATIONSHIP
 
-    # ------------------------------------------------------------------
-    # Version + localization resolution
-    # ------------------------------------------------------------------
+    def __init__(self, client: ASCClient) -> None:
+        super().__init__(client)
+        self.metadata = ASCMetadataService(client)
 
     async def resolve_editable_version(self, asc_app_id: str) -> EditableVersion:
         """Resolve the version whose screenshots may be edited.
@@ -559,135 +729,14 @@ class ASCVersionScreenshotService:
         )
 
     async def localizations_by_locale(self, version_id: str) -> dict[str, str]:
-        """Map ``locale -> appStoreVersionLocalizations id`` for a version."""
-        result: dict[str, str] = {}
-        for resource in await self.metadata.list_version_localizations(version_id):
-            locale = (resource.get("attributes", {}) or {}).get("locale")
-            if locale:
-                result[locale] = resource["id"]
-        return result
+        return locales_of(await self.metadata.list_version_localizations(version_id))
 
-    # ------------------------------------------------------------------
-    # Sets + assets
-    # ------------------------------------------------------------------
-
-    async def get_screenshot_sets(self, localization_id: str) -> list[dict]:
-        """Shaped screenshot sets for one version localization (with states)."""
-        return await fetch_screenshot_sets(
-            self.client,
-            f"/{MAIN_LOCALIZATION_TYPE}/{localization_id}/appScreenshotSets",
-            include_delivery_state=True,
-        )
-
-    async def find_screenshot_set(
-        self, localization_id: str, display_type: str
-    ) -> dict | None:
-        """The existing set for a display type, or ``None`` if not configured."""
-        for shot_set in await self.get_screenshot_sets(localization_id):
-            if shot_set.get("display_type") == display_type:
-                return shot_set
-        return None
-
-    async def ensure_screenshot_set(
-        self, localization_id: str, display_type: str
-    ) -> str:
-        """Find (or create) the set for a display type on this localization."""
-        return await find_or_create_screenshot_set(
-            self.client,
-            MAIN_LOCALIZATION_TYPE,
-            localization_id,
-            MAIN_SET_RELATIONSHIP,
-            display_type,
-        )
-
-    async def list_set_screenshots(self, set_id: str) -> list[dict]:
-        """The set's screenshots in display order."""
-        return await list_set_screenshots(self.client, set_id)
-
-    async def upload_to_set(
-        self, set_id: str, file_bytes: bytes, file_name: str
-    ) -> dict:
-        """Reserve -> PUT -> commit one asset into an existing set."""
-        return await upload_screenshot(self.client, set_id, file_bytes, file_name)
-
-    async def read_back(self, screenshot_id: str) -> dict:
-        """Re-read a committed asset, delivery state included."""
-        return await fetch_screenshot(self.client, screenshot_id)
-
-    async def reorder_set(self, set_id: str, screenshot_ids: list[str]) -> None:
-        """Set the display order of a set's assets."""
-        await set_screenshot_order(self.client, set_id, screenshot_ids)
-
-    async def delete_screenshot(self, screenshot_id: str) -> None:
-        """Delete one asset."""
-        await delete_screenshot(self.client, screenshot_id)
-
-    async def delete_set(self, set_id: str) -> None:
-        """Delete a set (use after emptying it, so no orphan set is left)."""
-        await delete_screenshot_set(self.client, set_id)
-
-    async def screenshot_set_ids(self, localization_id: str) -> dict[str, str]:
-        """``display type -> set id`` on this localization, no assets read."""
-        return await screenshot_set_ids(
-            self.client, MAIN_LOCALIZATION_TYPE, localization_id
-        )
-
-    async def plan_sync(self, steps: list[SyncStep]) -> set[str]:
-        """Attach each step's current set and assets; return the display types
-        the synced locales hold that the export does not touch."""
-        set_ids_by_locale: dict[str, dict[str, str]] = {}
-        for step in steps:
-            if step.error:
-                continue
-            if step.locale not in set_ids_by_locale:
-                set_ids_by_locale[step.locale] = await self.screenshot_set_ids(
-                    step.localization_id
-                )
-            step.set_id = set_ids_by_locale[step.locale].get(step.display_type)
-            if step.set_id:
-                step.existing = await self.list_set_screenshots(step.set_id)
-        synced = {step.display_type for step in steps if not step.error}
-        return {
-            display_type
-            for set_ids in set_ids_by_locale.values()
-            for display_type in set_ids
-            if display_type not in synced
-        }
-
-    async def apply_sync_step(self, step: SyncStep) -> None:
-        """Make one set exactly the step's files, in order, slot by slot.
-
-        Each changed slot's old asset is deleted before its replacement is
-        uploaded, so a full set never passes Apple's cap mid-replace. Each
-        file is re-read and must still hash to the planned MD5, so what is
-        uploaded is exactly what the plan checked, and nothing in the slot (or
-        a new set) is written until it is.
-        """
-        set_id = step.set_id
-        order: list[str] = []
-        for index, export_file in enumerate(step.files):
-            current = step.existing[index] if index < len(step.existing) else None
-            if current is not None and _slot_matches(current, export_file):
-                order.append(current["id"])
-                continue
-            file_bytes = await asyncio.to_thread(read_planned_bytes, export_file)
-            if current is not None:
-                await self.delete_screenshot(current["id"])
-            set_id = set_id or await self.ensure_screenshot_set(
-                step.localization_id, step.display_type
-            )
-            uploaded = await self.upload_to_set(
-                set_id, file_bytes, export_file.path.name
-            )
-            if not uploaded.get("id"):
-                raise _missing_id_error(
-                    "App Store Connect returned no screenshot id "
-                    f"for {step.locale}/{export_file.path.name}."
-                )
-            order.append(uploaded["id"])
-        for extra in step.existing[len(step.files) :]:
-            await self.delete_screenshot(extra["id"])
-        await self.reorder_set(set_id, order)
+    async def app_locales(self, asc_app_id: str) -> frozenset[str]:
+        """The locales of the app's newest App Store version, whatever its state."""
+        newest = _most_recent(await self.metadata.list_app_store_versions(asc_app_id))
+        if newest is None:
+            return frozenset()
+        return frozenset(await self.localizations_by_locale(newest["id"]))
 
 
 # ==================================================================
@@ -774,6 +823,8 @@ class SyncStep:
     def action(self) -> SyncAction:
         if self.error:
             return "error"
+        if self.localization_id is None:
+            return "create_localization"
         if not self.existing:
             return "upload"
         if not self.uploads and not self.deletes:
@@ -858,7 +909,7 @@ def read_planned_bytes(export_file: ExportFile) -> bytes:
 
 
 def _scan_locale(
-    locale_dir: Path, localization_id: str, display_types: list[str] | None
+    locale_dir: Path, localization_id: str | None, display_types: list[str] | None
 ) -> list[SyncStep]:
     locale = locale_dir.name
     if not _within_roots(locale_dir):
@@ -915,19 +966,35 @@ class ExportScan:
     skipped: list[str]
 
 
+@dataclass(frozen=True)
+class SyncTarget:
+    """Where a sync writes: a source's editable version and its localizations.
+
+    ``creatable`` are locales the source may add a localization for during
+    apply (a CPP takes any of the app's own locales). ``label`` names the
+    locale owner in the error for a directory that is none of them.
+    """
+
+    service: LocalizationScreenshotService
+    version: EditableVersion
+    localizations: dict[str, str]
+    label: str
+    creatable: frozenset[str] = frozenset()
+
+
 def scan_export_dir(
     root: Path,
-    localizations: dict[str, str],
-    version_label: str,
+    target: SyncTarget,
     *,
     locales: list[str] | None = None,
     display_types: list[str] | None = None,
 ) -> ExportScan:
-    """Group ``<root>/<locale>/*`` into sync steps against the version's locales.
+    """Group ``<root>/<locale>/*`` into sync steps against the target's locales.
 
-    A directory that is not one of the version's locales is an error, never a
-    skip: a silently skipped ``nl/`` once shipped a "successful" push of
-    nothing. Dot-entries, ``variants/`` and top-level files are not locales.
+    A directory that is not one of the target's locales (nor creatable) is an
+    error, never a skip: a silently skipped ``nl/`` once shipped a
+    "successful" push of nothing. Dot-entries, ``variants/`` and top-level
+    files are not locales.
     """
     steps: list[SyncStep] = []
     seen: set[str] = set()
@@ -943,16 +1010,15 @@ def scan_export_dir(
             skipped.append(name)
             continue
         seen.add(name)
-        localization_id = localizations.get(name)
-        if localization_id is None:
+        localization_id = target.localizations.get(name)
+        if localization_id is None and name not in target.creatable:
             steps.append(
                 SyncStep(
                     name,
                     error=(
-                        f"{name}/ is not a locale on App Store version "
-                        f"{version_label}. Locale directories are App Store "
-                        "Connect codes (nl-NL, not nl) the version already has; "
-                        "add one with metadata_create_locale."
+                        f"{name}/ is not a locale on {target.label}. Locale "
+                        "directories are App Store Connect codes (nl-NL, not nl) "
+                        "it already has; add one with metadata_create_locale."
                     ),
                 )
             )

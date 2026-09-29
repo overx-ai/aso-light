@@ -25,12 +25,26 @@ from app.schemas.cpp import (
     ScreenshotSet,
     ScreenshotSetListResponse,
 )
+from app.mcp.tools.screenshots import (
+    check_delete_selectors,
+    delete_from_localization,
+    run_screenshot_sync,
+)
+from app.models.app import App
 from app.schemas.screenshots import (
+    ScreenshotDeleteResult,
+    ScreenshotSyncResult,
     decode_screenshot_payload,
     is_valid_display_type,
 )
-from app.services.asc.cpp import ASCCustomProductPageService
+from app.services.asc.client import ASCClient
+from app.services.asc.cpp import ASCCustomProductPageService, CPPScreenshotService
 from app.services.asc.errors import ASCAPIError
+from app.services.asc.screenshots import (
+    ASCVersionScreenshotService,
+    NotEditableError,
+    SyncTarget,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +58,8 @@ async def _asc_tool_error() -> AsyncIterator[None]:
     """
     try:
         yield
+    except NotEditableError as exc:
+        raise ToolError(exc.message)
     except ASCAPIError as exc:
         raise ToolError(f"ASC API error: {exc.message}")
 
@@ -168,10 +184,6 @@ async def ensure_cpp_localization(
             service = ASCCustomProductPageService(client)
             async with _asc_tool_error():
                 version_id = await service.get_editable_version_id(cpp_id)
-                if version_id is None:
-                    raise ToolError(
-                        f"Custom Product Page {cpp_id} has no editable version"
-                    )
                 localization_id = await service.find_or_create_localization_id(
                     version_id, locale,
                 )
@@ -256,6 +268,7 @@ async def upload_cpp_screenshot(
         async with await _get_asc_client_for_app(app, session) as client:
             service = ASCCustomProductPageService(client)
             async with _asc_tool_error():
+                await service.assert_localization_editable(localization_id)
                 resource = await service.upload_screenshot_to_cpp(
                     localization_id,
                     display_type,
@@ -272,3 +285,107 @@ async def upload_cpp_screenshot(
             attrs.get("imageAsset")
         ),
     )
+
+
+@mcp.tool(name="cpp_screenshots_sync")
+async def sync_cpp_screenshots(
+    app_id: int,
+    cpp_id: str,
+    dir: str,  # noqa: A002 — the name callers and spec 015 use
+    locales: list[str] | None = None,
+    display_types: list[str] | None = None,
+    apply: bool = False,
+) -> ScreenshotSyncResult:
+    """Make a studio variant export (``<dir>/<locale>/NN.png``) a Custom Product Page's screenshots.
+
+    ``screenshots_sync`` with the CPP's editable version as the target: the
+    same directory rules, size table and ``SCREENSHOT_SYNC_ROOTS`` allowlist,
+    each display type replaced as a unit in filename order, unchanged slots
+    skipped by MD5, other display types never touched. A locale directory the
+    page has no localization for is planned as ``create_localization`` and
+    created on apply; it must be one of the app's own locales.
+
+    Dry run by default; with ``apply=True`` nothing is written while any row
+    is an ``error``. A page whose only version is in review is refused.
+
+    Args:
+        app_id: The local app id.
+        cpp_id: The Custom Product Page id.
+        dir: Absolute path under ``SCREENSHOT_SYNC_ROOTS``, e.g. a studio
+            ``out/variants/<name>``.
+        locales: Sync only these locale directories (default: every one).
+        display_types: Sync only these device families (default: every family
+            the files map to).
+        apply: False (default) returns the plan and writes nothing.
+
+    Returns:
+        Rows per locale x display type (``skip`` | ``replace`` | ``upload`` |
+        ``create_localization`` | ``error``); after an apply, the read-back
+        ``count`` per row and the ``inventory`` with its gaps.
+    """
+
+    async def bind(client: ASCClient, app: App) -> SyncTarget:
+        service = CPPScreenshotService(client)
+        version = await service.cpp.get_editable_version(cpp_id)
+        return SyncTarget(
+            service=service,
+            version=version,
+            localizations=await service.localizations_by_locale(version.id),
+            label=f"app {app.name or app.asc_app_id}",
+            creatable=await ASCVersionScreenshotService(client).app_locales(
+                app.asc_app_id
+            ),
+        )
+
+    return await run_screenshot_sync(
+        app_id,
+        dir,
+        bind,
+        locales=locales,
+        display_types=display_types,
+        apply=apply,
+    )
+
+
+@mcp.tool(name="cpp_screenshots_delete")
+async def delete_cpp_screenshots(
+    app_id: int,
+    cpp_id: str,
+    locale: str,
+    display_type: str,
+    screenshot_id: str | None = None,
+    position: int | None = None,
+    delete_all: bool = False,
+    prune_empty_set: bool = False,
+) -> ScreenshotDeleteResult:
+    """Delete screenshot(s) from a Custom Product Page localization.
+
+    ``screenshots_delete`` for a CPP's editable version. Pass exactly one
+    selector: ``screenshot_id``, ``position`` (0-based) or ``delete_all=True``.
+    ``prune_empty_set`` also deletes the set once it is empty. Consent-gated.
+    """
+    check_delete_selectors(display_type, screenshot_id, position, delete_all)
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        async with await _get_asc_client_for_app(app, session) as client:
+            service = CPPScreenshotService(client)
+            async with _asc_tool_error():
+                version = await service.cpp.get_editable_version(cpp_id)
+                localizations = await service.localizations_by_locale(version.id)
+                localization_id = localizations.get(locale)
+                if localization_id is None:
+                    known = ", ".join(sorted(localizations)) or "none"
+                    raise ToolError(
+                        f"Custom Product Page {cpp_id} has no '{locale}' "
+                        f"localization. Existing locales: {known}."
+                    )
+                return await delete_from_localization(
+                    service,
+                    localization_id,
+                    locale,
+                    display_type,
+                    screenshot_id=screenshot_id,
+                    position=position,
+                    delete_all=delete_all,
+                    prune_empty_set=prune_empty_set,
+                )

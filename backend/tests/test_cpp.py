@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.asc.cpp import ASCCustomProductPageService
+from app.services.asc.cpp import (
+    ASCCustomProductPageService,
+    CPPVersionNotEditableError,
+)
 from tests._async_harness import run_async
 
 
@@ -212,9 +215,53 @@ def test_get_editable_version_prefers_editable_state():
     assert run_async(svc.get_editable_version_id("cpp-1")) == "ver-edit"
 
 
-def test_get_editable_version_none_when_no_versions():
+def test_get_editable_version_refuses_a_cpp_with_no_versions():
     svc, _client = _service()  # empty -> {"data": []}
-    assert run_async(svc.get_editable_version_id("cpp-1")) is None
+    with pytest.raises(CPPVersionNotEditableError, match="no versions"):
+        run_async(svc.get_editable_version_id("cpp-1"))
+
+
+@pytest.mark.parametrize("state", ["IN_REVIEW", "WAITING_FOR_REVIEW"])
+def test_a_version_in_review_is_not_editable(state):
+    svc, _client = _service({
+        ("GET", "/appCustomProductPages/cpp-1/appCustomProductPageVersions"): {
+            "data": [{"id": "ver-review", "attributes": {"state": state}}],
+        },
+    })
+    with pytest.raises(CPPVersionNotEditableError, match=state):
+        run_async(svc.get_editable_version_id("cpp-1"))
+
+
+def test_no_editable_version_never_falls_back_to_the_first_one():
+    """A published or reviewed version used to be returned as ``versions[0]``."""
+    svc, _client = _service({
+        ("GET", "/appCustomProductPages/cpp-1/appCustomProductPageVersions"): {
+            "data": [
+                {"id": "ver-live", "attributes": {"state": "APPROVED"}},
+                {"id": "ver-review", "attributes": {"state": "WAITING_FOR_REVIEW"}},
+            ],
+        },
+    })
+    with pytest.raises(CPPVersionNotEditableError) as err:
+        run_async(svc.get_editable_version_id("cpp-1"))
+    assert "APPROVED" in err.value.message
+    assert "WAITING_FOR_REVIEW" in err.value.message
+    assert "cpp-1" in err.value.message
+
+
+def test_a_rejected_version_is_editable_and_carries_its_version_string():
+    svc, _client = _service({
+        ("GET", "/appCustomProductPages/cpp-1/appCustomProductPageVersions"): {
+            "data": [
+                {"id": "ver-live", "attributes": {"state": "APPROVED", "version": "1"}},
+                {"id": "ver-fix", "attributes": {"state": "REJECTED", "version": "2"}},
+            ],
+        },
+    })
+    version = run_async(svc.get_editable_version("cpp-1"))
+    assert (version.id, version.state, version.version_string) == (
+        "ver-fix", "REJECTED", "2",
+    )
 
 
 def test_find_or_create_localization_reuses_matching_locale():

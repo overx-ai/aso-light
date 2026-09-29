@@ -65,9 +65,14 @@ class FakeASC:
         screenshots: dict[str, dict] | None = None,
         commit_state: str = "COMPLETE",
         commit_errors: list[str] | None = None,
+        cpp_versions: dict[str, list[dict]] | None = None,
+        cpp_localizations: dict[str, dict[str, str]] | None = None,
     ) -> None:
         self.versions = versions
         self.localizations = localizations
+        # cpp id -> its versions; CPP version id -> {locale: localization id}.
+        self.cpp_versions = cpp_versions or {}
+        self.cpp_localizations = cpp_localizations or {}
         self.sets = sets or {}
         self.screenshots = screenshots or {}
         self.commit_state = commit_state
@@ -146,6 +151,38 @@ class FakeASC:
                 ]
             }
 
+        if parts[0] == "appCustomProductPages" and parts[-1] == (
+            "appCustomProductPageVersions"
+        ):
+            return {"data": self.cpp_versions.get(parts[1], [])}
+
+        if parts[0] == "appCustomProductPageVersions" and parts[-1] == (
+            "appCustomProductPageLocalizations"
+        ):
+            return {
+                "data": [
+                    {
+                        "type": "appCustomProductPageLocalizations",
+                        "id": loc_id,
+                        "attributes": {"locale": locale},
+                    }
+                    for locale, loc_id in self.cpp_localizations.get(parts[1], {}).items()
+                ]
+            }
+
+        if parts[0] == "appCustomProductPageLocalizations" and len(parts) == 2:
+            assert (params or {}).get("include") == "appCustomProductPageVersion"
+            owner = next(
+                version
+                for versions in self.cpp_versions.values()
+                for version in versions
+                if parts[1] in self.cpp_localizations.get(version["id"], {}).values()
+            )
+            return {
+                "data": {"type": "appCustomProductPageLocalizations", "id": parts[1]},
+                "included": [owner],
+            }
+
         if parts[0] in {
             "appStoreVersionLocalizations",
             "appCustomProductPageLocalizations",
@@ -211,6 +248,12 @@ class FakeASC:
                 "shots": [],
             }
             return {"data": {"id": set_id}}
+
+        if path == "/appCustomProductPageLocalizations":
+            version_id = body["relationships"]["appCustomProductPageVersion"]["data"]["id"]
+            loc_id = self._next_id("cpp-loc")
+            self.cpp_localizations.setdefault(version_id, {})[attrs["locale"]] = loc_id
+            return {"data": {"id": loc_id, "attributes": {"locale": attrs["locale"]}}}
 
         if path == "/appScreenshots":
             shot_id = self._next_id("shot")
@@ -1695,7 +1738,304 @@ def test_sync_replaces_a_failed_asset_even_when_its_checksum_matches(tmp_path):
         "en-US",
         "APP_IPHONE_67",
         [export_file],
+        localization_id="loc-en",
         existing=[{"id": "s1", "checksum": "abc", "state": shots.ASSET_STATE_FAILED}],
     )
 
     assert (step.action, step.uploads, step.deletes) == ("replace", 1, 1)
+
+
+# ==================================================================
+# cpp_screenshots_sync / cpp_screenshots_delete — the same sync, a CPP source
+# (spec 015)
+# ==================================================================
+
+CPP_ID = "cpp-1"
+CPP_VERSION = "cver-1"
+
+
+def _cpp_version(state: str = "PREPARE_FOR_SUBMISSION") -> dict:
+    return {
+        "type": "appCustomProductPageVersions",
+        "id": CPP_VERSION,
+        "attributes": {"state": state, "version": "1"},
+    }
+
+
+def _cpp_sync_client(
+    md5s: dict[str, list[str]], state: str = "PREPARE_FOR_SUBMISSION"
+) -> FakeASC:
+    """The app ships en-US, de-DE and fr-FR. The CPP has en-US (matches the
+    export, plus a Watch set) and de-DE (stale, one longer); it lacks fr-FR."""
+    screenshots = {
+        f"cshot-en-{i}": {"file_name": f"{i + 1:02d}.png", "checksum": md5}
+        for i, md5 in enumerate(md5s["en-US"])
+    }
+    screenshots.update({
+        f"cshot-de-{i}": {"file_name": f"old-{i}.png", "checksum": f"stale-{i}"}
+        for i in range(3)
+    })
+    screenshots["cshot-watch"] = {"file_name": "watch.png", "checksum": "w"}
+    sets = {
+        "cset-en-67": {
+            "display_type": "APP_IPHONE_67",
+            "localization_id": "cloc-en",
+            "shots": [f"cshot-en-{i}" for i in range(len(md5s["en-US"]))],
+        },
+        "cset-de-67": {
+            "display_type": "APP_IPHONE_67",
+            "localization_id": "cloc-de",
+            "shots": ["cshot-de-0", "cshot-de-1", "cshot-de-2"],
+        },
+        "cset-en-watch": {
+            "display_type": "APP_WATCH_ULTRA",
+            "localization_id": "cloc-en",
+            "shots": ["cshot-watch"],
+        },
+    }
+    return FakeASC(
+        versions=[_version(state="READY_FOR_SALE")],
+        localizations={
+            "ver-1": {"en-US": "loc-en", "de-DE": "loc-de", "fr-FR": "loc-fr"},
+        },
+        sets=sets,
+        screenshots=screenshots,
+        cpp_versions={CPP_ID: [_cpp_version(state)]},
+        cpp_localizations={CPP_VERSION: {"en-US": "cloc-en", "de-DE": "cloc-de"}},
+    )
+
+
+def _patch_cpp_tools(monkeypatch, client: FakeASC) -> None:
+    from app.mcp.tools import cpp as cpp_tools
+
+    _patch_tools(monkeypatch, client)
+
+    async def _fake_asc_client_for_app(app: App, session):
+        return await screenshot_tools._get_asc_client_for_app(app, session)
+
+    monkeypatch.setattr(cpp_tools, "session_scope", _fake_session_scope)
+    monkeypatch.setattr(cpp_tools, "resolve_app", _fake_resolve_app)
+    monkeypatch.setattr(cpp_tools, "_get_asc_client_for_app", _fake_asc_client_for_app)
+
+
+def _cpp_call(monkeypatch, client: FakeASC, name: str, **kwargs):
+    _patch_cpp_tools(monkeypatch, client)
+
+    async def go():
+        tool = await _tool(name)
+        return await tool.fn(app_id=7, **kwargs)
+
+    return run_async(go())
+
+
+def _cpp_sync(monkeypatch, client: FakeASC, out: Path, **kwargs):
+    return _cpp_call(
+        monkeypatch, client, "cpp_screenshots_sync", cpp_id=CPP_ID, dir=str(out), **kwargs
+    )
+
+
+def _cpp_checksums(client: FakeASC, localization_id: str) -> list[str]:
+    shot_set = client.set_for(localization_id, "APP_IPHONE_67")
+    assert shot_set is not None
+    return [client.screenshots[s]["checksum"] for s in shot_set["shots"]]
+
+
+def test_cpp_sync_dry_run_plans_create_localization_replace_and_skip(
+    export, monkeypatch
+):
+    out, md5s = export
+    client = _cpp_sync_client(md5s)
+
+    result = _cpp_sync(monkeypatch, client, out)
+
+    assert result.applied is False
+    assert result.version_id == CPP_VERSION
+    assert _actions(result) == {
+        ("de-DE", "APP_IPHONE_67"): "replace",
+        ("en-US", "APP_IPHONE_67"): "skip",
+        ("fr-FR", "APP_IPHONE_67"): "create_localization",
+    }
+    fr = next(row for row in result.rows if row.locale == "fr-FR")
+    assert (fr.files, fr.existing, fr.uploads, fr.deletes) == (2, 0, 2, 0)
+    de = next(row for row in result.rows if row.locale == "de-DE")
+    assert (de.files, de.existing, de.uploads, de.deletes) == (2, 3, 2, 3)
+    assert result.inventory is None
+    assert _writes(client) == []
+
+
+def test_cpp_sync_apply_replaces_as_a_unit_and_creates_the_missing_localization(
+    export, monkeypatch
+):
+    out, md5s = export
+    client = _cpp_sync_client(md5s)
+
+    result = _cpp_sync(monkeypatch, client, out, apply=True)
+
+    assert result.applied is True
+    assert _cpp_checksums(client, "cloc-de") == md5s["de-DE"]
+    for stale in ("cshot-de-0", "cshot-de-1", "cshot-de-2"):
+        assert stale not in client.screenshots
+    fr_loc = client.cpp_localizations[CPP_VERSION]["fr-FR"]
+    assert _cpp_checksums(client, fr_loc) == md5s["fr-FR"]
+    assert client.sets["cset-en-67"]["shots"] == ["cshot-en-0", "cshot-en-1"]
+    # The main listing's own localizations were never written to.
+    assert all(
+        shot_set["localization_id"] not in {"loc-en", "loc-de", "loc-fr"}
+        for shot_set in client.sets.values()
+    )
+
+    assert {row.locale: row.count for row in result.rows} == {
+        "de-DE": 2, "en-US": 2, "fr-FR": 2,
+    }
+    assert result.inventory is not None
+    assert result.inventory.gaps == []
+
+
+def test_cpp_sync_rerun_is_all_skip_with_zero_writes(export, monkeypatch):
+    out, md5s = export
+    client = _cpp_sync_client(md5s)
+    _cpp_sync(monkeypatch, client, out, apply=True)
+    client.calls.clear()
+
+    again = _cpp_sync(monkeypatch, client, out, apply=True)
+
+    assert set(_actions(again).values()) == {"skip"}
+    assert _writes(client) == []
+
+
+def test_cpp_sync_never_touches_another_display_type(export, monkeypatch):
+    out, md5s = export
+    client = _cpp_sync_client(md5s)
+    before = copy.deepcopy(
+        (client.sets["cset-en-watch"], client.screenshots["cshot-watch"])
+    )
+
+    result = _cpp_sync(monkeypatch, client, out, apply=True)
+
+    assert (client.sets["cset-en-watch"], client.screenshots["cshot-watch"]) == before
+    touched = " ".join(path for _method, path in client.calls)
+    assert "cset-en-watch" not in touched
+    assert "cshot-watch" not in touched
+    assert result.untouched.display_types == ["APP_WATCH_ULTRA"]
+
+
+def test_cpp_sync_keeps_013s_directory_rules(export, monkeypatch):
+    out, md5s = export
+    _png(out / "variants" / "cpp-a" / "en-US" / "01.png")
+    _png(out / ".history" / "01.png")
+    (out / "findings.json").write_text("{}")
+    client = _cpp_sync_client(md5s)
+
+    clean = _cpp_sync(monkeypatch, client, out)
+    assert _errors(clean) == []
+    assert set(clean.untouched.entries) >= {"variants", ".history", "findings.json"}
+
+    _png(out / "en-US" / "03.png", size=(1000, 1000))
+    _png(out / "nl" / "01.png")
+    client.calls.clear()
+
+    refused = _cpp_sync(monkeypatch, client, out, apply=True)
+
+    assert refused.applied is False
+    errors = " ".join(_errors(refused))
+    assert "03.png" in errors and "1000x1000" in errors
+    assert _actions(refused)[("nl", None)] == "error"
+    assert "nl-NL, not nl" in errors
+    assert _writes(client) == []
+
+
+def test_cpp_sync_refuses_a_dir_outside_the_allowlist_before_any_asc_call(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "allowed"
+    root.mkdir()
+    monkeypatch.setattr(settings, "SCREENSHOT_SYNC_ROOTS", [str(root)])
+    outside = tmp_path / "outside" / "out"
+    md5s = _export(outside, {"en-US": 2})
+    client = _cpp_sync_client({"en-US": md5s["en-US"]})
+
+    with pytest.raises(ToolError, match="SCREENSHOT_SYNC_ROOTS"):
+        _cpp_sync(monkeypatch, client, outside)
+    assert client.calls == []
+
+
+def test_every_cpp_write_tool_refuses_a_version_in_review(export, monkeypatch):
+    out, md5s = export
+    client = _cpp_sync_client(md5s, state="IN_REVIEW")
+    calls = {
+        "cpp_screenshots_sync": {"cpp_id": CPP_ID, "dir": str(out), "apply": True},
+        "cpp_screenshots_delete": {
+            "cpp_id": CPP_ID,
+            "locale": "en-US",
+            "display_type": "APP_IPHONE_67",
+            "position": 0,
+        },
+        "cpp_ensure_localization": {"cpp_id": CPP_ID, "locale": "fr-FR"},
+        "cpp_upload_screenshot": {
+            "localization_id": "cloc-en",
+            "display_type": "APP_IPHONE_67",
+            "file_base64": "cG5n",
+            "file_name": "hero.png",
+        },
+    }
+
+    for name, kwargs in calls.items():
+        with pytest.raises(ToolError, match="IN_REVIEW"):
+            _cpp_call(monkeypatch, client, name, **kwargs)
+    assert _writes(client) == []
+
+
+def test_cpp_screenshots_delete_removes_one_slot_and_keeps_the_rest(monkeypatch):
+    client = _cpp_sync_client({"en-US": ["a", "b"]})
+
+    result = _cpp_call(
+        monkeypatch,
+        client,
+        "cpp_screenshots_delete",
+        cpp_id=CPP_ID,
+        locale="de-DE",
+        display_type="APP_IPHONE_67",
+        position=1,
+    )
+
+    assert result.deleted_screenshot_ids == ["cshot-de-1"]
+    assert result.remaining == 2
+    assert client.sets["cset-de-67"]["shots"] == ["cshot-de-0", "cshot-de-2"]
+
+
+def test_cpp_screenshots_delete_needs_a_fresh_consent_token(monkeypatch):
+    import mcp.types as mt
+    from fastmcp.server.middleware import MiddlewareContext
+
+    from app.mcp import consent
+
+    consent.reset_consent_state()
+    monkeypatch.setattr(consent, "get_access_token", lambda: None)
+    reached: list = []
+
+    async def call_next(context):
+        reached.append(context)
+        return "EXECUTED"
+
+    def call(arguments: dict):
+        context = MiddlewareContext(
+            message=mt.CallToolRequestParams(
+                name="cpp_screenshots_delete", arguments=arguments
+            )
+        )
+        return run_async(consent.ConsentGate().on_call_tool(context, call_next))
+
+    arguments = {
+        "app_id": 7,
+        "cpp_id": CPP_ID,
+        "locale": "de-DE",
+        "display_type": "APP_IPHONE_67",
+        "delete_all": True,
+    }
+    assert "cpp_screenshots_delete" in consent.DESTRUCTIVE
+    with pytest.raises(ToolError, match="CONSENT REQUIRED"):
+        call(arguments)
+    with pytest.raises(ToolError, match="unknown or already used"):
+        call({**arguments, consent.CONFIRM_ARG: "not-a-token"})
+    assert reached == []
+    consent.reset_consent_state()
