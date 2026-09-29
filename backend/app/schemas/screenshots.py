@@ -265,7 +265,11 @@ class ScreenshotSyncUntouched(BaseModel):
 class ScreenshotSyncResult(BaseModel):
     """``applied`` stays false while any row is an ``error``: nothing is written
     until the whole directory plans cleanly. After an apply, ``count`` and
-    ``inventory`` are the read-back, not the upload responses."""
+    ``inventory`` are the read-back, not the upload responses.
+
+    ``missing_families`` is per locale the display types the app's main listing
+    holds that this Custom Product Page would still lack once the sync is
+    done; empty when complete, and always empty for the main listing."""
 
     app_id: int
     dir: str
@@ -275,3 +279,4 @@ class ScreenshotSyncResult(BaseModel):
     rows: list[ScreenshotSyncRow] = Field(default_factory=list)
     untouched: ScreenshotSyncUntouched = Field(default_factory=ScreenshotSyncUntouched)
     inventory: VersionScreenshotInventory | None = None
+    missing_families: dict[str, list[str]] = Field(default_factory=dict)

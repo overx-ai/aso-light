@@ -1,7 +1,7 @@
 ---
 status: current
 created: 2026-04-26
-updated: 2026-09-29
+updated: 2026-09-30
 ---
 
 # 000 - Changelog
@@ -11,6 +11,9 @@ updated: 2026-09-29
 > out. Nothing to do unless you are about to cut a release.
 
 ## [Unreleased]
+
+### Fixed — `cpp_screenshots_sync` names a device family the page would still lack (2026-09-30)
+- A Custom Product Page synced with iPhone shots only planned and applied clean, and App Store Connect then refused to submit it: "upload a screenshot for the iPad Pro 13-inch display" ([bug 008](bugs/008-cpp-sync-hides-missing-device-family.md), [docs/007](007-mcp-integration.md)). The result now has `missing_families`, per locale the display types the app's editable main listing holds that the page lacks after the sync, for the dry run and the apply. It is informational; an apply never refuses on it.
 
 ### Fixed — `screenshots_sync` / `cpp_screenshots_sync` apply no longer times out silently (2026-09-29)
 - An apply over a 39-locale export ran about 15 minutes with no MCP progress. Claude Code aborted it at 300 s, and the server finished for nobody ([bug 006](bugs/006-screenshot-sync-apply-silent-past-client-timeout.md), [docs/007](007-mcp-integration.md)). Both tools now report progress through the FastMCP `Context`: once per locale × display-type row, plus a 30 s heartbeat.

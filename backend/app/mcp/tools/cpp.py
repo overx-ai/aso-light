@@ -289,6 +289,12 @@ async def sync_cpp_screenshots(
     Dry run by default; with ``apply=True`` nothing is written while any row
     is an ``error``. A page whose only version is in review is refused.
 
+    App Store Connect refuses to submit a page that lacks a device family the
+    app ships, and a sync of one family reports clean regardless. So the reply
+    carries ``missing_families``: per locale, the display types the app's
+    editable main listing holds that this page still lacks after the sync
+    (empty when complete). It never blocks an apply; sync the family too.
+
     Args:
         app_id: The local app id.
         cpp_id: The Custom Product Page id.
@@ -302,20 +308,21 @@ async def sync_cpp_screenshots(
     Returns:
         Rows per locale x display type (``skip`` | ``replace`` | ``upload`` |
         ``create_localization`` | ``error``); after an apply, the read-back
-        ``count`` per row and the ``inventory`` with its gaps.
+        ``count`` per row, the ``inventory`` with its gaps, and
+        ``missing_families``.
     """
 
     async def bind(client: ASCClient, app: App) -> SyncTarget:
         service = CPPScreenshotService(client)
+        main = ASCVersionScreenshotService(client)
         version = await service.cpp.get_editable_version(cpp_id)
         return SyncTarget(
             service=service,
             version=version,
             localizations=await service.localizations_by_locale(version.id),
             label=f"app {app.name or app.asc_app_id}",
-            creatable=await ASCVersionScreenshotService(client).app_locales(
-                app.asc_app_id
-            ),
+            creatable=await main.app_locales(app.asc_app_id),
+            reference=await main.main_families(app.asc_app_id),
         )
 
     return await run_screenshot_sync(

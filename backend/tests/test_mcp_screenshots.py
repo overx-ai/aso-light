@@ -1949,6 +1949,66 @@ def test_cpp_sync_never_touches_another_display_type(export, monkeypatch):
     assert result.untouched.display_types == ["APP_WATCH_ULTRA"]
 
 
+IPHONE, IPAD = "APP_IPHONE_67", "APP_IPAD_PRO_3GEN_129"
+
+
+def _main_ships(client: FakeASC, *display_types: str) -> FakeASC:
+    """The app's main listing is editable and holds a set of each type in
+    every locale, as the app ships those device families."""
+    client.versions = [_version()]
+    for localization_id in ("loc-en", "loc-de", "loc-fr"):
+        for display_type in display_types:
+            client.sets[f"main-{localization_id}-{display_type}"] = {
+                "display_type": display_type,
+                "localization_id": localization_id,
+                "shots": [],
+            }
+    return client
+
+
+def test_cpp_sync_names_the_device_family_the_page_would_lack(export, monkeypatch):
+    out, md5s = export
+    client = _main_ships(_cpp_sync_client(md5s), IPHONE, IPAD)
+
+    dry = _cpp_sync(monkeypatch, client, out)
+    applied = _cpp_sync(monkeypatch, client, out, apply=True)
+
+    lacking = {"en-US": [IPAD], "de-DE": [IPAD], "fr-FR": [IPAD]}
+    assert dry.missing_families == lacking
+    assert applied.applied
+    assert applied.missing_families == lacking
+
+
+def test_cpp_sync_reports_no_missing_family_once_it_is_synced_too(export, monkeypatch):
+    out, md5s = export
+    ipad_out = out.parent / "ipad"
+    _export(ipad_out, {"en-US": 2, "de-DE": 2, "fr-FR": 2}, size=IPAD_13)
+    client = _main_ships(_cpp_sync_client(md5s), IPHONE, IPAD)
+
+    _cpp_sync(monkeypatch, client, out, apply=True)
+    done = _cpp_sync(monkeypatch, client, ipad_out, apply=True)
+
+    assert done.missing_families == {}
+    assert _cpp_sync(monkeypatch, client, out).missing_families == {}
+
+
+def test_cpp_sync_reports_nothing_when_the_main_listing_is_not_editable(
+    export, monkeypatch
+):
+    out, md5s = export
+    client = _cpp_sync_client(md5s)
+
+    assert _cpp_sync(monkeypatch, client, out).missing_families == {}
+
+
+def test_main_listing_sync_never_reports_missing_families(export, monkeypatch):
+    out, md5s = export
+
+    result = _sync(monkeypatch, _sync_client(md5s), out)
+
+    assert result.missing_families == {}
+
+
 def test_cpp_sync_keeps_013s_directory_rules(export, monkeypatch):
     out, md5s = export
     _png(out / "variants" / "cpp-a" / "en-US" / "01.png")

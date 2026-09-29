@@ -748,6 +748,20 @@ class ASCVersionScreenshotService(LocalizationScreenshotService):
     async def localizations_by_locale(self, version_id: str) -> dict[str, str]:
         return locales_of(await self.metadata.list_version_localizations(version_id))
 
+    async def main_families(self, asc_app_id: str) -> dict[str, frozenset[str]]:
+        """``locale -> display types`` the editable main listing holds; empty
+        when no version is editable (nothing to compare a page against)."""
+        try:
+            version = await self.resolve_editable_version(asc_app_id)
+        except VersionNotEditableError:
+            return {}
+        return {
+            locale: frozenset(await self.screenshot_set_ids(localization_id))
+            for locale, localization_id in (
+                await self.localizations_by_locale(version.id)
+            ).items()
+        }
+
     async def app_locales(self, asc_app_id: str) -> frozenset[str]:
         """The locales of the app's newest App Store version, whatever its state."""
         newest = _most_recent(await self.metadata.list_app_store_versions(asc_app_id))
@@ -997,6 +1011,29 @@ class SyncTarget:
     localizations: dict[str, str]
     label: str
     creatable: frozenset[str] = frozenset()
+    reference: dict[str, frozenset[str]] = field(default_factory=dict)
+
+
+async def missing_families(
+    target: SyncTarget, steps: list[SyncStep]
+) -> dict[str, list[str]]:
+    """Per locale, the display types ``target.reference`` holds that the page
+    lacks once ``steps`` are done: what it holds now plus what the plan adds."""
+    planned: dict[str, set[str]] = {}
+    for step in steps:
+        if not step.error and step.display_type:
+            planned.setdefault(step.locale, set()).add(step.display_type)
+    missing: dict[str, list[str]] = {}
+    for locale, wanted in target.reference.items():
+        localization_id = target.localizations.get(locale)
+        if localization_id is None and locale not in planned:
+            continue
+        held = set(planned.get(locale, ()))
+        if localization_id is not None:
+            held |= set(await target.service.screenshot_set_ids(localization_id))
+        if wanted - held:
+            missing[locale] = sorted(wanted - held)
+    return missing
 
 
 def scan_export_dir(

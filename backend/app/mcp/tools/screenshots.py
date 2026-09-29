@@ -56,6 +56,7 @@ from app.services.asc.screenshots import (
     SyncPathError,
     SyncStep,
     SyncTarget,
+    missing_families,
     resolve_sync_dir,
     scan_export_dir,
 )
@@ -745,6 +746,7 @@ async def run_screenshot_sync(
                             }
                             for row in rows:
                                 row.count = counts.get((row.locale, row.display_type))
+                        missing = await missing_families(target, scan.steps)
     except (SyncPathError, ExportChangedError) as exc:
         raise ToolError(str(exc)) from exc
 
@@ -761,6 +763,7 @@ async def run_screenshot_sync(
             entries=scan.skipped,
         ),
         inventory=inventory,
+        missing_families=missing,
     )
 
 

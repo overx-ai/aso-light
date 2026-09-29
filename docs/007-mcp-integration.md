@@ -1,7 +1,7 @@
 ---
 status: current
 created: 2026-05-09
-updated: 2026-09-29
+updated: 2026-09-30
 ---
 
 # 007 — MCP Integration
@@ -301,6 +301,13 @@ read-back above hold unchanged. One difference:
   first verified upload, and the locale's other display types reuse it. Only the
   app's own locales can be created, which are those of the newest App Store
   version. Any other directory is an `error` row.
+- The reply carries `missing_families` ([bug 008](bugs/008-cpp-sync-hides-missing-device-family.md)):
+  per locale, the display types the app's editable main listing holds that the page
+  would still lack once the sync is done. App Store Connect refuses to submit a page
+  short of a device family the app ships, and a sync of one family plans clean. It
+  is computed for the dry run and the apply, from the plan plus what the page holds,
+  is empty when complete or when no main version is editable, and never blocks an
+  apply. `screenshots_sync` always returns it empty.
 
 `cpp_screenshots_delete(app_id, cpp_id, locale, display_type, screenshot_id |
 position | delete_all)` is the CPP twin of `screenshots_delete` and shares its
