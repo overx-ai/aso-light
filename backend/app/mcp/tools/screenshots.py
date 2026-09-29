@@ -17,15 +17,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING
 
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import Image
 
 from app.api.v1._deps import _get_asc_client_for_app
 from app.mcp.context import resolve_app, session_scope
+from app.mcp.progress import ProgressReporter
 from app.mcp.server import mcp
 from app.schemas.screenshots import (
     MAX_SCREENSHOT_FILES,
@@ -625,6 +627,10 @@ def _sync_row(step: SyncStep) -> ScreenshotSyncRow:
     )
 
 
+def _progress_label(step: SyncStep) -> str:
+    return f"{step.locale} {step.display_type}: {step.action}"
+
+
 async def _sync_read_back(
     service: LocalizationScreenshotService,
     app_id: int,
@@ -650,6 +656,26 @@ async def _sync_read_back(
 
 SyncBinder = Callable[["ASCClient", "App"], Awaitable[SyncTarget]]
 
+# ponytail: in-process only — the backend runs one worker. More workers need a
+# shared (DB or Redis) lock keyed the same way.
+_APPLYING: set[tuple[int, str]] = set()
+
+
+@contextmanager
+def _one_apply_per_page(app_id: int, target: SyncTarget) -> Iterator[None]:
+    key = (app_id, target.version.id)
+    if key in _APPLYING:
+        raise ToolError(
+            f"A screenshot sync is already applying to {target.label} (version "
+            f"{target.version.id}). Wait for it to finish, then run the dry run "
+            "again: it plans from what that apply left behind."
+        )
+    _APPLYING.add(key)
+    try:
+        yield
+    finally:
+        _APPLYING.discard(key)
+
 
 async def run_screenshot_sync(
     app_id: int,
@@ -659,12 +685,15 @@ async def run_screenshot_sync(
     locales: list[str] | None,
     display_types: list[str] | None,
     apply: bool,
+    ctx: Context | None = None,
 ) -> ScreenshotSyncResult:
     """Scan, plan and (with ``apply``) execute a sync into ``bind``'s target.
 
     The one sync path behind ``screenshots_sync`` and ``cpp_screenshots_sync``.
     ``bind`` resolves the source's editable version and localizations; the
     root allowlist runs before it, so a refused ``dir`` makes no ASC call.
+    An apply reports progress per row through ``ctx`` and is refused while
+    another apply writes the same page.
     """
     for display_type in display_types or []:
         _require_display_type(display_type)
@@ -689,10 +718,20 @@ async def run_screenshot_sync(
                     rows = [_sync_row(step) for step in scan.steps]
                     applied = apply and not any(step.error for step in scan.steps)
                     if applied:
-                        await service.apply_sync(scan.steps, version.id)
-                        inventory = await _sync_read_back(
-                            service, app_id, version, scan.steps
-                        )
+                        with _one_apply_per_page(app_id, target):
+                            async with ProgressReporter(
+                                ctx, len(scan.steps)
+                            ) as progress:
+                                await service.apply_sync(
+                                    scan.steps,
+                                    version.id,
+                                    on_step=lambda step: progress.advance(
+                                        _progress_label(step)
+                                    ),
+                                )
+                                inventory = await _sync_read_back(
+                                    service, app_id, version, scan.steps
+                                )
                         counts = {
                             (row.locale, status.display_type): status.count
                             for row in inventory.locales
@@ -737,6 +776,7 @@ async def sync_version_screenshots(
     locales: list[str] | None = None,
     display_types: list[str] | None = None,
     apply: bool = False,
+    ctx: Context | None = None,
 ) -> ScreenshotSyncResult:
     """Make a studio export (``<dir>/<locale>/NN.png``) the MAIN product page's screenshots.
 
@@ -773,6 +813,7 @@ async def sync_version_screenshots(
         locales=locales,
         display_types=display_types,
         apply=apply,
+        ctx=ctx,
     )
 
 

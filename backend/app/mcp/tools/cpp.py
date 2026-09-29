@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
 from app.api.v1._deps import _get_asc_client_for_app
@@ -274,6 +275,7 @@ async def sync_cpp_screenshots(
     locales: list[str] | None = None,
     display_types: list[str] | None = None,
     apply: bool = False,
+    ctx: Context | None = None,
 ) -> ScreenshotSyncResult:
     """Make a studio variant export (``<dir>/<locale>/NN.png``) a Custom Product Page's screenshots.
 
@@ -323,6 +325,7 @@ async def sync_cpp_screenshots(
         locales=locales,
         display_types=display_types,
         apply=apply,
+        ctx=ctx,
     )
 
 

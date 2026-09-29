@@ -14,6 +14,7 @@ an Apple-``FAILED`` asset never counts as a shipped screenshot.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import copy
 import hashlib
@@ -35,6 +36,7 @@ from app.schemas.screenshots import (
 )
 from app.services.asc import screenshots as shots
 from app.services.asc.cpp import ASCCustomProductPageService
+from app.services.asc.errors import ASCAPIError
 from app.services.asc.experiment import ASCExperimentService
 from tests._async_harness import run_async
 
@@ -2066,3 +2068,198 @@ def test_cpp_screenshots_delete_needs_a_fresh_consent_token(monkeypatch):
         call({**arguments, consent.CONFIRM_ARG: "not-a-token"})
     assert reached == []
     consent.reset_consent_state()
+
+
+# ==================================================================
+# Sync apply progress + one apply per page (bug 006)
+# ==================================================================
+
+
+class _RecordingContext:
+    """Stands in for the FastMCP ``Context`` a client with a progressToken gets."""
+
+    def __init__(self) -> None:
+        self.reports: list[tuple[float, float | None, str | None]] = []
+
+    async def report_progress(
+        self, progress: float, total: float | None = None, message: str | None = None
+    ) -> None:
+        self.reports.append((progress, total, message))
+
+
+def _rows_reported(ctx: _RecordingContext) -> list[tuple[float, float | None]]:
+    """Distinct (done, total) states, in order — a heartbeat repeats the last one."""
+    states: list[tuple[float, float | None]] = []
+    for progress, total, _message in ctx.reports:
+        if not states or states[-1] != (progress, total):
+            states.append((progress, total))
+    return states
+
+
+def test_sync_apply_reports_progress_once_per_row(export, monkeypatch):
+    out, md5s = export
+    ctx = _RecordingContext()
+
+    result = _sync(monkeypatch, _sync_client(md5s), out, apply=True, ctx=ctx)
+
+    assert result.applied is True
+    assert len(result.rows) == 3
+    assert _rows_reported(ctx) == [(0, 3), (1, 3), (2, 3), (3, 3)]
+    messages = " ".join(message or "" for _p, _t, message in ctx.reports)
+    for locale in ("de-DE", "en-US", "fr-FR"):
+        assert locale in messages
+
+
+def test_cpp_sync_apply_reports_progress_once_per_row(export, monkeypatch):
+    out, md5s = export
+    ctx = _RecordingContext()
+
+    result = _cpp_sync(monkeypatch, _cpp_sync_client(md5s), out, apply=True, ctx=ctx)
+
+    assert result.applied is True
+    assert _rows_reported(ctx) == [(0, 3), (1, 3), (2, 3), (3, 3)]
+
+
+def test_sync_heartbeat_reports_while_one_row_is_slow(export, monkeypatch):
+    from app.mcp import progress
+
+    out, md5s = export
+    ctx = _RecordingContext()
+    monkeypatch.setattr(progress, "PROGRESS_HEARTBEAT_SECONDS", 0.01)
+    apply_step = shots.LocalizationScreenshotService.apply_sync_step
+
+    async def slow_step(self, step, version_id):
+        await asyncio.sleep(0.1)
+        await apply_step(self, step, version_id)
+
+    monkeypatch.setattr(
+        shots.LocalizationScreenshotService, "apply_sync_step", slow_step
+    )
+
+    _sync(monkeypatch, _sync_client(md5s), out, apply=True, ctx=ctx)
+
+    assert _rows_reported(ctx) == [(0, 3), (1, 3), (2, 3), (3, 3)]
+    assert len(ctx.reports) > 4 + 2
+
+
+def test_sync_dry_run_and_no_context_report_nothing(export, monkeypatch):
+    out, md5s = export
+    ctx = _RecordingContext()
+
+    dry = _sync(monkeypatch, _sync_client(md5s), out, ctx=ctx)
+    applied = _sync(monkeypatch, _sync_client(md5s), out, apply=True)
+
+    assert dry.applied is False and ctx.reports == []
+    assert applied.applied is True
+
+
+def test_sync_progress_reaches_a_real_mcp_client(export, monkeypatch):
+    from fastmcp import Client
+
+    out, md5s = export
+    _patch_tools(monkeypatch, _sync_client(md5s))
+    seen: list[tuple[float, float | None]] = []
+
+    async def on_progress(progress, total, message) -> None:
+        seen.append((progress, total))
+
+    async def go():
+        async with Client(mcp, progress_handler=on_progress) as client:
+            return await client.call_tool(
+                "screenshots_sync", {"app_id": 7, "dir": str(out), "apply": True}
+            )
+
+    result = run_async(go())
+
+    assert result.structured_content["applied"] is True
+    assert seen == [(0, 3), (1, 3), (2, 3), (3, 3)]
+
+
+def test_sync_context_is_not_a_tool_argument():
+    async def go():
+        return [
+            (await _tool(name)).parameters["properties"]
+            for name in ("screenshots_sync", "cpp_screenshots_sync")
+        ]
+
+    for properties in run_async(go()):
+        assert "ctx" not in properties
+        assert "apply" in properties
+
+
+def test_sync_progress_survives_a_client_that_went_away(export, monkeypatch):
+    out, md5s = export
+    client = _sync_client(md5s)
+
+    class _GoneContext:
+        async def report_progress(self, *args, **kwargs) -> None:
+            raise RuntimeError("session closed")
+
+    result = _sync(monkeypatch, client, out, apply=True, ctx=_GoneContext())
+
+    assert result.applied is True
+    assert _cpp_checksums(client, "loc-de") == md5s["de-DE"]
+
+
+def _blocking_apply(monkeypatch):
+    """Hold every apply inside its first row until ``release`` is set."""
+    release = asyncio.Event()
+    entered = asyncio.Event()
+    apply_step = shots.LocalizationScreenshotService.apply_sync_step
+
+    async def held_step(self, step, version_id):
+        entered.set()
+        await release.wait()
+        await apply_step(self, step, version_id)
+
+    monkeypatch.setattr(
+        shots.LocalizationScreenshotService, "apply_sync_step", held_step
+    )
+    return entered, release
+
+
+def test_a_second_apply_on_the_same_page_is_refused_while_one_runs(
+    export, monkeypatch
+):
+    out, md5s = export
+    client = _sync_client(md5s)
+    _patch_tools(monkeypatch, client)
+
+    async def go():
+        entered, release = _blocking_apply(monkeypatch)
+        tool = await _tool("screenshots_sync")
+        first = asyncio.create_task(tool.fn(app_id=7, dir=str(out), apply=True))
+        await entered.wait()
+        with pytest.raises(ToolError, match="already applying"):
+            await asyncio.wait_for(
+                tool.fn(app_id=7, dir=str(out), apply=True), timeout=5
+            )
+        dry = await tool.fn(app_id=7, dir=str(out))
+        release.set()
+        return await first, dry, await tool.fn(app_id=7, dir=str(out), apply=True)
+
+    first, dry, after = run_async(go())
+
+    assert first.applied is True
+    assert dry.applied is False
+    assert after.applied is True
+
+
+def test_the_apply_guard_is_released_when_an_apply_fails(export, monkeypatch):
+    out, md5s = export
+    client = _sync_client(md5s)
+    apply_step = shots.LocalizationScreenshotService.apply_sync_step
+    failures = [ASCAPIError(500, {"errors": [{"detail": "upstream exploded"}]})]
+
+    async def failing_once(self, step, version_id):
+        if failures:
+            raise failures.pop()
+        await apply_step(self, step, version_id)
+
+    monkeypatch.setattr(
+        shots.LocalizationScreenshotService, "apply_sync_step", failing_once
+    )
+
+    with pytest.raises(ToolError):
+        _sync(monkeypatch, client, out, apply=True)
+    assert _sync(monkeypatch, client, out, apply=True).applied is True

@@ -31,6 +31,7 @@ import asyncio
 import hashlib
 import io
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
@@ -629,16 +630,23 @@ class LocalizationScreenshotService:
             if display_type not in synced
         }
 
-    async def apply_sync(self, steps: list[SyncStep], version_id: str) -> None:
-        """Apply every non-``skip`` step. A localization created for one step
-        is handed to its locale's other steps rather than looked up again."""
+    async def apply_sync(
+        self,
+        steps: list[SyncStep],
+        version_id: str,
+        on_step: Callable[[SyncStep], Awaitable[None]] | None = None,
+    ) -> None:
+        """Apply every non-``skip`` step, calling ``on_step`` after each step,
+        skipped or not. A localization created for one step is handed to its
+        locale's other steps rather than looked up again."""
         for step in steps:
-            if step.action == "skip":
-                continue
-            await self.apply_sync_step(step, version_id)
-            for sibling in steps:
-                if sibling.locale == step.locale and sibling.localization_id is None:
-                    sibling.localization_id = step.localization_id
+            if step.action != "skip":
+                await self.apply_sync_step(step, version_id)
+                for sibling in steps:
+                    if sibling.locale == step.locale and sibling.localization_id is None:
+                        sibling.localization_id = step.localization_id
+            if on_step is not None:
+                await on_step(step)
 
     async def apply_sync_step(self, step: SyncStep, version_id: str) -> None:
         """Make one set exactly the step's files, in order, slot by slot.
