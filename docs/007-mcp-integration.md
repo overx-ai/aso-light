@@ -264,6 +264,21 @@ image passes through the agent's context. That replaces ~160 base64
 4. A rerun is all `skip` and writes nothing, so an interrupted apply resumes with
    the same call.
 
+An apply over a full export runs for many minutes: 39 locales take about 15. A client
+drops a call that is silent for 300 s (Claude Code), so both sync tools report MCP
+progress while they apply ([bug 006](bugs/006-screenshot-sync-apply-silent-past-client-timeout.md)).
+The tool takes the FastMCP `Context` as `ctx: Context | None = None`, which is injected
+and never part of the input schema. It sends `0/N` first, then one report per locale ×
+display-type row, and repeats the last state every `PROGRESS_HEARTBEAT_SECONDS` (30)
+while one row or the read-back runs long. `ProgressReporter` in
+`backend/app/mcp/progress.py` does this and is reusable by any long tool. A client that
+sent no `progressToken` gets nothing, and a failed send is logged, never raised.
+
+Only one apply runs per page. A second `apply=true` on the same target version, main
+listing or CPP, is refused with a `ToolError` before it plans, while the first still
+writes. Dry runs are never refused. The guard is in-process, which fits the backend's
+single worker.
+
 The display type comes from the pixel size, portrait or landscape:
 `DISPLAY_TYPE_BY_SIZE` in `backend/app/services/asc/screenshots.py`. The 6.9"
 iPhone's 1320×2868 is filed under `APP_IPHONE_67`, because Apple has no

@@ -12,6 +12,10 @@ updated: 2026-09-29
 
 ## [Unreleased]
 
+### Fixed — `screenshots_sync` / `cpp_screenshots_sync` apply no longer times out silently (2026-09-29)
+- An apply over a 39-locale export ran about 15 minutes with no MCP progress. Claude Code aborted it at 300 s, and the server finished for nobody ([bug 006](bugs/006-screenshot-sync-apply-silent-past-client-timeout.md), [docs/007](007-mcp-integration.md)). Both tools now report progress through the FastMCP `Context`: once per locale × display-type row, plus a 30 s heartbeat.
+- A second apply on the same page is refused while one runs, before it plans, so a retry no longer races the first apply.
+
 ### Added — `cpp_screenshots_sync` / `cpp_screenshots_delete`: a studio variant export as a Custom Product Page's screenshots (2026-09-29)
 - **`cpp_screenshots_sync {app_id, cpp_id, dir, locales?, display_types?, apply=false}`** ([spec 015](specs/015-cpp-screenshots-sync.md), [docs/007](007-mcp-integration.md)). It runs the same plan/apply as `screenshots_sync`, generalised over a localization source (`LocalizationScreenshotService`, with a main-listing source and a CPP source). A locale the page lacks is planned as `create_localization` and created on apply, but only for the app's own locales. A rerun writes nothing.
 - **`cpp_screenshots_delete`**: delete by id, by position or all, consent-gated like `cpp_delete`.
