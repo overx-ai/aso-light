@@ -18,6 +18,7 @@ import asyncio
 import base64
 import copy
 import hashlib
+from collections import Counter
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -2136,10 +2137,15 @@ def test_sync_heartbeat_reports_while_one_row_is_slow(export, monkeypatch):
         shots.LocalizationScreenshotService, "apply_sync_step", slow_step
     )
 
-    _sync(monkeypatch, _sync_client(md5s), out, apply=True, ctx=ctx)
+    result = _sync(monkeypatch, _sync_client(md5s), out, apply=True, ctx=ctx)
 
     assert _rows_reported(ctx) == [(0, 3), (1, 3), (2, 3), (3, 3)]
-    assert len(ctx.reports) > 4 + 2
+    # The beat's timer always falls due before a slow row's, so every written
+    # row repeats the state before it at least once however slow the host.
+    states = Counter((progress, total) for progress, total, _m in ctx.reports)
+    written = [i for i, row in enumerate(result.rows) if row.action != "skip"]
+    assert written
+    assert all(states[(i, 3)] >= 2 for i in written)
 
 
 def test_sync_dry_run_and_no_context_report_nothing(export, monkeypatch):
@@ -2225,6 +2231,15 @@ def test_a_second_apply_on_the_same_page_is_refused_while_one_runs(
     client = _sync_client(md5s)
     _patch_tools(monkeypatch, client)
 
+    plan_sync = shots.LocalizationScreenshotService.plan_sync
+    plans: list[str] = []
+
+    async def counted_plan(self, steps):
+        plans.append("plan")
+        return await plan_sync(self, steps)
+
+    monkeypatch.setattr(shots.LocalizationScreenshotService, "plan_sync", counted_plan)
+
     async def go():
         entered, release = _blocking_apply(monkeypatch)
         tool = await _tool("screenshots_sync")
@@ -2234,6 +2249,7 @@ def test_a_second_apply_on_the_same_page_is_refused_while_one_runs(
             await asyncio.wait_for(
                 tool.fn(app_id=7, dir=str(out), apply=True), timeout=5
             )
+        assert len(plans) == 1, "the refused apply planned from a page mid-write"
         dry = await tool.fn(app_id=7, dir=str(out))
         release.set()
         return await first, dry, await tool.fn(app_id=7, dir=str(out), apply=True)
@@ -2263,3 +2279,32 @@ def test_the_apply_guard_is_released_when_an_apply_fails(export, monkeypatch):
     with pytest.raises(ToolError):
         _sync(monkeypatch, client, out, apply=True)
     assert _sync(monkeypatch, client, out, apply=True).applied is True
+
+
+def test_a_cancelled_apply_releases_the_guard_and_stops_the_heartbeat(
+    export, monkeypatch
+):
+    from app.mcp import progress
+
+    out, md5s = export
+    _patch_tools(monkeypatch, _sync_client(md5s))
+    monkeypatch.setattr(progress, "PROGRESS_HEARTBEAT_SECONDS", 0.01)
+    ctx = _RecordingContext()
+
+    async def go():
+        entered, release = _blocking_apply(monkeypatch)
+        tool = await _tool("screenshots_sync")
+        first = asyncio.create_task(
+            tool.fn(app_id=7, dir=str(out), apply=True, ctx=ctx)
+        )
+        await entered.wait()
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        reported = len(ctx.reports)
+        await asyncio.sleep(0.05)
+        assert len(ctx.reports) == reported
+        release.set()
+        return await tool.fn(app_id=7, dir=str(out), apply=True)
+
+    assert run_async(go()).applied is True

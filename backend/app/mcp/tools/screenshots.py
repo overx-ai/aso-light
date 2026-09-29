@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, nullcontext
 from typing import TYPE_CHECKING
 
 from fastmcp import Context
@@ -658,12 +658,14 @@ SyncBinder = Callable[["ASCClient", "App"], Awaitable[SyncTarget]]
 
 # ponytail: in-process only — the backend runs one worker. More workers need a
 # shared (DB or Redis) lock keyed the same way.
-_APPLYING: set[tuple[int, str]] = set()
+_APPLYING: set[str] = set()
 
 
-@contextmanager
-def _one_apply_per_page(app_id: int, target: SyncTarget) -> Iterator[None]:
-    key = (app_id, target.version.id)
+@asynccontextmanager
+async def _one_apply_per_page(target: SyncTarget) -> AsyncIterator[None]:
+    # Keyed by the ASC version id alone: it is unique across ASC, so two local
+    # app rows for one ASC app still share the key.
+    key = target.version.id
     if key in _APPLYING:
         raise ToolError(
             f"A screenshot sync is already applying to {target.label} (version "
@@ -675,6 +677,18 @@ def _one_apply_per_page(app_id: int, target: SyncTarget) -> Iterator[None]:
         yield
     finally:
         _APPLYING.discard(key)
+
+
+async def _apply_with_progress(
+    target: SyncTarget, app_id: int, steps: list[SyncStep], ctx: Context | None
+) -> VersionScreenshotInventory:
+    async with ProgressReporter(ctx, len(steps)) as progress:
+        await target.service.apply_sync(
+            steps,
+            target.version.id,
+            on_step=lambda step: progress.advance(_progress_label(step)),
+        )
+        return await _sync_read_back(target.service, app_id, target.version, steps)
 
 
 async def run_screenshot_sync(
@@ -706,39 +720,31 @@ async def run_screenshot_sync(
             async with await _get_asc_client_for_app(app, session) as client:
                 async with asc_tool_error():
                     target = await bind(client, app)
-                    service, version = target.service, target.version
-                    scan = await asyncio.to_thread(
-                        scan_export_dir,
-                        root,
-                        target,
-                        locales=locales,
-                        display_types=display_types,
-                    )
-                    other_types = await service.plan_sync(scan.steps)
-                    rows = [_sync_row(step) for step in scan.steps]
-                    applied = apply and not any(step.error for step in scan.steps)
-                    if applied:
-                        with _one_apply_per_page(app_id, target):
-                            async with ProgressReporter(
-                                ctx, len(scan.steps)
-                            ) as progress:
-                                await service.apply_sync(
-                                    scan.steps,
-                                    version.id,
-                                    on_step=lambda step: progress.advance(
-                                        _progress_label(step)
-                                    ),
-                                )
-                                inventory = await _sync_read_back(
-                                    service, app_id, version, scan.steps
-                                )
-                        counts = {
-                            (row.locale, status.display_type): status.count
-                            for row in inventory.locales
-                            for status in row.display_types
-                        }
-                        for row in rows:
-                            row.count = counts.get((row.locale, row.display_type))
+                    version = target.version
+                    # Held from the plan on: a plan read while another apply
+                    # writes the page is stale by the time it runs.
+                    async with _one_apply_per_page(target) if apply else nullcontext():
+                        scan = await asyncio.to_thread(
+                            scan_export_dir,
+                            root,
+                            target,
+                            locales=locales,
+                            display_types=display_types,
+                        )
+                        other_types = await target.service.plan_sync(scan.steps)
+                        rows = [_sync_row(step) for step in scan.steps]
+                        applied = apply and not any(step.error for step in scan.steps)
+                        if applied:
+                            inventory = await _apply_with_progress(
+                                target, app_id, scan.steps, ctx
+                            )
+                            counts = {
+                                (row.locale, status.display_type): status.count
+                                for row in inventory.locales
+                                for status in row.display_types
+                            }
+                            for row in rows:
+                                row.count = counts.get((row.locale, row.display_type))
     except (SyncPathError, ExportChangedError) as exc:
         raise ToolError(str(exc)) from exc
 

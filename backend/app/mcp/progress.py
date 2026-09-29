@@ -53,10 +53,9 @@ class ProgressReporter:
     ) -> None:
         if self._heartbeat is not None:
             self._heartbeat.cancel()
-            try:
-                await self._heartbeat
-            except asyncio.CancelledError:
-                pass
+            # gather, not suppress(CancelledError): a cancel aimed at the
+            # caller while it waits here must still propagate.
+            await asyncio.gather(self._heartbeat, return_exceptions=True)
 
     async def advance(self, message: str) -> None:
         self._done += 1
@@ -79,5 +78,8 @@ class ProgressReporter:
             # Progress is advisory: a client that went away must not abort a
             # half-applied write run between a delete and its upload.
             logger.warning(
-                "progress report failed at %s/%s", self._done, self._total, exc_info=True
+                "progress report failed at %s/%s",
+                self._done,
+                self._total,
+                exc_info=True,
             )

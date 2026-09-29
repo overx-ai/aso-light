@@ -57,10 +57,12 @@ the same page concurrently.
   injects it and keeps it out of the input schema. Both pass it to `run_screenshot_sync`, which
   reports `0/N` at the start and one report per locale x display-type row. The post-apply
   read-back runs inside the same reporter, so the heartbeat covers it too.
-- One apply per page: `_one_apply_per_page` keys `(app_id, target version id)`, so the main
-  page and each CPP version are separate keys. A second apply on the same page is refused
-  with a `ToolError` that names the page. The guard is released on success and on failure.
-  Dry runs are not guarded. The guard is in-process only (`ponytail:`), which fits the
+- One apply per page: `_one_apply_per_page` keys the target's ASC version id (unique across
+  ASC, so two local app rows for one ASC app share it), so the main page and each CPP version
+  are separate keys. It is taken before the plan, since a plan read while another apply writes
+  the page is stale, and a second apply on the same page is refused with a `ToolError` that
+  names the page before it reads anything. The guard is released on success, failure and
+  cancellation. Dry runs are not guarded. The guard is in-process only (`ponytail:`), which fits the
   backend's single worker.
 
 ## Regression test
@@ -76,4 +78,6 @@ the same page concurrently.
 - `test_sync_dry_run_and_no_context_report_nothing`, `test_sync_context_is_not_a_tool_argument`,
   `test_sync_progress_survives_a_client_that_went_away`.
 - `test_a_second_apply_on_the_same_page_is_refused_while_one_runs` (red before: the second
-  apply ran and blocked), `test_the_apply_guard_is_released_when_an_apply_fails`.
+  apply ran and blocked; it also asserts the refused call never planned),
+  `test_the_apply_guard_is_released_when_an_apply_fails`,
+  `test_a_cancelled_apply_releases_the_guard_and_stops_the_heartbeat`.
