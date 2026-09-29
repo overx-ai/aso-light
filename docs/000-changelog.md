@@ -12,6 +12,14 @@ updated: 2026-09-29
 
 ## [Unreleased]
 
+### Added — `cpp_screenshots_sync` / `cpp_screenshots_delete`: a studio variant export as a Custom Product Page's screenshots (2026-09-29)
+- **`cpp_screenshots_sync {app_id, cpp_id, dir, locales?, display_types?, apply=false}`** ([spec 015](specs/015-cpp-screenshots-sync.md), [docs/007](007-mcp-integration.md)). It runs the same plan/apply as `screenshots_sync`, generalised over a localization source (`LocalizationScreenshotService`, with a main-listing source and a CPP source). A locale the page lacks is planned as `create_localization` and created on apply, but only for the app's own locales. A rerun writes nothing.
+- **`cpp_screenshots_delete`**: delete by id, by position or all, consent-gated like `cpp_delete`.
+
+### Fixed — CPP writes no longer land on a version in review (2026-09-29)
+- `ASCCustomProductPageService.get_editable_version` treated `WAITING_FOR_REVIEW` / `IN_REVIEW` as editable and fell back to `versions[0]`. It now refuses them and names the states found. Editable means `PREPARE_FOR_SUBMISSION` or a rejected state. Every CPP write tool is covered, and `cpp_upload_screenshot` checks its localization's version.
+- `POST /apps/{id}/cpps/from-upload` answers 409 when the new page has no editable version. It deletes the page instead of leaving it empty.
+
 ### Added — `screenshots_sync`: a studio export directory as the main listing's screenshots (2026-09-29)
 - **`screenshots_sync {app_id, dir, locales?, display_types?, apply=false}`** ([spec 013](specs/013-screenshots-sync-from-directory.md), [docs/007](007-mcp-integration.md)). It reads `<dir>/<locale>/NN.png` from disk and infers each file's display type from its pixel size. Only the types present are touched: the Watch and iPad sets are never read for deletion, unlike fastlane `deliver`'s per-locale wipe. Each type is replaced as a unit, in filename order. A slot whose `sourceFileChecksum` equals the file's MD5 is skipped, so a rerun writes nothing. The final state is the 010 read-back inventory.
 - **A dry run by default; any error row blocks the whole apply.** Error rows cover:

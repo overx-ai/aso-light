@@ -77,3 +77,8 @@ locale table. It would drift from Apple and would accept a locale the app does n
 - `SyncTarget` and `scan_export_dir(root, target, ...)` replace the scan's `localizations` /
   `version_label` arguments, and the unknown-locale message reads "not a locale on {label}". The
   main listing passes "App Store version 1.5.0".
+- `/code` review:
+  - `create_cpp_with_screenshots` now resolves the version and localization inside the cleanup `try`, so a page it cannot populate is deleted, not orphaned.
+  - `apply_sync` hands a created localization to the locale's other display types instead of listing it again.
+  - A localization whose version is not returned is refused as "unknown".
+- `/docs`: docs/007, docs/000-changelog and docs/013 are updated. `docs/INDEX.md` and `CLAUDE.md` ("187 tools", now 190) are **not**, because the main copy holds uncommitted WIP in both. They need a spec-015 row and the tool count once that WIP lands.

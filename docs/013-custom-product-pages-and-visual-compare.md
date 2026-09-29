@@ -1,7 +1,7 @@
 ---
 status: current
 created: 2026-06-16
-updated: 2026-06-16
+updated: 2026-09-29
 ---
 
 # 013 — Custom Product Pages + Visual Old-vs-New Screenshot Compare
@@ -76,3 +76,4 @@ Resource hierarchy (App Store Connect API):
 - ASC marketing-screenshot fetch is new to this codebase — reuse the authed `ASCClient` + `_get_all_pages`; the image asset URL is built from `imageAsset.templateUrl` (`{w}`/`{h}`/`{f}` substitution) — download via plain httpx (no auth needed for the CDN URL).
 - Confirm the exact ASA Ad/CPP body against the live ASA `Ad` schema before Phase E.
 - CPP create auto-creates a draft version; localizations are added under that version.
+- Writes go only to an editable version (`PREPARE_FOR_SUBMISSION` or rejected); a page in review is refused. A whole variant export syncs with `cpp_screenshots_sync`: see [007](007-mcp-integration.md) and [spec 015](specs/015-cpp-screenshots-sync.md).

@@ -1,7 +1,7 @@
 ---
 status: current
 created: 2026-05-09
-updated: 2026-09-22
+updated: 2026-09-29
 ---
 
 # 007 — MCP Integration
@@ -117,7 +117,7 @@ Tool names are `<module>_<action>` — **underscores, never dots**. The
 Anthropic tool-name regex is `^[a-zA-Z0-9_-]{1,64}$`, so a dotted name breaks
 Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 
-188 tools across 23 modules:
+190 tools across 23 modules:
 
 | Module        | Tools | Domain                                                           |
 | ------------- | ----- | ---------------------------------------------------------------- |
@@ -129,7 +129,7 @@ Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 | `availability`| 2     | Get / update the app's available territories                     |
 | `clash`       | 1     | Side-by-side competitor comparison                               |
 | `clone`       | 3     | Read and retry clone/swap operations — the status channel for the long-running `swap_*` tools |
-| `cpp`         | 8     | Custom Product Pages: CRUD, localizations, screenshots           |
+| `cpp`         | 10    | Custom Product Pages: CRUD, localizations, screenshots, a whole export directory in one call (`cpp_screenshots_sync`), consent-gated delete (`cpp_screenshots_delete`) |
 | `experiment`  | 14    | Product Page Optimization: experiments, treatments, treatment localizations + screenshots |
 | `growth`      | 1     | Ranked growth recommendations (pricing gaps, ASO gaps)           |
 | `indices`     | 3     | GDP / PPP / BigMac / Spotify / Netflix index status & refresh    |
@@ -146,8 +146,8 @@ Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 | `visibility`  | 8     | Watches, snapshots, anomalies, share-of-voice                    |
 
 Every tool carries an MCP annotation so a client knows whether to prompt:
-83 are `readOnlyHint` (safe to call unattended, e.g. in plan mode), 37 are
-`destructiveHint` and go through the consent gate below, and the remaining 68
+83 are `readOnlyHint` (safe to call unattended, e.g. in plan mode), 38 are
+`destructiveHint` and go through the consent gate below, and the remaining 69
 are writes that still prompt. The classification lives in
 `backend/app/mcp/consent.py` (`READ_ONLY` / `DESTRUCTIVE`) as an **allowlist**,
 so anything unclassified fails closed — it keeps prompting rather than
@@ -269,6 +269,36 @@ The display type comes from the pixel size, portrait or landscape:
 iPhone's 1320×2868 is filed under `APP_IPHONE_67`, because Apple has no
 `APP_IPHONE_69`. `SCREENSHOT_SYNC_ROOTS` (a JSON list, or comma-separated in `.env`)
 defaults to `~/JACK`.
+
+**Ship a studio variant export as a Custom Product Page's screenshots**
+
+`cpp_screenshots_sync(app_id, cpp_id, dir)` is `screenshots_sync` with a CPP's
+editable version as the target ([spec 015](specs/015-cpp-screenshots-sync.md)).
+Point it at a studio `out/variants/<name>/`. Both tools run one plan/apply path,
+`run_screenshot_sync` in `backend/app/mcp/tools/screenshots.py`. The target is a
+*localization source*, a subclass of `LocalizationScreenshotService`:
+`ASCVersionScreenshotService` for the main listing and `CPPScreenshotService` for a
+page. So the directory rules, the size table, the allowlist, the MD5 skip and the
+read-back above hold unchanged. One difference:
+
+- A locale directory the page has no localization for is planned as
+  `create_localization`. On apply, the localization is created at that locale's
+  first verified upload, and the locale's other display types reuse it. Only the
+  app's own locales can be created, which are those of the newest App Store
+  version. Any other directory is an `error` row.
+
+`cpp_screenshots_delete(app_id, cpp_id, locale, display_type, screenshot_id |
+position | delete_all)` is the CPP twin of `screenshots_delete` and shares its
+code. It is consent-gated.
+
+**A CPP is written only on an editable version.** Editable means
+`PREPARE_FOR_SUBMISSION`, `REJECTED`, `DEVELOPER_REJECTED` or `METADATA_REJECTED`.
+`WAITING_FOR_REVIEW` and `IN_REVIEW` are refused, and nothing falls back to another
+version. The error names every state found. This holds for `cpp_ensure_localization`,
+`cpp_upload_screenshot`, `cpp_screenshots_sync` and `cpp_screenshots_delete`.
+`cpp_upload_screenshot` has only a localization id, so it reads that localization's
+version with `?include=appCustomProductPageVersion`. A version that is not returned
+counts as not editable.
 
 There are pre-built MCP prompts (`swap_product_safely`, `optimize_keywords`)
 that walk through these flows. Most LLM clients show prompts as quick-pick
