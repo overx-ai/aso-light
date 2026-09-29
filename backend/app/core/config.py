@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from cryptography.fernet import Fernet
 from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings
@@ -33,6 +35,8 @@ class Settings(BaseSettings):
     # automatic fallback chain (failover on any provider error).
     TRANSLATION_PROVIDER_CHAIN: str = "openrouter,anthropic"
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
+    # Directories screenshots_sync may read an export from (after realpath).
+    SCREENSHOT_SYNC_ROOTS: list[str] = [str(Path.home() / "JACK")]
 
     model_config = {
         "env_file": ".env",
@@ -67,9 +71,9 @@ class Settings(BaseSettings):
             raise ValueError("FERNET_KEY is not a valid Fernet key.") from exc
         return v
 
-    @field_validator("CORS_ORIGINS", mode="before")
+    @field_validator("CORS_ORIGINS", "SCREENSHOT_SYNC_ROOTS", mode="before")
     @classmethod
-    def parse_cors_origins(cls, v: str | list[str]) -> list[str]:
+    def parse_str_list(cls, v: str | list[str]) -> list[str]:
         if isinstance(v, str):
             import json
 

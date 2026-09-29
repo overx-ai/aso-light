@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -233,3 +234,41 @@ class ScreenshotDeleteResult(BaseModel):
     deleted_screenshot_ids: list[str] = Field(default_factory=list)
     deleted_set: bool = False
     remaining: int = 0
+
+
+# ------------------------------------------------------------------
+# Main product-page sync from an export directory (spec 013)
+# ------------------------------------------------------------------
+
+
+class ScreenshotSyncRow(BaseModel):
+    locale: str
+    display_type: str | None = None
+    action: Literal["skip", "replace", "upload", "error"]
+    files: int = 0
+    existing: int = 0
+    uploads: int = 0
+    deletes: int = 0
+    error: str | None = None
+    count: int | None = None
+
+
+class ScreenshotSyncUntouched(BaseModel):
+    locales: list[str] = Field(default_factory=list)
+    display_types: list[str] = Field(default_factory=list)
+    entries: list[str] = Field(default_factory=list)
+
+
+class ScreenshotSyncResult(BaseModel):
+    """``applied`` stays false while any row is an ``error``: nothing is written
+    until the whole directory plans cleanly. After an apply, ``count`` and
+    ``inventory`` are the read-back, not the upload responses."""
+
+    app_id: int
+    dir: str
+    version_id: str
+    version_string: str | None = None
+    applied: bool = False
+    rows: list[ScreenshotSyncRow] = Field(default_factory=list)
+    untouched: ScreenshotSyncUntouched = Field(default_factory=ScreenshotSyncUntouched)
+    inventory: VersionScreenshotInventory | None = None

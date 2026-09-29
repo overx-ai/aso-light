@@ -15,17 +15,23 @@ an Apple-``FAILED`` asset never counts as a shipped screenshot.
 from __future__ import annotations
 
 import base64
+import copy
+import hashlib
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 from fastmcp.exceptions import ToolError
+from PIL import Image as PILImage
 
+from app.core.config import settings
 from app.mcp.server import mcp
 from app.mcp.tools import screenshots as screenshot_tools
 from app.models.app import App
 from app.schemas.screenshots import (
     MAX_SCREENSHOT_BYTES,
     decode_screenshot_payload,
+    is_valid_display_type,
 )
 from app.services.asc import screenshots as shots
 from app.services.asc.cpp import ASCCustomProductPageService
@@ -83,6 +89,7 @@ class FakeASC:
             "id": shot_id,
             "attributes": {
                 "fileName": shot["file_name"],
+                "sourceFileChecksum": shot.get("checksum"),
                 "imageAsset": {
                     "templateUrl": TEMPLATE_URL,
                     "width": 1290,
@@ -241,6 +248,10 @@ class FakeASC:
         if parts[0] == "appScreenshots" and len(parts) == 2:
             self.screenshots[parts[1]]["state"] = self.commit_state
             self.screenshots[parts[1]]["errors"] = list(self.commit_errors)
+            self.screenshots[parts[1]]["checksum"] = (
+                (json or {}).get("data", {}).get("attributes", {})
+                .get("sourceFileChecksum")
+            )
             return {"data": self._shot_resource(parts[1])}
 
         if parts[0] == "appScreenshotSets" and parts[-1] == "appScreenshots":
@@ -1234,3 +1245,361 @@ def test_upload_refuses_an_id_less_commit_response(monkeypatch):
     assert not any(
         method == "GET" and path == "/appScreenshots/" for method, path in client.calls
     )
+
+
+# ==================================================================
+# screenshots_sync — a studio export directory as the version's screenshots
+# (spec 013)
+# ==================================================================
+
+IPHONE_69 = (1320, 2868)
+IPAD_13 = (2064, 2752)
+WRITES = {"POST", "PATCH", "DELETE", "PUT"}
+
+
+def _png(path: Path, size: tuple[int, int] = IPHONE_69, shade: int = 0) -> str:
+    """Write a solid PNG and return its MD5 — the checksum ASC keeps."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    PILImage.new("RGB", size, (shade % 256, 40, 80)).save(path, format="PNG")
+    return hashlib.md5(path.read_bytes()).hexdigest()  # noqa: S324
+
+
+def _export(out: Path, slides: dict[str, int], size=IPHONE_69) -> dict[str, list[str]]:
+    """``<out>/<locale>/NN.png`` per locale; returns each locale's MD5s in order."""
+    return {
+        locale: [
+            _png(out / locale / f"{index:02d}.png", size, shade=index)
+            for index in range(1, count + 1)
+        ]
+        for locale, count in slides.items()
+    }
+
+
+def _sync_client(md5s: dict[str, list[str]]) -> FakeASC:
+    """en-US already matches the export; de-DE is stale and one longer; fr-FR
+    has no set. en-US also carries a Watch and an iPad set the sync must not
+    touch."""
+    screenshots = {
+        f"shot-en-{i}": {"file_name": f"{i + 1:02d}.png", "checksum": md5}
+        for i, md5 in enumerate(md5s["en-US"])
+    }
+    screenshots.update({
+        f"shot-de-{i}": {"file_name": f"old-{i}.png", "checksum": f"stale-{i}"}
+        for i in range(3)
+    })
+    screenshots["shot-watch"] = {"file_name": "watch.png", "checksum": "w"}
+    screenshots["shot-ipad"] = {"file_name": "ipad.png", "checksum": "i"}
+    sets = {
+        "set-en-67": {
+            "display_type": "APP_IPHONE_67",
+            "localization_id": "loc-en",
+            "shots": [f"shot-en-{i}" for i in range(len(md5s["en-US"]))],
+        },
+        "set-de-67": {
+            "display_type": "APP_IPHONE_67",
+            "localization_id": "loc-de",
+            "shots": ["shot-de-0", "shot-de-1", "shot-de-2"],
+        },
+        "set-en-watch": {
+            "display_type": "APP_WATCH_ULTRA",
+            "localization_id": "loc-en",
+            "shots": ["shot-watch"],
+        },
+        "set-en-ipad": {
+            "display_type": "APP_IPAD_PRO_3GEN_129",
+            "localization_id": "loc-en",
+            "shots": ["shot-ipad"],
+        },
+    }
+    return FakeASC(
+        versions=[_version()],
+        localizations={
+            "ver-1": {"en-US": "loc-en", "de-DE": "loc-de", "fr-FR": "loc-fr"},
+        },
+        sets=sets,
+        screenshots=screenshots,
+    )
+
+
+@pytest.fixture
+def export(tmp_path, monkeypatch):
+    """An allowlisted export root holding en-US, de-DE and fr-FR, 2 slides each."""
+    root = tmp_path / "allowed"
+    monkeypatch.setattr(settings, "SCREENSHOT_SYNC_ROOTS", [str(root)])
+    out = root / "out"
+    md5s = _export(out, {"en-US": 2, "de-DE": 2, "fr-FR": 2})
+    return out, md5s
+
+
+def _sync(monkeypatch, client: FakeASC, out: Path, **kwargs):
+    _patch_tools(monkeypatch, client)
+
+    async def go():
+        tool = await _tool("screenshots_sync")
+        return await tool.fn(app_id=7, dir=str(out), **kwargs)
+
+    return run_async(go())
+
+
+def _writes(client: FakeASC) -> list[tuple[str, str]]:
+    return [call for call in client.calls if call[0] in WRITES]
+
+
+def _actions(result) -> dict[tuple[str, str | None], str]:
+    return {(row.locale, row.display_type): row.action for row in result.rows}
+
+
+def _errors(result) -> list[str]:
+    return [row.error or "" for row in result.rows if row.action == "error"]
+
+
+def test_display_type_comes_from_one_size_table():
+    assert shots.display_type_for_size(1320, 2868) == "APP_IPHONE_67"
+    assert shots.display_type_for_size(1290, 2796) == "APP_IPHONE_67"
+    assert shots.display_type_for_size(2868, 1320) == "APP_IPHONE_67"
+    assert shots.display_type_for_size(2064, 2752) == "APP_IPAD_PRO_3GEN_129"
+    assert shots.display_type_for_size(2732, 2048) == "APP_IPAD_PRO_3GEN_129"
+    assert shots.display_type_for_size(1000, 1000) is None
+    assert all(
+        is_valid_display_type(display_type)
+        for display_type in shots.DISPLAY_TYPE_BY_SIZE.values()
+    )
+
+
+def test_sync_dry_run_plans_skip_replace_upload_and_error(export, monkeypatch):
+    out, md5s = export
+    _png(out / "nl" / "01.png")
+    client = _sync_client(md5s)
+
+    result = _sync(monkeypatch, client, out)
+
+    assert result.applied is False
+    assert _actions(result) == {
+        ("de-DE", "APP_IPHONE_67"): "replace",
+        ("en-US", "APP_IPHONE_67"): "skip",
+        ("fr-FR", "APP_IPHONE_67"): "upload",
+        ("nl", None): "error",
+    }
+    de = next(row for row in result.rows if row.locale == "de-DE")
+    assert (de.files, de.existing, de.uploads, de.deletes) == (2, 3, 2, 3)
+    fr = next(row for row in result.rows if row.locale == "fr-FR")
+    assert (fr.files, fr.existing, fr.uploads, fr.deletes) == (2, 0, 2, 0)
+    assert result.inventory is None
+    assert _writes(client) == []
+
+
+def test_sync_dry_run_is_the_plan_apply_then_executes(export, monkeypatch):
+    out, md5s = export
+    client = _sync_client(md5s)
+
+    def plan(result):
+        return [
+            (r.locale, r.display_type, r.action, r.files, r.existing, r.uploads, r.deletes)
+            for r in result.rows
+        ]
+
+    dry = _sync(monkeypatch, client, out)
+    assert _writes(client) == []
+    applied = _sync(monkeypatch, client, out, apply=True)
+
+    assert applied.applied is True
+    assert plan(dry) == plan(applied)
+
+
+def test_sync_apply_replaces_each_type_as_a_unit_in_directory_order(
+    export, monkeypatch
+):
+    out, md5s = export
+    client = _sync_client(md5s)
+
+    result = _sync(monkeypatch, client, out, apply=True)
+
+    def checksums(localization_id: str) -> list[str]:
+        shot_set = client.set_for(localization_id, "APP_IPHONE_67")
+        assert shot_set is not None
+        return [client.screenshots[s]["checksum"] for s in shot_set["shots"]]
+
+    assert checksums("loc-de") == md5s["de-DE"]
+    assert checksums("loc-fr") == md5s["fr-FR"]
+    assert client.sets["set-en-67"]["shots"] == ["shot-en-0", "shot-en-1"]
+    for stale in ("shot-de-0", "shot-de-1", "shot-de-2"):
+        assert stale not in client.screenshots
+
+    # The verdict is the read-back inventory, not the upload responses.
+    assert {row.locale: row.count for row in result.rows} == {
+        "de-DE": 2, "en-US": 2, "fr-FR": 2,
+    }
+    assert result.inventory is not None
+    assert result.inventory.gaps == []
+
+
+def test_sync_rerun_is_all_skip_and_writes_nothing(export, monkeypatch):
+    out, md5s = export
+    client = _sync_client(md5s)
+    _sync(monkeypatch, client, out, apply=True)
+    client.calls.clear()
+
+    again = _sync(monkeypatch, client, out, apply=True)
+
+    assert set(_actions(again).values()) == {"skip"}
+    assert _writes(client) == []
+
+
+def test_sync_leaves_every_other_display_type_byte_identical(export, monkeypatch):
+    out, md5s = export
+    client = _sync_client(md5s)
+    others = ("set-en-watch", "set-en-ipad")
+    before = copy.deepcopy(
+        {
+            set_id: (client.sets[set_id], [
+                client.screenshots[s] for s in client.sets[set_id]["shots"]
+            ])
+            for set_id in others
+        }
+    )
+
+    result = _sync(monkeypatch, client, out, apply=True)
+
+    after = {
+        set_id: (client.sets[set_id], [
+            client.screenshots[s] for s in client.sets[set_id]["shots"]
+        ])
+        for set_id in others
+    }
+    assert after == before
+    touched = " ".join(path for _method, path in client.calls)
+    assert "set-en-watch" not in touched
+    assert "set-en-ipad" not in touched
+    assert "shot-watch" not in touched
+    assert "shot-ipad" not in touched
+    assert set(result.untouched.display_types) == {
+        "APP_WATCH_ULTRA", "APP_IPAD_PRO_3GEN_129",
+    }
+
+
+def test_sync_unknown_pixel_size_is_an_error_and_nothing_is_written(
+    export, monkeypatch
+):
+    out, md5s = export
+    _png(out / "en-US" / "03.png", size=(1000, 1000))
+    client = _sync_client(md5s)
+
+    result = _sync(monkeypatch, client, out, apply=True)
+
+    assert result.applied is False
+    assert any("03.png" in e and "1000x1000" in e for e in _errors(result))
+    assert _writes(client) == []
+
+
+def test_sync_unknown_locale_directory_is_an_error_not_a_skip(export, monkeypatch):
+    out, md5s = export
+    _png(out / "nl" / "01.png")
+    client = _sync_client(md5s)
+
+    result = _sync(monkeypatch, client, out, apply=True)
+
+    assert result.applied is False
+    assert ("nl", None) in _actions(result)
+    assert any("nl" in e for e in _errors(result))
+    assert _writes(client) == []
+
+
+def test_sync_requested_locale_without_a_directory_is_an_error(export, monkeypatch):
+    out, md5s = export
+    client = _sync_client(md5s)
+
+    result = _sync(monkeypatch, client, out, locales=["en-US", "ja"])
+
+    assert _actions(result)[("ja", None)] == "error"
+    assert ("de-DE", "APP_IPHONE_67") not in _actions(result)
+
+
+def test_sync_skips_variants_dot_dirs_and_top_level_files(export, monkeypatch):
+    out, md5s = export
+    _png(out / "variants" / "cpp-a" / "en-US" / "01.png")
+    _png(out / ".history" / "01.png")
+    (out / "findings.json").write_text("{}")
+    (out / "qa.json").write_text("{}")
+    client = _sync_client(md5s)
+
+    result = _sync(monkeypatch, client, out, apply=True)
+
+    assert _errors(result) == []
+    assert result.applied is True
+    assert set(result.untouched.entries) >= {
+        "variants", ".history", "findings.json", "qa.json",
+    }
+
+
+def test_sync_lists_version_locales_without_a_directory_as_untouched(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "allowed"
+    monkeypatch.setattr(settings, "SCREENSHOT_SYNC_ROOTS", [str(root)])
+    out = root / "out"
+    md5s = _export(out, {"en-US": 2})
+    client = _sync_client(md5s)
+
+    result = _sync(monkeypatch, client, out)
+
+    assert result.untouched.locales == ["de-DE", "fr-FR"]
+
+
+def test_sync_refuses_a_dir_outside_the_allowlist(tmp_path, monkeypatch):
+    root = tmp_path / "allowed"
+    root.mkdir()
+    monkeypatch.setattr(settings, "SCREENSHOT_SYNC_ROOTS", [str(root)])
+    outside = tmp_path / "outside" / "out"
+    md5s = _export(outside, {"en-US": 2})
+    (root / "link").symlink_to(outside, target_is_directory=True)
+    client = _sync_client({"en-US": md5s["en-US"]})
+
+    with pytest.raises(ToolError, match="SCREENSHOT_SYNC_ROOTS"):
+        _sync(monkeypatch, client, outside)
+    with pytest.raises(ToolError, match="SCREENSHOT_SYNC_ROOTS"):
+        _sync(monkeypatch, client, root / "link")
+    assert client.calls == []
+
+
+def test_sync_refuses_a_symlink_inside_the_export_that_leaves_the_allowlist(
+    export, monkeypatch
+):
+    out, md5s = export
+    escape = out.parent.parent / "outside"
+    _png(escape / "evil.png")
+    (out / "en-US" / "03.png").symlink_to(escape / "evil.png")
+    client = _sync_client(md5s)
+
+    result = _sync(monkeypatch, client, out, apply=True)
+
+    assert result.applied is False
+    assert any("03.png" in e for e in _errors(result))
+    assert _writes(client) == []
+
+
+def test_sync_more_than_ten_files_of_one_type_is_an_error_before_any_write(
+    export, monkeypatch
+):
+    out, md5s = export
+    for index in range(3, 12):
+        _png(out / "de-DE" / f"{index:02d}.png", shade=index)
+    client = _sync_client(md5s)
+
+    result = _sync(monkeypatch, client, out, apply=True)
+
+    assert _actions(result)[("de-DE", "APP_IPHONE_67")] == "error"
+    assert result.applied is False
+    assert _writes(client) == []
+
+
+def test_sync_two_display_types_in_one_locale_need_a_filter(export, monkeypatch):
+    out, md5s = export
+    _png(out / "en-US" / "ipad.png", size=IPAD_13)
+    client = _sync_client(md5s)
+
+    mixed = _sync(monkeypatch, client, out)
+    assert any("ipad.png" in e for e in _errors(mixed))
+
+    narrowed = _sync(monkeypatch, client, out, display_types=["APP_IPHONE_67"])
+    assert _errors(narrowed) == []
+    assert _actions(narrowed)[("en-US", "APP_IPHONE_67")] == "skip"

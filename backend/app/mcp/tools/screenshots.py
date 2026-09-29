@@ -33,6 +33,9 @@ from app.schemas.screenshots import (
     Screenshot,
     ScreenshotDeleteResult,
     ScreenshotGap,
+    ScreenshotSyncResult,
+    ScreenshotSyncRow,
+    ScreenshotSyncUntouched,
     ScreenshotUploadResult,
     VersionScreenshotInventory,
     decode_screenshot_payload,
@@ -44,7 +47,10 @@ from app.services.asc.screenshots import (
     ASSET_STATE_FAILED,
     ASCVersionScreenshotService,
     EditableVersion,
+    SyncPathError,
     VersionNotEditableError,
+    resolve_sync_dir,
+    scan_export_dir,
 )
 from app.services.visual.compare import build_comparison
 
@@ -565,6 +571,129 @@ async def delete_version_screenshots(
         deleted_screenshot_ids=[shot["id"] for shot in targets],
         deleted_set=deleted_set,
         remaining=remaining,
+    )
+
+
+@mcp.tool(name="screenshots_sync")
+async def sync_version_screenshots(
+    app_id: int,
+    dir: str,  # noqa: A002 — the name callers and spec 013 use
+    locales: list[str] | None = None,
+    display_types: list[str] | None = None,
+    apply: bool = False,
+) -> ScreenshotSyncResult:
+    """Make a studio export (``<dir>/<locale>/NN.png``) the MAIN product page's screenshots.
+
+    The display type comes from each file's pixel size, and only the types
+    present in ``dir`` are touched: a Watch or iPad set is never read for
+    deletion. Each touched type is replaced as a unit, in filename order, and
+    a slot whose asset already has the file's MD5 is skipped, so a rerun
+    uploads only what changed.
+
+    Dry run by default. With ``apply=True`` nothing is written while any row
+    is an ``error`` (unknown pixel size, unknown locale directory, over 10
+    files, a path leaving ``SCREENSHOT_SYNC_ROOTS``).
+
+    Args:
+        app_id: The local app id.
+        dir: Absolute path under ``SCREENSHOT_SYNC_ROOTS``. Locale directories
+            are App Store Connect codes the editable version already has.
+            ``variants/``, dot-directories and top-level files are listed under
+            ``untouched`` and never synced.
+        locales: Sync only these locale directories (default: every one).
+        display_types: Sync only these device families (default: every family
+            the files map to). Required when one locale directory mixes two.
+        apply: False (default) returns the plan and writes nothing.
+
+    Returns:
+        One row per locale x display type (``skip`` | ``replace`` | ``upload``
+        | ``error``), what was left ``untouched``, and after an apply the
+        read-back ``count`` per row plus the 010 ``inventory`` with its gaps.
+    """
+    for display_type in display_types or []:
+        _require_display_type(display_type)
+    try:
+        root = resolve_sync_dir(dir)
+    except SyncPathError as exc:
+        raise ToolError(str(exc)) from exc
+
+    inventory: VersionScreenshotInventory | None = None
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        async with await _get_asc_client_for_app(app, session) as client:
+            service = ASCVersionScreenshotService(client)
+            async with _asc_tool_error():
+                version = await service.resolve_editable_version(app.asc_app_id)
+                localizations = await service.localizations_by_locale(version.id)
+                try:
+                    scan = scan_export_dir(
+                        root,
+                        localizations,
+                        version.version_string or version.id,
+                        locales=locales,
+                        display_types=display_types,
+                    )
+                except SyncPathError as exc:
+                    raise ToolError(str(exc)) from exc
+                other_types = await service.plan_sync(scan.steps)
+                rows = [
+                    ScreenshotSyncRow(
+                        locale=step.locale,
+                        display_type=step.display_type,
+                        action=step.action,
+                        files=len(step.files),
+                        existing=len(step.existing),
+                        uploads=step.uploads,
+                        deletes=step.deletes,
+                        error=step.error,
+                    )
+                    for step in scan.steps
+                ]
+                applied = apply and not any(step.error for step in scan.steps)
+                if applied:
+                    for step in scan.steps:
+                        if step.action != "skip":
+                            await service.apply_sync_step(step)
+                    synced = {step.locale: step.localization_id for step in scan.steps}
+                    sets_by_locale = {
+                        locale: await service.get_screenshot_sets(localization_id)
+                        for locale, localization_id in synced.items()
+                        if localization_id is not None
+                    }
+                    inventory = _build_inventory(
+                        app_id=app_id,
+                        version=version,
+                        localizations={
+                            locale: localizations[locale] for locale in sets_by_locale
+                        },
+                        sets_by_locale=sets_by_locale,
+                        display_types_filter=sorted(
+                            {s.display_type for s in scan.steps if s.display_type}
+                        ),
+                        expected_count=None,
+                        include_assets=False,
+                    )
+                    counts = {
+                        (row.locale, status.display_type): status.count
+                        for row in inventory.locales
+                        for status in row.display_types
+                    }
+                    for row in rows:
+                        row.count = counts.get((row.locale, row.display_type))
+
+    return ScreenshotSyncResult(
+        app_id=app_id,
+        dir=str(root),
+        version_id=version.id,
+        version_string=version.version_string,
+        applied=applied,
+        rows=rows,
+        untouched=ScreenshotSyncUntouched(
+            locales=sorted(set(localizations) - scan.locales),
+            display_types=sorted(other_types),
+            entries=scan.skipped,
+        ),
+        inventory=inventory,
     )
 
 

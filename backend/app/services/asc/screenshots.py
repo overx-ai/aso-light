@@ -27,9 +27,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from PIL import Image, UnidentifiedImageError
+
+from app.core.config import settings
+from app.schemas.screenshots import MAX_SCREENSHOT_BYTES, MAX_SCREENSHOT_FILES
 from app.services.asc.errors import ASCAPIError
 from app.services.metadata.client import (
     EDITABLE_VERSION_STATES,
@@ -95,6 +100,7 @@ def shape_screenshot(
     if include_delivery_state:
         delivery = attrs.get("assetDeliveryState") or {}
         shaped["state"] = delivery.get("state")
+        shaped["checksum"] = attrs.get("sourceFileChecksum")
         shaped["errors"] = [
             err.get("description") or err.get("code") or "unknown error"
             for err in (delivery.get("errors") or [])
@@ -181,6 +187,25 @@ async def fetch_screenshot_sets(
     return sets
 
 
+async def screenshot_set_ids(
+    client: ASCClient, localization_type: str, localization_id: str
+) -> dict[str, str]:
+    """``display type -> set id`` for a localization, without reading any asset."""
+    existing = await client._get_all_pages(
+        f"/{localization_type}/{localization_id}/appScreenshotSets",
+        params={
+            "fields[appScreenshotSets]": "screenshotDisplayType",
+            "limit": 200,
+        },
+    )
+    ids: dict[str, str] = {}
+    for set_obj in existing:
+        display_type = (set_obj.get("attributes") or {}).get("screenshotDisplayType")
+        if display_type:
+            ids.setdefault(display_type, set_obj["id"])
+    return ids
+
+
 async def find_or_create_screenshot_set(
     client: ASCClient,
     localization_type: str,
@@ -207,16 +232,9 @@ async def find_or_create_screenshot_set(
     Returns:
         The ``appScreenshotSets`` id to attach the new screenshot to.
     """
-    existing = await client._get_all_pages(
-        f"/{localization_type}/{localization_id}/appScreenshotSets",
-        params={
-            "fields[appScreenshotSets]": "screenshotDisplayType",
-            "limit": 200,
-        },
-    )
-    for set_obj in existing:
-        if set_obj.get("attributes", {}).get("screenshotDisplayType") == display_type:
-            return set_obj["id"]
+    existing = await screenshot_set_ids(client, localization_type, localization_id)
+    if display_type in existing:
+        return existing[display_type]
 
     body = {
         "data": {
@@ -366,7 +384,9 @@ async def list_set_screenshots(client: ASCClient, set_id: str) -> list[dict]:
     resources = await client._get_all_pages(
         f"/appScreenshotSets/{set_id}/appScreenshots",
         params={
-            "fields[appScreenshots]": "fileName,imageAsset,assetDeliveryState",
+            "fields[appScreenshots]": (
+                "fileName,imageAsset,assetDeliveryState,sourceFileChecksum"
+            ),
             "limit": 200,
         },
     )
@@ -600,3 +620,327 @@ class ASCVersionScreenshotService:
     async def delete_set(self, set_id: str) -> None:
         """Delete a set (use after emptying it, so no orphan set is left)."""
         await delete_screenshot_set(self.client, set_id)
+
+    async def screenshot_set_ids(self, localization_id: str) -> dict[str, str]:
+        """``display type -> set id`` on this localization, no assets read."""
+        return await screenshot_set_ids(
+            self.client, MAIN_LOCALIZATION_TYPE, localization_id
+        )
+
+    async def plan_sync(self, steps: list[SyncStep]) -> set[str]:
+        """Attach each step's current set and assets; return the display types
+        the synced locales hold that the export does not touch."""
+        untouched: set[str] = set()
+        set_ids_by_locale: dict[str, dict[str, str]] = {}
+        for step in steps:
+            if step.error or step.localization_id is None:
+                continue
+            if step.locale not in set_ids_by_locale:
+                set_ids_by_locale[step.locale] = await self.screenshot_set_ids(
+                    step.localization_id
+                )
+            step.set_id = set_ids_by_locale[step.locale].get(step.display_type or "")
+            if step.set_id:
+                step.existing = await self.list_set_screenshots(step.set_id)
+        synced = {step.display_type for step in steps if not step.error}
+        for set_ids in set_ids_by_locale.values():
+            untouched.update(set(set_ids) - synced)
+        return untouched
+
+    async def apply_sync_step(self, step: SyncStep) -> None:
+        """Make one set exactly the step's files, in order, slot by slot.
+
+        Each changed slot's old asset is deleted before its replacement is
+        uploaded, so a full set never passes Apple's cap mid-replace.
+        """
+        if step.localization_id is None or step.display_type is None:
+            return
+        set_id = step.set_id or await self.ensure_screenshot_set(
+            step.localization_id, step.display_type
+        )
+        order: list[str] = []
+        for index, export_file in enumerate(step.files):
+            current = step.existing[index] if index < len(step.existing) else None
+            if current is not None and _slot_matches(current, export_file):
+                order.append(current["id"])
+                continue
+            if current is not None:
+                await self.delete_screenshot(current["id"])
+            uploaded = await self.upload_to_set(
+                set_id, export_file.path.read_bytes(), export_file.path.name
+            )
+            if not uploaded.get("id"):
+                raise ASCAPIError(
+                    502,
+                    {
+                        "errors": [
+                            {
+                                "detail": (
+                                    "App Store Connect returned no screenshot id "
+                                    f"for {step.locale}/{export_file.path.name}."
+                                ),
+                            },
+                        ],
+                    },
+                )
+            order.append(uploaded["id"])
+        for extra in step.existing[len(step.files) :]:
+            await self.delete_screenshot(extra["id"])
+        await self.reorder_set(set_id, order)
+
+
+# ==================================================================
+# Sync from an export directory (spec 013)
+# ==================================================================
+
+# Portrait (width, height). The 6.9" iPhone has no display type of its own:
+# App Store Connect files its 1320x2868 screenshots under APP_IPHONE_67.
+DISPLAY_TYPE_BY_SIZE: dict[tuple[int, int], str] = {
+    (1320, 2868): "APP_IPHONE_67",
+    (1290, 2796): "APP_IPHONE_67",
+    (1284, 2778): "APP_IPHONE_65",
+    (1242, 2688): "APP_IPHONE_65",
+    (1242, 2208): "APP_IPHONE_55",
+    (2064, 2752): "APP_IPAD_PRO_3GEN_129",
+    (2048, 2732): "APP_IPAD_PRO_3GEN_129",
+    (1668, 2420): "APP_IPAD_PRO_3GEN_11",
+    (1668, 2388): "APP_IPAD_PRO_3GEN_11",
+    (422, 514): "APP_WATCH_ULTRA",
+    (410, 502): "APP_WATCH_ULTRA",
+    (416, 496): "APP_WATCH_SERIES_10",
+    (396, 484): "APP_WATCH_SERIES_7",
+    (368, 448): "APP_WATCH_SERIES_4",
+    (312, 390): "APP_WATCH_SERIES_3",
+}
+SYNC_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
+# The studio's Custom Product Page exports live beside the locales (spec 015).
+SYNC_SKIPPED_DIRS = frozenset({"variants"})
+
+
+def display_type_for_size(width: int, height: int) -> str | None:
+    return DISPLAY_TYPE_BY_SIZE.get((min(width, height), max(width, height)))
+
+
+class SyncPathError(Exception):
+    """The export directory itself is refused; nothing was read or written."""
+
+
+class _FileRefused(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class ExportFile:
+    path: Path
+    md5: str
+
+
+@dataclass
+class SyncStep:
+    """One locale x display type of a sync, or one ``error`` row."""
+
+    locale: str
+    display_type: str | None = None
+    files: list[ExportFile] = field(default_factory=list)
+    error: str | None = None
+    localization_id: str | None = None
+    set_id: str | None = None
+    existing: list[dict] = field(default_factory=list)
+
+    def _changed(self) -> list[int]:
+        return [
+            index
+            for index, export_file in enumerate(self.files)
+            if index >= len(self.existing)
+            or not _slot_matches(self.existing[index], export_file)
+        ]
+
+    @property
+    def uploads(self) -> int:
+        return len(self._changed())
+
+    @property
+    def deletes(self) -> int:
+        replaced = sum(1 for index in self._changed() if index < len(self.existing))
+        return replaced + max(len(self.existing) - len(self.files), 0)
+
+    @property
+    def action(self) -> str:
+        if self.error:
+            return "error"
+        if not self.existing:
+            return "upload"
+        if not self.uploads and not self.deletes:
+            return "skip"
+        return "replace"
+
+
+def _slot_matches(existing: dict, export_file: ExportFile) -> bool:
+    return (
+        existing.get("state") != ASSET_STATE_FAILED
+        and existing.get("checksum") == export_file.md5
+    )
+
+
+def _sync_roots() -> list[Path]:
+    return [Path(root).resolve() for root in settings.SCREENSHOT_SYNC_ROOTS]
+
+
+def _within_roots(path: Path) -> bool:
+    real = path.resolve()
+    return any(real.is_relative_to(root) for root in _sync_roots())
+
+
+def resolve_sync_dir(directory: str) -> Path:
+    """The export directory, refused unless its realpath is under an allowed root."""
+    root = Path(directory)
+    if not root.is_absolute():
+        raise SyncPathError(f"dir must be an absolute path, got {directory!r}.")
+    if not _within_roots(root):
+        allowed = ", ".join(str(r) for r in _sync_roots()) or "none"
+        raise SyncPathError(
+            f"{directory} resolves outside SCREENSHOT_SYNC_ROOTS ({allowed})."
+        )
+    if not root.is_dir():
+        raise SyncPathError(f"{directory} is not a directory.")
+    return root
+
+
+def _read_export_file(path: Path) -> tuple[str, ExportFile]:
+    if not _within_roots(path):
+        raise _FileRefused("resolves outside SCREENSHOT_SYNC_ROOTS")
+    if not path.is_file() or path.suffix.lower() not in SYNC_IMAGE_SUFFIXES:
+        raise _FileRefused("not a PNG or JPEG file")
+    size = path.stat().st_size
+    if size > MAX_SCREENSHOT_BYTES:
+        raise _FileRefused(f"{size} bytes, over the {MAX_SCREENSHOT_BYTES}-byte cap")
+    data = path.read_bytes()
+    try:
+        with Image.open(path) as image:
+            width, height = image.size
+    except (UnidentifiedImageError, OSError) as exc:
+        raise _FileRefused("not a readable image") from exc
+    display_type = display_type_for_size(width, height)
+    if display_type is None:
+        raise _FileRefused(f"{width}x{height} is not an App Store screenshot size")
+    # Apple's sourceFileChecksum is an MD5; this compares against it, it is not
+    # a security primitive.
+    return display_type, ExportFile(path, hashlib.md5(data).hexdigest())  # noqa: S324
+
+
+def _scan_locale(
+    locale_dir: Path, localization_id: str, display_types: list[str] | None
+) -> list[SyncStep]:
+    locale = locale_dir.name
+    if not _within_roots(locale_dir):
+        return [SyncStep(locale, error=f"{locale}/ resolves outside SCREENSHOT_SYNC_ROOTS.")]
+
+    errors: list[SyncStep] = []
+    by_type: dict[str, list[ExportFile]] = {}
+    for path in sorted(locale_dir.iterdir()):
+        if path.name.startswith("."):
+            continue
+        try:
+            display_type, export_file = _read_export_file(path)
+        except _FileRefused as exc:
+            errors.append(SyncStep(locale, error=f"{locale}/{path.name}: {exc}."))
+            continue
+        if display_types and display_type not in display_types:
+            continue
+        by_type.setdefault(display_type, []).append(export_file)
+
+    if len(by_type) > 1 and not display_types:
+        listing = "; ".join(
+            f"{display_type}: {', '.join(f.path.name for f in files)}"
+            for display_type, files in sorted(by_type.items())
+        )
+        return [
+            *errors,
+            SyncStep(
+                locale,
+                error=(
+                    f"{locale}/ mixes display types ({listing}). Pass "
+                    "display_types, or export one directory per device family."
+                ),
+            ),
+        ]
+
+    steps = errors
+    for display_type, files in sorted(by_type.items()):
+        if len(files) > MAX_SCREENSHOT_FILES:
+            steps.append(
+                SyncStep(
+                    locale,
+                    display_type,
+                    error=(
+                        f"{locale}/ holds {len(files)} {display_type} files; "
+                        f"Apple's cap is {MAX_SCREENSHOT_FILES}."
+                    ),
+                )
+            )
+        else:
+            steps.append(
+                SyncStep(locale, display_type, files, localization_id=localization_id)
+            )
+    if not steps:
+        steps.append(SyncStep(locale, error=f"{locale}/ holds no screenshots."))
+    return steps
+
+
+@dataclass
+class ExportScan:
+    steps: list[SyncStep]
+    locales: set[str]
+    skipped: list[str]
+
+
+def scan_export_dir(
+    root: Path,
+    localizations: dict[str, str],
+    version_label: str,
+    *,
+    locales: list[str] | None = None,
+    display_types: list[str] | None = None,
+) -> ExportScan:
+    """Group ``<root>/<locale>/*`` into sync steps against the version's locales.
+
+    A directory that is not one of the version's locales is an error, never a
+    skip: a silently skipped ``nl/`` once shipped a "successful" push of
+    nothing. Dot-entries, ``variants/`` and top-level files are not locales.
+    """
+    steps: list[SyncStep] = []
+    seen: set[str] = set()
+    skipped: list[str] = []
+    for entry in sorted(root.iterdir()):
+        name = entry.name
+        if (
+            name.startswith(".")
+            or name in SYNC_SKIPPED_DIRS
+            or not entry.is_dir()
+            or (locales and name not in locales)
+        ):
+            skipped.append(name)
+            continue
+        seen.add(name)
+        localization_id = localizations.get(name)
+        if localization_id is None:
+            steps.append(
+                SyncStep(
+                    name,
+                    error=(
+                        f"{name}/ is not a locale on App Store version "
+                        f"{version_label}. Locale directories are App Store "
+                        "Connect codes (nl-NL, not nl) the version already has; "
+                        "add one with metadata_create_locale."
+                    ),
+                )
+            )
+            continue
+        steps.extend(_scan_locale(entry, localization_id, display_types))
+
+    for locale in locales or []:
+        if locale not in seen:
+            steps.append(SyncStep(locale, error=f"{locale}/ is not in {root}."))
+    if not steps:
+        raise SyncPathError(f"{root} holds no locale directories.")
+    return ExportScan(steps=steps, locales=seen, skipped=skipped)
