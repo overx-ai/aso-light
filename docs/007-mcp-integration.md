@@ -117,7 +117,7 @@ Tool names are `<module>_<action>` — **underscores, never dots**. The
 Anthropic tool-name regex is `^[a-zA-Z0-9_-]{1,64}$`, so a dotted name breaks
 Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 
-187 tools across 23 modules:
+188 tools across 23 modules:
 
 | Module        | Tools | Domain                                                           |
 | ------------- | ----- | ---------------------------------------------------------------- |
@@ -140,14 +140,14 @@ Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 | `pricing`     | 48    | Subscription/IAP/group/intro-offer lifecycle + price CRUD, sync, apply, price points, bulk export/import |
 | `revenuecat`  | 23    | RC credential, products, entitlements, offerings, packages       |
 | `reviews`     | 7     | List, draft reply, translate, post/edit/delete responses         |
-| `screenshots` | 4     | Main product page: per locale × display-type counts + gap worklist (`screenshots_list`), idempotent positional upload (`screenshots_upload`), delete + empty-set prune (`screenshots_delete`), CPP-vs-default montage (`screenshots_compare`) |
+| `screenshots` | 5     | Main product page: per locale × display-type counts + gap worklist (`screenshots_list`), idempotent positional upload (`screenshots_upload`), delete + empty-set prune (`screenshots_delete`), a whole export directory in one call (`screenshots_sync`), CPP-vs-default montage (`screenshots_compare`) |
 | `swap`        | 3     | Swap subscription / IAP productId end-to-end + suggest new id    |
 | `territories` | 1     | List App Store territories with currency / GDP / VAT             |
 | `visibility`  | 8     | Watches, snapshots, anomalies, share-of-voice                    |
 
 Every tool carries an MCP annotation so a client knows whether to prompt:
 83 are `readOnlyHint` (safe to call unattended, e.g. in plan mode), 37 are
-`destructiveHint` and go through the consent gate below, and the remaining 67
+`destructiveHint` and go through the consent gate below, and the remaining 68
 are writes that still prompt. The classification lives in
 `backend/app/mcp/consent.py` (`READ_ONLY` / `DESTRUCTIVE`) as an **allowlist**,
 so anything unclassified fails closed — it keeps prompting rather than
@@ -229,6 +229,46 @@ at submit time. The list tool is the API-side count that finds them:
 All three resolve the app's **editable** App Store version; against a live or
 locked version they fail with a message naming the state
 ([spec 010](specs/010-mcp-main-listing-screenshots.md)).
+
+**Ship a studio export as the main listing's screenshots**
+
+`screenshots_sync(app_id, dir)` reads `<dir>/<locale>/NN.png` from disk, so no
+image passes through the agent's context. That replaces ~160 base64
+`screenshots_upload` calls for 8 slides × 10 locales × 2 families
+([spec 013](specs/013-screenshots-sync-from-directory.md)).
+
+1. `screenshots_sync(app_id, dir)` returns a **dry run** by default. It gives one
+   row per locale × display type:
+   - `skip`: every slot's `sourceFileChecksum` already equals the file's MD5;
+   - `replace`: some slots changed;
+   - `upload`: the set is new;
+   - `error`: the problem is named on the row.
+
+   `untouched` lists the version's locales with no directory, the display types
+   left alone, and the `variants/`, dot-directories and top-level files that were
+   skipped.
+2. Fix every `error` row. Until there are none, `apply=true` writes nothing. Each of
+   these is an error:
+   - an unknown pixel size;
+   - a directory that is not one of the version's locales (`nl`, not `nl-NL`);
+   - more than 10 files of one type;
+   - a file that is not a PNG or JPEG;
+   - a path whose realpath leaves `SCREENSHOT_SYNC_ROOTS`;
+   - two device families in one locale directory, unless `display_types` narrows it.
+3. `screenshots_sync(app_id, dir, apply=true)` replaces each type present as a unit,
+   in filename order. Changed slots are replaced in place and trailing extras are
+   deleted. Watch, iPad and every other type are never read for deletion. Each file
+   is re-read and must still hash to its planned MD5 before its slot is touched.
+   The result's `count` per row and `inventory.gaps` come from the read-back, not
+   from the upload responses.
+4. A rerun is all `skip` and writes nothing, so an interrupted apply resumes with
+   the same call.
+
+The display type comes from the pixel size, portrait or landscape:
+`DISPLAY_TYPE_BY_SIZE` in `backend/app/services/asc/screenshots.py`. The 6.9"
+iPhone's 1320×2868 is filed under `APP_IPHONE_67`, because Apple has no
+`APP_IPHONE_69`. `SCREENSHOT_SYNC_ROOTS` (a JSON list, or comma-separated in `.env`)
+defaults to `~/JACK`.
 
 There are pre-built MCP prompts (`swap_product_safely`, `optimize_keywords`)
 that walk through these flows. Most LLM clients show prompts as quick-pick

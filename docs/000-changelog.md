@@ -1,7 +1,7 @@
 ---
 status: current
 created: 2026-04-26
-updated: 2026-07-21
+updated: 2026-09-29
 ---
 
 # 000 - Changelog
@@ -11,6 +11,19 @@ updated: 2026-07-21
 > out. Nothing to do unless you are about to cut a release.
 
 ## [Unreleased]
+
+### Added — `screenshots_sync`: a studio export directory as the main listing's screenshots (2026-09-29)
+- **`screenshots_sync {app_id, dir, locales?, display_types?, apply=false}`** ([spec 013](specs/013-screenshots-sync-from-directory.md), [docs/007](007-mcp-integration.md)). It reads `<dir>/<locale>/NN.png` from disk and infers each file's display type from its pixel size. Only the types present are touched: the Watch and iPad sets are never read for deletion, unlike fastlane `deliver`'s per-locale wipe. Each type is replaced as a unit, in filename order. A slot whose `sourceFileChecksum` equals the file's MD5 is skipped, so a rerun writes nothing. The final state is the 010 read-back inventory.
+- **A dry run by default; any error row blocks the whole apply.** Error rows cover:
+  - an unknown pixel size;
+  - an unknown locale directory;
+  - more than 10 files of one type;
+  - a non-image file;
+  - a symlink out of `SCREENSHOT_SYNC_ROOTS` (a new setting, default `~/JACK`).
+
+  `variants/`, dot-directories and top-level files are listed under `untouched`.
+
+  At apply time each file is re-read and must still hash to its planned MD5 before the slot's old asset is deleted. File I/O runs off the event loop.
 
 ### Added — Product Page Optimization (PPO / App Store Version Experiments) (2026-07-16)
 - **PPO feature** ([docs/015](015-product-page-optimization.md)): manage Apple App Store Version Experiments — experiment CRUD + lifecycle (submit-for-review / stop), ≤3 treatments, and per-treatment-localization screenshot upload. Mirrors the CPP feature ([013](013-custom-product-pages-and-visual-compare.md)) across all three layers: `ASCExperimentService` (`backend/app/services/asc/experiment.py`), `experiment_*` MCP tools, `/apps/{id}/experiments…` REST routes, and a React Experiments page. **API v1/v2 split**: experiment CRUD is v2 (`base_v2 = BASE_URL.replace("/v1","/v2")`), treatments + treatment localizations are v1.

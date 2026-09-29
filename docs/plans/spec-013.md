@@ -49,3 +49,5 @@ release is exactly the "successful push of nothing" failure the spec exists to p
 ## Deviations
 - This plan was written down after the red tests, in the same session, rather than before them. The approach did not change.
 - The consent gate (`app/mcp/consent.py`) is not touched. `screenshots_sync` sits in the default write tier (it prompts, with no token), like `screenshots_upload`. Gating it in `DESTRUCTIVE` would require a token for every dry run too.
+- `/code` review: at apply time each file goes through `read_planned_bytes` (the scan's validation plus the planned MD5) *before* its slot is deleted, and a new set is created only with the first verified upload. Before this, a file that changed between plan and apply could leave a hole or an empty set. The scan and reads run in `asyncio.to_thread`. The PIL format must be PNG or JPEG, from one capped read.
+- `/docs`: docs/007 and docs/000-changelog are updated. `docs/INDEX.md` is **not**: its main-copy version holds another session's uncommitted WIP, and the branch must not conflict with it. It needs a spec-013 row (Specs table) once that WIP lands.
