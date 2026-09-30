@@ -18,6 +18,7 @@ import asyncio
 import base64
 import copy
 import hashlib
+import re
 from collections import Counter
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -70,12 +71,17 @@ class FakeASC:
         commit_errors: list[str] | None = None,
         cpp_versions: dict[str, list[dict]] | None = None,
         cpp_localizations: dict[str, dict[str, str]] | None = None,
+        experiments: dict[str, dict] | None = None,
+        treatment_localizations: dict[str, dict[str, str]] | None = None,
     ) -> None:
         self.versions = versions
         self.localizations = localizations
         # cpp id -> its versions; CPP version id -> {locale: localization id}.
         self.cpp_versions = cpp_versions or {}
         self.cpp_localizations = cpp_localizations or {}
+        # experiment id -> {"app", "state", "treatments"}; treatment id -> {locale: localization id}.
+        self.experiments = experiments or {}
+        self.treatment_localizations = treatment_localizations or {}
         self.sets = sets or {}
         self.screenshots = screenshots or {}
         self.commit_state = commit_state
@@ -123,9 +129,55 @@ class FakeASC:
 
     # -- ASCClient surface ------------------------------------------
 
+    BASE_URL = "https://api.appstoreconnect.apple.com/v1"
+
     async def _get(self, path: str, params: dict | None = None) -> dict:
+        path = re.sub(r"^https://[^/]+/v\d", "", path)
         self.calls.append(("GET", path))
         parts = path.strip("/").split("/")
+
+        if parts[0] == "apps" and parts[-1] == "appStoreVersionExperimentsV2":
+            return {
+                "data": [
+                    {"type": "appStoreVersionExperiments", "id": experiment_id}
+                    for experiment_id, experiment in self.experiments.items()
+                    if experiment["app"] == parts[1]
+                ]
+            }
+
+        if parts[0] == "appStoreVersionExperiments" and len(parts) == 2:
+            experiment = self.experiments[parts[1]]
+            return {
+                "data": {
+                    "type": "appStoreVersionExperiments",
+                    "id": parts[1],
+                    "attributes": {"state": experiment["state"], "name": "test"},
+                }
+            }
+
+        if parts[0] == "appStoreVersionExperiments" and parts[-1] == (
+            "appStoreVersionExperimentTreatments"
+        ):
+            return {
+                "data": [
+                    {"type": "appStoreVersionExperimentTreatments", "id": treatment_id}
+                    for treatment_id in self.experiments[parts[1]]["treatments"]
+                ]
+            }
+
+        if parts[0] == "appStoreVersionExperimentTreatments" and parts[-1] == (
+            "appStoreVersionExperimentTreatmentLocalizations"
+        ):
+            return {
+                "data": [
+                    {
+                        "type": "appStoreVersionExperimentTreatmentLocalizations",
+                        "id": loc_id,
+                        "attributes": {"locale": locale},
+                    }
+                    for locale, loc_id in self.treatment_localizations.get(parts[1], {}).items()
+                ]
+            }
 
         if parts[0] == "apps" and parts[-1] == "appStoreVersions":
             data = self.versions
@@ -256,6 +308,12 @@ class FakeASC:
             version_id = body["relationships"]["appCustomProductPageVersion"]["data"]["id"]
             loc_id = self._next_id("cpp-loc")
             self.cpp_localizations.setdefault(version_id, {})[attrs["locale"]] = loc_id
+            return {"data": {"id": loc_id, "attributes": {"locale": attrs["locale"]}}}
+
+        if path == "/appStoreVersionExperimentTreatmentLocalizations":
+            treatment_id = body["relationships"]["appStoreVersionExperimentTreatment"]["data"]["id"]
+            loc_id = self._next_id("tr-loc")
+            self.treatment_localizations.setdefault(treatment_id, {})[attrs["locale"]] = loc_id
             return {"data": {"id": loc_id, "attributes": {"locale": attrs["locale"]}}}
 
         if path == "/appScreenshots":
@@ -2046,6 +2104,176 @@ def test_cpp_sync_refuses_a_dir_outside_the_allowlist_before_any_asc_call(
 
     with pytest.raises(ToolError, match="SCREENSHOT_SYNC_ROOTS"):
         _cpp_sync(monkeypatch, client, outside)
+    assert client.calls == []
+
+
+# ------------------------------------------------------------------
+# Spec 016: experiment_screenshots_sync — a PPO treatment as the target
+# ------------------------------------------------------------------
+
+EXPERIMENT_ID = "exp-1"
+TREATMENT_ID = "tr-1"
+
+
+def _treatment_sync_client(
+    md5s: dict[str, list[str]], state: str = "PREPARE_FOR_SUBMISSION"
+) -> FakeASC:
+    """The app ships en-US, de-DE and fr-FR. Treatment tr-1 has en-US (matches
+    the export, plus a Watch set) and de-DE (stale, one longer); it lacks fr-FR.
+    Experiment exp-2 of the same app owns tr-2; exp-other belongs to another app."""
+    client = _cpp_sync_client(md5s)
+    for shot_set in client.sets.values():
+        shot_set["localization_id"] = shot_set["localization_id"].replace("cloc", "tloc")
+    client.cpp_versions, client.cpp_localizations = {}, {}
+    client.experiments = {
+        EXPERIMENT_ID: {"app": "asc-777", "state": state, "treatments": [TREATMENT_ID]},
+        "exp-2": {"app": "asc-777", "state": state, "treatments": ["tr-2"]},
+        "exp-other": {"app": "asc-999", "state": state, "treatments": ["tr-9"]},
+    }
+    client.treatment_localizations = {TREATMENT_ID: {"en-US": "tloc-en", "de-DE": "tloc-de"}}
+    return client
+
+
+def _patch_experiment_tools(monkeypatch, client: FakeASC) -> None:
+    from app.mcp.tools import experiment as experiment_tools
+
+    _patch_tools(monkeypatch, client)
+
+    async def _fake_asc_client_for_app(app: App, session):
+        return await screenshot_tools._get_asc_client_for_app(app, session)
+
+    monkeypatch.setattr(experiment_tools, "session_scope", _fake_session_scope)
+    monkeypatch.setattr(experiment_tools, "resolve_app", _fake_resolve_app)
+    monkeypatch.setattr(
+        experiment_tools, "_get_asc_client_for_app", _fake_asc_client_for_app
+    )
+
+
+def _treatment_sync(monkeypatch, client: FakeASC, out: Path, **kwargs):
+    _patch_experiment_tools(monkeypatch, client)
+    kwargs.setdefault("experiment_id", EXPERIMENT_ID)
+    kwargs.setdefault("treatment_id", TREATMENT_ID)
+
+    async def go():
+        tool = await _tool("experiment_screenshots_sync")
+        return await tool.fn(app_id=7, dir=str(out), **kwargs)
+
+    return run_async(go())
+
+
+def _treatment_checksums(client: FakeASC, localization_id: str) -> list[str]:
+    shot_set = client.set_for(localization_id, "APP_IPHONE_67")
+    assert shot_set is not None
+    return [client.screenshots[s]["checksum"] for s in shot_set["shots"]]
+
+
+def test_treatment_sync_dry_run_plans_create_localization_replace_and_skip(
+    export, monkeypatch
+):
+    out, md5s = export
+    client = _treatment_sync_client(md5s)
+
+    result = _treatment_sync(monkeypatch, client, out)
+
+    assert result.applied is False
+    assert result.version_id == TREATMENT_ID
+    assert _actions(result) == {
+        ("de-DE", "APP_IPHONE_67"): "replace",
+        ("en-US", "APP_IPHONE_67"): "skip",
+        ("fr-FR", "APP_IPHONE_67"): "create_localization",
+    }
+    assert _writes(client) == []
+
+
+def test_treatment_sync_apply_replaces_as_a_unit_and_creates_the_missing_localization(
+    export, monkeypatch
+):
+    out, md5s = export
+    client = _treatment_sync_client(md5s)
+
+    result = _treatment_sync(monkeypatch, client, out, apply=True)
+
+    assert result.applied is True
+    assert _treatment_checksums(client, "tloc-de") == md5s["de-DE"]
+    fr_loc = client.treatment_localizations[TREATMENT_ID]["fr-FR"]
+    assert _treatment_checksums(client, fr_loc) == md5s["fr-FR"]
+    assert client.sets["cset-en-67"]["shots"] == ["cshot-en-0", "cshot-en-1"]
+    assert all(
+        shot_set["localization_id"] not in {"loc-en", "loc-de", "loc-fr"}
+        for shot_set in client.sets.values()
+    )
+    assert result.inventory is not None and result.inventory.gaps == []
+
+
+def test_treatment_sync_rerun_is_all_skip_with_zero_writes(export, monkeypatch):
+    out, md5s = export
+    client = _treatment_sync_client(md5s)
+    _treatment_sync(monkeypatch, client, out, apply=True)
+    client.calls.clear()
+
+    again = _treatment_sync(monkeypatch, client, out, apply=True)
+
+    assert set(_actions(again).values()) == {"skip"}
+    assert _writes(client) == []
+
+
+def test_treatment_sync_never_touches_another_display_type(export, monkeypatch):
+    out, md5s = export
+    client = _treatment_sync_client(md5s)
+    before = copy.deepcopy(
+        (client.sets["cset-en-watch"], client.screenshots["cshot-watch"])
+    )
+
+    result = _treatment_sync(monkeypatch, client, out, apply=True)
+
+    assert (client.sets["cset-en-watch"], client.screenshots["cshot-watch"]) == before
+    assert result.untouched.display_types == ["APP_WATCH_ULTRA"]
+
+
+@pytest.mark.parametrize("state", ["WAITING_FOR_REVIEW", "IN_REVIEW", "APPROVED", "STOPPED"])
+def test_treatment_sync_refuses_an_experiment_that_is_not_editable_before_any_write(
+    export, monkeypatch, state
+):
+    out, md5s = export
+    client = _treatment_sync_client(md5s, state=state)
+
+    with pytest.raises(ToolError, match=state):
+        _treatment_sync(monkeypatch, client, out, apply=True)
+    assert _writes(client) == []
+
+
+def test_treatment_sync_refuses_a_treatment_of_another_experiment(export, monkeypatch):
+    out, md5s = export
+    client = _treatment_sync_client(md5s)
+
+    with pytest.raises(ToolError, match="Treatment not found"):
+        _treatment_sync(monkeypatch, client, out, treatment_id="tr-2", apply=True)
+    assert _writes(client) == []
+
+
+def test_treatment_sync_refuses_an_experiment_of_another_app(export, monkeypatch):
+    out, md5s = export
+    client = _treatment_sync_client(md5s)
+
+    with pytest.raises(ToolError, match="Experiment not found"):
+        _treatment_sync(
+            monkeypatch, client, out, experiment_id="exp-other", treatment_id="tr-9", apply=True
+        )
+    assert _writes(client) == []
+
+
+def test_treatment_sync_refuses_a_dir_outside_the_allowlist_before_any_asc_call(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "allowed"
+    root.mkdir()
+    monkeypatch.setattr(settings, "SCREENSHOT_SYNC_ROOTS", [str(root)])
+    outside = tmp_path / "outside" / "out"
+    md5s = _export(outside, {"en-US": 2})
+    client = _treatment_sync_client({"en-US": md5s["en-US"]})
+
+    with pytest.raises(ToolError, match="SCREENSHOT_SYNC_ROOTS"):
+        _treatment_sync(monkeypatch, client, outside)
     assert client.calls == []
 
 

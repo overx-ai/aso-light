@@ -17,11 +17,14 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
 from app.api.v1._deps import _get_asc_client_for_app
 from app.mcp.context import resolve_app, session_scope
 from app.mcp.server import mcp
+from app.mcp.tools.screenshots import run_screenshot_sync
+from app.models.app import App
 from app.schemas.experiment import (
     SETTABLE_EXPERIMENT_STATES,
     EnsureTreatmentLocalizationResponse,
@@ -36,13 +39,19 @@ from app.schemas.experiment import (
     shape_experiment,
     shape_treatment,
 )
-from app.schemas.screenshots import decode_screenshot_payload
+from app.schemas.screenshots import ScreenshotSyncResult, decode_screenshot_payload
+from app.services.asc.client import ASCClient
 from app.services.asc.errors import ASCAPIError, ChildResourceNotFoundError
 from app.services.asc.experiment import (
     ASCExperimentService,
     ExperimentLimitError,
+    TreatmentScreenshotService,
 )
-from app.services.asc.screenshots import build_source_url
+from app.services.asc.screenshots import (
+    ASCVersionScreenshotService,
+    SyncTarget,
+    build_source_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -370,4 +379,67 @@ async def upload_treatment_screenshot(
         file_name=attrs.get("fileName") or file_name,
         display_type=display_type,
         source_url=build_source_url(attrs.get("imageAsset")),
+    )
+
+
+@mcp.tool(name="experiment_screenshots_sync")
+async def sync_experiment_screenshots(
+    app_id: int,
+    experiment_id: str,
+    treatment_id: str,
+    dir: str,  # noqa: A002 — the name callers and spec 016 use
+    locales: list[str] | None = None,
+    display_types: list[str] | None = None,
+    apply: bool = False,
+    ctx: Context | None = None,
+) -> ScreenshotSyncResult:
+    """Make a studio variant export (``<dir>/<locale>/NN.png``) a PPO treatment's screenshots.
+
+    ``cpp_screenshots_sync`` with an experiment treatment as the target: the
+    same directory rules, size table and ``SCREENSHOT_SYNC_ROOTS`` allowlist,
+    each display type replaced as a unit in filename order, unchanged slots
+    skipped by MD5, other display types never touched. A locale the treatment
+    has no localization for is planned as ``create_localization`` and created
+    on apply; it must be one of the app's own locales.
+
+    The experiment must belong to the app, the treatment to the experiment,
+    and the experiment must still be editable (``PREPARE_FOR_SUBMISSION``,
+    ``READY_FOR_REVIEW`` or ``REJECTED``); anything else is refused before any
+    write. Dry run by default; ``version_id`` in the reply is the treatment id.
+
+    Args:
+        app_id: The local app id.
+        experiment_id: The experiment (``appStoreVersionExperiments``) id.
+        treatment_id: The treatment id, one of the experiment's.
+        dir: Absolute path under ``SCREENSHOT_SYNC_ROOTS``, e.g. a studio
+            ``out/variants/<name>``.
+        locales: Sync only these locale directories (default: every one).
+        display_types: Sync only these device families (default: every family
+            the files map to).
+        apply: False (default) returns the plan and writes nothing.
+    """
+
+    async def bind(client: ASCClient, app: App) -> SyncTarget:
+        service = TreatmentScreenshotService(client)
+        version = await service.editable_treatment(
+            app.asc_app_id, experiment_id, treatment_id
+        )
+        return SyncTarget(
+            service=service,
+            version=version,
+            localizations=await service.localizations_by_locale(treatment_id),
+            label=f"treatment {treatment_id}",
+            creatable=await ASCVersionScreenshotService(client).app_locales(
+                app.asc_app_id
+            ),
+        )
+
+    return await run_screenshot_sync(
+        app_id,
+        dir,
+        bind,
+        locales=locales,
+        display_types=display_types,
+        apply=apply,
+        ctx=ctx,
     )

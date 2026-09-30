@@ -44,7 +44,7 @@ from app.schemas.screenshots import (
     decode_screenshot_payload,
     is_valid_display_type,
 )
-from app.services.asc.errors import ASCAPIError
+from app.services.asc.errors import ASCAPIError, ChildResourceNotFoundError
 from app.services.asc.screenshots import (
     ASSET_STATE_COMPLETE,
     ASSET_STATE_FAILED,
@@ -86,6 +86,8 @@ async def asc_tool_error() -> AsyncIterator[None]:
         yield
     except NotEditableError as exc:
         raise ToolError(exc.message)
+    except ChildResourceNotFoundError as exc:
+        raise ToolError(str(exc))
     except ASCAPIError as exc:
         raise ToolError(f"ASC API error: {exc.message}")
 

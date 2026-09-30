@@ -551,3 +551,48 @@ class ASCExperimentService:
             "locale": locale,
             "uploaded_count": uploaded_count,
         }
+
+
+_EDITABLE_EXPERIMENT_STATES = ("PREPARE_FOR_SUBMISSION", "READY_FOR_REVIEW", "REJECTED")
+
+
+class ExperimentNotEditableError(shots.NotEditableError):
+    def __init__(self, experiment_id: str, state: str | None) -> None:
+        self.state = state
+        super().__init__(
+            f"Experiment {experiment_id} is in state {state or 'unknown'}. A "
+            "treatment's localizations and screenshots change only while its "
+            f"experiment is in one of: {', '.join(_EDITABLE_EXPERIMENT_STATES)}."
+        )
+
+
+class TreatmentScreenshotService(shots.LocalizationScreenshotService):
+    """A PPO treatment as a localization source for the shared sync."""
+
+    localization_type = _LOCALIZATION_TYPE
+    set_relationship = _SET_LOCALIZATION_RELATIONSHIP
+
+    def __init__(self, client: ASCClient) -> None:
+        super().__init__(client)
+        self.experiments = ASCExperimentService(client)
+
+    async def localizations_by_locale(self, version_id: str) -> dict[str, str]:
+        return shots.locales_of(
+            await self.experiments.list_treatment_localizations(version_id)
+        )
+
+    async def ensure_localization(self, version_id: str, locale: str) -> str:
+        return await self.experiments.find_or_create_localization_id(version_id, locale)
+
+    async def editable_treatment(
+        self, asc_app_id: str, experiment_id: str, treatment_id: str
+    ) -> shots.EditableVersion:
+        """The treatment as the sync's version, once it is proven to be this
+        app's and its experiment still accepts edits."""
+        await self.experiments.assert_experiment_in_app(asc_app_id, experiment_id)
+        await self.experiments.assert_treatment_in_experiment(experiment_id, treatment_id)
+        experiment = await self.experiments.get_experiment(experiment_id)
+        state = (experiment.get("attributes") or {}).get("state")
+        if state not in _EDITABLE_EXPERIMENT_STATES:
+            raise ExperimentNotEditableError(experiment_id, state)
+        return shots.EditableVersion(id=treatment_id, state=state, version_string=None)
