@@ -12,6 +12,10 @@ updated: 2026-09-30
 
 ## [Unreleased]
 
+### Fixed — a sync no longer plans `replace` for uploads Apple is still processing (2026-09-30)
+- For a while after a commit, Apple reports a screenshot with no `sourceFileChecksum`, even once its state reads `COMPLETE`. The planner read those slots as changed, so re-running an apply deleted good uploads and sent them again ([bug 009](bugs/009-sync-reads-processing-uploads-as-changed.md), [docs/007](007-mcp-integration.md)).
+- A slot with no checksum now counts as the file when three things hold: it has an explicit state other than `AWAITING_UPLOAD`/`FAILED`, the same name, and the same byte size. The row reports these slots as `processing`.
+
 ### Added — `experiment_screenshots_sync`: a studio variant export as a PPO treatment's screenshots (2026-09-30)
 - **`experiment_screenshots_sync {app_id, experiment_id, treatment_id, dir, locales?, display_types?, apply=false}`** ([spec 016](specs/016-experiment-screenshots-sync.md), [docs/007](007-mcp-integration.md), [docs/015](015-product-page-optimization.md)). It is the 013/015 sync with a treatment as the third localization source.
 - The experiment must belong to the app and the treatment to the experiment. The experiment must still be editable (`PREPARE_FOR_SUBMISSION`, `READY_FOR_REVIEW`, `REJECTED`). Each check is refused by name before any write.

@@ -62,6 +62,9 @@ logger = logging.getLogger(__name__)
 ASSET_STATE_COMPLETE = "COMPLETE"
 ASSET_STATE_FAILED = "FAILED"
 ASSET_STATE_AWAITING_UPLOAD = "AWAITING_UPLOAD"
+_NOT_PROCESSING_STATES = frozenset(
+    {None, ASSET_STATE_AWAITING_UPLOAD, ASSET_STATE_FAILED}
+)
 
 
 def build_source_url(image_asset: dict | None) -> str | None:
@@ -111,6 +114,7 @@ def shape_screenshot(
         delivery = attrs.get("assetDeliveryState") or {}
         shaped["state"] = delivery.get("state")
         shaped["checksum"] = attrs.get("sourceFileChecksum")
+        shaped["file_size"] = attrs.get("fileSize")
         shaped["errors"] = [
             err.get("description") or err.get("code") or "unknown error"
             for err in (delivery.get("errors") or [])
@@ -394,7 +398,7 @@ async def list_set_screenshots(client: ASCClient, set_id: str) -> list[dict]:
         f"/appScreenshotSets/{set_id}/appScreenshots",
         params={
             "fields[appScreenshots]": (
-                "fileName,imageAsset,assetDeliveryState,sourceFileChecksum"
+                "fileName,fileSize,imageAsset,assetDeliveryState,sourceFileChecksum"
             ),
             "limit": 200,
         },
@@ -849,6 +853,7 @@ class _FileRefused(Exception):
 class ExportFile:
     path: Path
     md5: str
+    size: int
 
 
 @dataclass
@@ -904,12 +909,15 @@ class SyncStep:
 
 def _slot_processing(existing: dict, export_file: ExportFile) -> bool:
     # Apple withholds sourceFileChecksum for a while after a commit, even once the
-    # state reads COMPLETE; the same name in the same slot is taken as the file.
-    # A reservation never committed (AWAITING_UPLOAD) or a FAILED asset is a change.
+    # state reads COMPLETE, so the same name and byte size in the same slot is
+    # taken as the file. The studio re-exports the same names after every edit:
+    # the name alone is no proof. No state, a reservation never committed
+    # (AWAITING_UPLOAD) or a FAILED asset is a change.
     return (
         existing.get("checksum") is None
-        and existing.get("state") not in {ASSET_STATE_AWAITING_UPLOAD, ASSET_STATE_FAILED}
+        and existing.get("state") not in _NOT_PROCESSING_STATES
         and existing.get("file_name") == export_file.path.name
+        and existing.get("file_size") == export_file.size
     )
 
 
@@ -1009,7 +1017,7 @@ def _scan_locale(
         if display_types and display_type not in display_types:
             continue
         by_type.setdefault(display_type, []).append(
-            ExportFile(path, source_checksum(data))
+            ExportFile(path, source_checksum(data), len(data))
         )
 
     if len(by_type) > 1 and not display_types:

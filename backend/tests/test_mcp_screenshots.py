@@ -96,12 +96,16 @@ class FakeASC:
         self._seq += 1
         return f"{prefix}-{self._seq}"
 
-    def _shot_resource(self, shot_id: str) -> dict:
+    def _shot_resource(self, shot_id: str, fields: str = "") -> dict:
         shot = self.screenshots[shot_id]
+        # fileSize honours the sparse fieldset, so a listing that stops asking
+        # for it reads None, as it would from Apple.
+        size = {"fileSize": shot.get("file_size")} if "fileSize" in fields else {}
         return {
             "type": "appScreenshots",
             "id": shot_id,
             "attributes": {
+                **size,
                 "fileName": shot["file_name"],
                 "sourceFileChecksum": shot.get("checksum"),
                 "imageAsset": {
@@ -264,7 +268,9 @@ class FakeASC:
         if parts[0] == "appScreenshotSets" and parts[-1] == "appScreenshots":
             return {
                 "data": [
-                    self._shot_resource(shot_id)
+                    self._shot_resource(
+                        shot_id, (params or {}).get("fields[appScreenshots]", "")
+                    )
                     for shot_id in self.sets[parts[1]]["shots"]
                 ]
             }
@@ -315,6 +321,7 @@ class FakeASC:
             set_id = body["relationships"]["appScreenshotSet"]["data"]["id"]
             self.screenshots[shot_id] = {
                 "file_name": attrs["fileName"],
+                "file_size": attrs["fileSize"],
                 "state": "AWAITING_UPLOAD",
                 "errors": [],
             }
@@ -1751,7 +1758,7 @@ def test_sync_refuses_a_locale_directory_symlinked_out_of_the_allowlist(
 def test_sync_apply_uploads_only_the_bytes_the_plan_checked(export):
     out, md5s = export
     path = out / "en-US" / "01.png"
-    planned = shots.ExportFile(path, md5s["en-US"][0])
+    planned = shots.ExportFile(path, md5s["en-US"][0], path.stat().st_size)
     original = path.read_bytes()
     assert shots.read_planned_bytes(planned) == original
 
@@ -1788,7 +1795,7 @@ def test_sync_stops_when_a_file_changes_between_plan_and_apply(export, monkeypat
 
 
 def test_sync_replaces_a_failed_asset_even_when_its_checksum_matches(tmp_path):
-    export_file = shots.ExportFile(tmp_path / "01.png", "abc")
+    export_file = shots.ExportFile(tmp_path / "01.png", "abc", 3)
     step = shots.SyncStep(
         "en-US",
         "APP_IPHONE_67",
@@ -2714,8 +2721,12 @@ def _en_first_slot(client: FakeASC, **fields) -> None:
     client.screenshots["shot-en-0"].update(fields)
 
 
-def _en_row(result):
-    return next(row for row in result.rows if row.locale == "en-US")
+def _row(result, locale: str = "en-US"):
+    return next(row for row in result.rows if row.locale == locale)
+
+
+def _en_first_size(out: Path) -> int:
+    return (out / "en-US" / "01.png").stat().st_size
 
 
 @pytest.mark.parametrize("state", ["UPLOAD_COMPLETE", "COMPLETE"])
@@ -2725,10 +2736,16 @@ def test_sync_counts_a_processing_upload_of_the_same_file_as_unchanged(
     # Live, 2026-09-30: a fresh upload read COMPLETE with no checksum for ~20 s.
     out, md5s = export
     client = _sync_client(md5s)
-    _en_first_slot(client, state=state, checksum=None, file_name="01.png")
+    _en_first_slot(
+        client,
+        state=state,
+        checksum=None,
+        file_name="01.png",
+        file_size=_en_first_size(out),
+    )
 
-    plan = _sync(monkeypatch, client, out)
-    assert (_en_row(plan).action, _en_row(plan).processing) == ("skip", 1)
+    row = _row(_sync(monkeypatch, client, out))
+    assert (row.action, row.processing) == ("skip", 1)
 
     client.calls.clear()
     _sync(monkeypatch, client, out, apply=True, locales=["en-US"])
@@ -2739,9 +2756,15 @@ def test_sync_counts_a_processing_upload_of_the_same_file_as_unchanged(
 def test_sync_replaces_a_processing_slot_holding_another_file(export, monkeypatch):
     out, md5s = export
     client = _sync_client(md5s)
-    _en_first_slot(client, state="UPLOAD_COMPLETE", checksum=None, file_name="old.png")
+    _en_first_slot(
+        client,
+        state="UPLOAD_COMPLETE",
+        checksum=None,
+        file_name="old.png",
+        file_size=_en_first_size(out),
+    )
 
-    row = _en_row(_sync(monkeypatch, client, out))
+    row = _row(_sync(monkeypatch, client, out))
 
     assert (row.action, row.uploads, row.processing) == ("replace", 1, 0)
 
@@ -2749,8 +2772,65 @@ def test_sync_replaces_a_processing_slot_holding_another_file(export, monkeypatc
 def test_sync_replaces_an_upload_that_was_never_committed(export, monkeypatch):
     out, md5s = export
     client = _sync_client(md5s)
-    _en_first_slot(client, state="AWAITING_UPLOAD", checksum=None, file_name="01.png")
+    _en_first_slot(
+        client,
+        state="AWAITING_UPLOAD",
+        checksum=None,
+        file_name="01.png",
+        file_size=_en_first_size(out),
+    )
 
-    row = _en_row(_sync(monkeypatch, client, out))
+    row = _row(_sync(monkeypatch, client, out))
 
     assert (row.action, row.uploads, row.processing) == ("replace", 1, 0)
+
+
+def test_sync_replaces_a_processing_slot_of_the_same_name_but_another_size(
+    export, monkeypatch
+):
+    # The studio re-exports 01.png..NN.png after every edit: a name alone is no proof.
+    out, md5s = export
+    client = _sync_client(md5s)
+    _en_first_slot(
+        client,
+        state="COMPLETE",
+        checksum=None,
+        file_name="01.png",
+        file_size=_en_first_size(out) + 1,
+    )
+
+    row = _row(_sync(monkeypatch, client, out))
+
+    assert (row.action, row.uploads, row.processing) == ("replace", 1, 0)
+
+
+def test_sync_replaces_a_checksumless_slot_with_no_state(export, monkeypatch):
+    out, md5s = export
+    client = _sync_client(md5s)
+    _en_first_slot(
+        client,
+        state=None,
+        checksum=None,
+        file_name="01.png",
+        file_size=_en_first_size(out),
+    )
+
+    row = _row(_sync(monkeypatch, client, out))
+
+    assert (row.action, row.uploads, row.processing) == ("replace", 1, 0)
+
+
+def test_sync_skips_its_own_upload_while_apple_withholds_the_checksum(
+    export, monkeypatch
+):
+    out, md5s = export
+    client = _sync_client(md5s)
+    _sync(monkeypatch, client, out, apply=True, locales=["fr-FR"])
+    fr_set = client.set_for("loc-fr", "APP_IPHONE_67")
+    assert fr_set is not None
+    for shot_id in fr_set["shots"]:
+        client.screenshots[shot_id]["checksum"] = None
+
+    fr = _row(_sync(monkeypatch, client, out), "fr-FR")
+
+    assert (fr.action, fr.uploads, fr.processing) == ("skip", 0, 2)

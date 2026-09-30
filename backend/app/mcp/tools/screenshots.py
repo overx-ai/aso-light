@@ -802,7 +802,9 @@ async def sync_version_screenshots(
     present in ``dir`` are touched: a Watch or iPad set is never read for
     deletion. Each touched type is replaced as a unit, in filename order, and
     a slot whose asset already has the file's MD5 is skipped, so a rerun
-    uploads only what changed.
+    uploads only what changed. Apple withholds the MD5 for a while after an
+    upload, so a slot with none yet, holding the file's name and byte size, is
+    skipped too and counted in the row's ``processing``: wait, then rerun.
 
     Dry run by default. With ``apply=True`` nothing is written while any row
     is an ``error`` (unknown pixel size, unknown locale directory, over 10

@@ -239,7 +239,10 @@ image passes through the agent's context. That replaces ~160 base64
 
 1. `screenshots_sync(app_id, dir)` returns a **dry run** by default. It gives one
    row per locale × display type:
-   - `skip`: every slot's `sourceFileChecksum` already equals the file's MD5;
+   - `skip`: every slot's `sourceFileChecksum` already equals the file's MD5. A slot
+     Apple is still processing has no checksum yet; it is taken as the file when its
+     name and byte size match, and it is counted in the row's `processing`. Wait for
+     `processing == 0` before trusting a `skip` ([bug 009](bugs/009-sync-reads-processing-uploads-as-changed.md));
    - `replace`: some slots changed;
    - `upload`: the set is new;
    - `error`: the problem is named on the row.
