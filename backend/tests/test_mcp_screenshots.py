@@ -2718,12 +2718,14 @@ def _en_row(result):
     return next(row for row in result.rows if row.locale == "en-US")
 
 
+@pytest.mark.parametrize("state", ["UPLOAD_COMPLETE", "COMPLETE"])
 def test_sync_counts_a_processing_upload_of_the_same_file_as_unchanged(
-    export, monkeypatch
+    export, monkeypatch, state
 ):
+    # Live, 2026-09-30: a fresh upload read COMPLETE with no checksum for ~20 s.
     out, md5s = export
     client = _sync_client(md5s)
-    _en_first_slot(client, state="UPLOAD_COMPLETE", checksum=None, file_name="01.png")
+    _en_first_slot(client, state=state, checksum=None, file_name="01.png")
 
     plan = _sync(monkeypatch, client, out)
     assert (_en_row(plan).action, _en_row(plan).processing) == ("skip", 1)

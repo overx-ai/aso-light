@@ -1,7 +1,7 @@
 ---
 id: 009
 title: "A sync plans 'replace' for screenshots Apple is still processing, and a re-apply deletes good uploads"
-status: open
+status: fixed
 severity: high
 created: 2026-09-30
 updated: 2026-09-30
@@ -39,29 +39,28 @@ processing). Actual: it is `replace`. Worse, an `apply` on that plan deletes it 
 
 - `_slot_matches` (`backend/app/services/asc/screenshots.py`) needs `checksum == md5` and a state that
   is not `FAILED`.
-- The checksum is sent on commit (`upload_screenshot`). Yet the same slots read as changed while they
-  processed and as matching afterwards, so Apple evidently withholds `sourceFileChecksum` until the
-  asset is processed.
-- This is inferred from the before/after dry runs. It gets confirmed live by reading one slot's raw
-  attributes right after an apply.
+- The checksum is sent on commit (`upload_screenshot`), but Apple withholds `sourceFileChecksum` for a while
+  after the commit. Confirmed live on 2026-09-30, on a PPO treatment's en-US iPhone set right after an
+  apply: `08.png` read `COMPLETE` with no checksum, then `COMPLETE 471a3938…` 20 seconds later. On the
+  CPPs, some slots stayed that way for hours.
+- The state is no signal: it already reads `COMPLETE`.
 
 ## Fix
 
 - A slot is unchanged when its checksum matches as before, **or** when all three of these hold:
   - its checksum is `None`;
-  - its delivery state is `UPLOAD_COMPLETE` (committed, still processing);
+  - its state is anything but `AWAITING_UPLOAD` (a reservation never committed) or `FAILED`;
   - its file name equals the export file's.
-- `AWAITING_UPLOAD` is a reservation that was never committed (a failed PUT or commit), and `FAILED`
-  failed. Both still read as changed, so they are replaced.
-- `SyncStep` counts those slots as `processing`, and the row carries it, so a caller sees "wait", not
-  "done".
+- `SyncStep.processing` counts those slots, and the row carries `processing`, so a caller sees "wait",
+  not "done".
+- The first draft of this fix keyed on `UPLOAD_COMPLETE` and was wrong. The live read corrected it, and
+  the `COMPLETE` case is a test.
 
 ## Regression test
 
 In `backend/tests/test_mcp_screenshots.py`:
 
-- `test_sync_counts_a_processing_upload_of_the_same_file_as_unchanged`: `UPLOAD_COMPLETE`, checksum
-  `None`, same name → `skip`, `processing == 1`, no writes on apply.
+- `test_sync_counts_a_processing_upload_of_the_same_file_as_unchanged[UPLOAD_COMPLETE|COMPLETE]`: checksum `None`, same name → `skip`, `processing == 1`, no writes on apply. Both were red first: the first on the missing field, `COMPLETE` on the first draft's rule.
 - `test_sync_replaces_a_processing_slot_holding_another_file`: same state, different name → `replace`.
 - `test_sync_replaces_an_upload_that_was_never_committed`: `AWAITING_UPLOAD`, same name → `replace`.
 

@@ -61,7 +61,7 @@ logger = logging.getLogger(__name__)
 # alpha channel, ...) even though every HTTP call returned 2xx.
 ASSET_STATE_COMPLETE = "COMPLETE"
 ASSET_STATE_FAILED = "FAILED"
-ASSET_STATE_UPLOAD_COMPLETE = "UPLOAD_COMPLETE"
+ASSET_STATE_AWAITING_UPLOAD = "AWAITING_UPLOAD"
 
 
 def build_source_url(image_asset: dict | None) -> str | None:
@@ -903,11 +903,12 @@ class SyncStep:
 
 
 def _slot_processing(existing: dict, export_file: ExportFile) -> bool:
-    # Apple reports no sourceFileChecksum until it has processed a committed
-    # upload; the same name in the same slot is taken as the file, not a change.
+    # Apple withholds sourceFileChecksum for a while after a commit, even once the
+    # state reads COMPLETE; the same name in the same slot is taken as the file.
+    # A reservation never committed (AWAITING_UPLOAD) or a FAILED asset is a change.
     return (
         existing.get("checksum") is None
-        and existing.get("state") == ASSET_STATE_UPLOAD_COMPLETE
+        and existing.get("state") not in {ASSET_STATE_AWAITING_UPLOAD, ASSET_STATE_FAILED}
         and existing.get("file_name") == export_file.path.name
     )
 
