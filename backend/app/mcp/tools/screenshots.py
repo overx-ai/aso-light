@@ -734,6 +734,7 @@ async def run_screenshot_sync(
                         )
                         other_types = await target.service.plan_sync(scan.steps)
                         rows = [_sync_row(step) for step in scan.steps]
+                        missing = await missing_families(target, scan.steps)
                         applied = apply and not any(step.error for step in scan.steps)
                         if applied:
                             inventory = await _apply_with_progress(
@@ -746,7 +747,6 @@ async def run_screenshot_sync(
                             }
                             for row in rows:
                                 row.count = counts.get((row.locale, row.display_type))
-                        missing = await missing_families(target, scan.steps)
     except (SyncPathError, ExportChangedError) as exc:
         raise ToolError(str(exc)) from exc
 

@@ -755,11 +755,10 @@ class ASCVersionScreenshotService(LocalizationScreenshotService):
             version = await self.resolve_editable_version(asc_app_id)
         except VersionNotEditableError:
             return {}
+        localizations = await self.localizations_by_locale(version.id)
         return {
             locale: frozenset(await self.screenshot_set_ids(localization_id))
-            for locale, localization_id in (
-                await self.localizations_by_locale(version.id)
-            ).items()
+            for locale, localization_id in localizations.items()
         }
 
     async def app_locales(self, asc_app_id: str) -> frozenset[str]:
@@ -1004,6 +1003,8 @@ class SyncTarget:
     ``creatable`` are locales the source may add a localization for during
     apply (a CPP takes any of the app's own locales). ``label`` names the
     locale owner in the error for a directory that is none of them.
+    ``reference`` is per locale the display types the source must also hold
+    (the main listing's families, for a CPP); see :func:`missing_families`.
     """
 
     service: LocalizationScreenshotService
@@ -1028,11 +1029,11 @@ async def missing_families(
         localization_id = target.localizations.get(locale)
         if localization_id is None and locale not in planned:
             continue
-        held = set(planned.get(locale, ()))
-        if localization_id is not None:
-            held |= set(await target.service.screenshot_set_ids(localization_id))
-        if wanted - held:
-            missing[locale] = sorted(wanted - held)
+        lacking = wanted - planned.get(locale, set())
+        if lacking and localization_id is not None:
+            lacking -= set(await target.service.screenshot_set_ids(localization_id))
+        if lacking:
+            missing[locale] = sorted(lacking)
     return missing
 
 

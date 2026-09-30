@@ -63,3 +63,13 @@ families, and the read-back `inventory` counts only the types the sync touched.
 The 7 framed iPad shots per locale are uploaded to each CPP with `display_types=
 ["APP_IPAD_PRO_3GEN_129"]`, in two batches of about 20 locales to stay under the MCP client's
 10-minute call limit.
+
+## Known limits
+
+- An existing but empty set counts as holding its family. `screenshot_set_ids` lists display types
+  without counting shots, so an emptied iPad set reads as present. Deleting through `cpp_screenshots_delete`
+  without `prune_empty_set` can leave one. Counting would cost a read per set.
+- `missing_families` reports every page locale, whatever the `locales` filter: submission is judged per
+  page, not per sync call.
+- Red before green: the four tests failed on main's code (`AttributeError: missing_families`), then passed
+  on the branch.
