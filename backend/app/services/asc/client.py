@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 import httpx
@@ -12,7 +13,12 @@ import jwt
 from cryptography.fernet import InvalidToken
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
-from app.services.asc.errors import ASCAPIError, ASCRateLimitError, CredentialDecryptError
+from app.services.asc.errors import (
+    ASCAPIError,
+    ASCNetworkError,
+    ASCRateLimitError,
+    CredentialDecryptError,
+)
 
 if TYPE_CHECKING:
     from app.models.credential import ASCCredential
@@ -23,6 +29,41 @@ _TOKEN_LIFETIME_SECONDS = 20 * 60  # 20 minutes per Apple docs
 _MAX_RETRIES = 6
 _BACKOFF_BASE = 1.0  # seconds
 _MIN_REQUEST_INTERVAL = 0.15  # 150ms between requests (~7 req/s)
+_TRANSIENT_5XX = frozenset({500, 502, 503, 504})
+# A POST that answered 5xx or timed out may still have created its resource;
+# callers read back instead of retrying it blind.
+_IDEMPOTENT = frozenset({"GET", "PUT", "PATCH", "DELETE"})
+# Failures raised before the request left the machine, safe to retry for any method.
+_NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
+
+def _error_body(response: httpx.Response) -> dict:
+    if not response.content:
+        return {"errors": []}
+    try:
+        return response.json()
+    except ValueError:
+        return {"errors": [{"detail": response.text[:500]}]}
+
+
+def _raise_for_status(response: httpx.Response) -> None:
+    if response.status_code == 429:
+        raise ASCRateLimitError(_error_body(response), retry_after=0)
+    if response.status_code >= 400:
+        raise ASCAPIError(response.status_code, _error_body(response))
+
+
+async def _backoff(method: str, reason: str, attempt: int) -> None:
+    delay = _BACKOFF_BASE * (2 ** attempt)
+    logger.warning(
+        "ASC API %s failed (%s), retrying in %.1fs (attempt %d/%d)",
+        method,
+        reason,
+        delay,
+        attempt + 1,
+        _MAX_RETRIES,
+    )
+    await asyncio.sleep(delay)
 
 
 class ASCClient:
@@ -138,36 +179,44 @@ class ASCClient:
 
             self._last_request_at = time.time()
 
-    async def _request(
+    async def _send(
         self,
         method: str,
-        path: str,
-        **kwargs,
-    ) -> dict:
-        """Make an authenticated request to ASC API with error handling.
+        send: Callable[[], Awaitable[httpx.Response]],
+        *,
+        refresh_on_401: bool = False,
+    ) -> httpx.Response:
+        """Send with retries and return the last answer, whatever its status.
 
-        Handles:
-        - Rate limiting: global throttle + exponential backoff on 429.
-        - 401 Unauthorized: regenerate token and retry once.
-        - 4xx/5xx: raise ASCAPIError with parsed error details.
+        Retried: 429 (global backoff, any method); 500/502/503/504 and
+        timeouts or dropped connections on an idempotent method; a connect
+        failure on any method. One 401 refreshes the token when asked to.
+        A network failure that is not retried, or outlasts the retries,
+        raises :class:`ASCNetworkError`.
         """
-        client = await self._get_client()
-
         for attempt in range(_MAX_RETRIES):
+            last = attempt == _MAX_RETRIES - 1
             await self._throttle()
-            response = await client.request(method, path, **kwargs)
-
-            if response.status_code == 401 and attempt == 0:
-                logger.warning("ASC API returned 401, refreshing token")
-                await self.close()
-                client = await self._get_client()
+            try:
+                response = await send()
+            except httpx.TransportError as exc:
+                if last or not (isinstance(exc, _NOT_SENT) or method in _IDEMPOTENT):
+                    raise ASCNetworkError(exc) from exc
+                await _backoff(method, type(exc).__name__, attempt)
                 continue
 
-            if response.status_code == 429:
+            status = response.status_code
+            if status == 401 and attempt == 0 and refresh_on_401:
+                logger.warning("ASC API returned 401, refreshing token")
+                await self.close()
+                continue
+            if last:
+                return response
+            if status == 429:
                 retry_after = float(
                     response.headers.get("Retry-After", _BACKOFF_BASE * (2 ** attempt))
                 )
-                # Set global backoff so all concurrent requests wait
+                # Global, so every concurrent request waits too.
                 self._backoff_until = time.time() + retry_after
                 logger.warning(
                     "ASC API rate limited, backing off %.1fs (attempt %d/%d)",
@@ -177,20 +226,32 @@ class ASCClient:
                 )
                 await asyncio.sleep(retry_after)
                 continue
+            if status in _TRANSIENT_5XX and method in _IDEMPOTENT:
+                await _backoff(method, str(status), attempt)
+                continue
+            return response
+        raise AssertionError("unreachable: the last attempt always returns or raises")
 
-            if response.status_code >= 400:
-                body = response.json() if response.content else {"errors": []}
-                raise ASCAPIError(response.status_code, body)
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        **kwargs,
+    ) -> dict:
+        """Make an authenticated request to ASC API; see :meth:`_send`.
 
-            # 204 No Content (e.g. DELETE responses)
-            if response.status_code == 204:
-                return {}
+        Raises ASCAPIError (ASCRateLimitError for 429) on a final 4xx/5xx.
+        """
 
-            return response.json()
+        async def send() -> httpx.Response:
+            client = await self._get_client()
+            return await client.request(method, path, **kwargs)
 
-        # Exhausted all retries
-        body = response.json() if response.content else {"errors": []}  # type: ignore[possibly-undefined]
-        raise ASCRateLimitError(body, retry_after=0)  # type: ignore[possibly-undefined]
+        response = await self._send(method, send, refresh_on_401=True)
+        _raise_for_status(response)
+        if response.status_code == 204:
+            return {}
+        return response.json()
 
     # ------------------------------------------------------------------
     # Convenience HTTP methods
@@ -224,13 +285,15 @@ class ASCClient:
         These must NOT include the ASC Bearer token — uses a
         separate httpx client without auth headers.
         """
-        await self._throttle()
-        async with httpx.AsyncClient(timeout=120.0) as upload_client:
-            response = await upload_client.put(
-                url,
-                content=data,
-                headers={"Content-Type": content_type},
-            )
+        async def send() -> httpx.Response:
+            async with httpx.AsyncClient(timeout=120.0) as upload_client:
+                return await upload_client.put(
+                    url,
+                    content=data,
+                    headers={"Content-Type": content_type},
+                )
+
+        response = await self._send("PUT", send)
         if response.status_code >= 400:
             raise ASCAPIError(
                 response.status_code,
@@ -245,9 +308,11 @@ class ASCClient:
         the ASC Bearer token — Apple rejects a signed URL that also presents
         auth headers — so this uses a separate client with no auth.
         """
-        await self._throttle()
-        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as dl:
-            response = await dl.get(url)
+        async def send() -> httpx.Response:
+            async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as dl:
+                return await dl.get(url)
+
+        response = await self._send("GET", send)
         if response.status_code >= 400:
             raise ASCAPIError(
                 response.status_code,
@@ -293,34 +358,14 @@ class ASCClient:
                 break
 
             # The "next" link is an absolute URL; request it directly.
-            for attempt in range(_MAX_RETRIES):
-                await self._throttle()
+            async def send(url: str = next_url) -> httpx.Response:
                 client = await self._get_client()
-                raw_response = await client.get(next_url)
+                return await client.get(url)
 
-                if raw_response.status_code == 429:
-                    retry_after = float(
-                        raw_response.headers.get("Retry-After", _BACKOFF_BASE * (2 ** attempt))
-                    )
-                    self._backoff_until = time.time() + retry_after
-                    logger.warning(
-                        "ASC API rate limited during pagination, backing off %.1fs",
-                        retry_after,
-                    )
-                    await asyncio.sleep(retry_after)
-                    continue
-
-                if raw_response.status_code >= 400:
-                    body = raw_response.json() if raw_response.content else {"errors": []}
-                    raise ASCAPIError(raw_response.status_code, body)
-
-                response = raw_response.json()
-                all_items.extend(response.get("data", []))
-                break
-            else:
-                # Exhausted retries on this page
-                body = raw_response.json() if raw_response.content else {"errors": []}  # type: ignore[possibly-undefined]
-                raise ASCRateLimitError(body, retry_after=0)  # type: ignore[possibly-undefined]
+            raw_response = await self._send("GET", send)
+            _raise_for_status(raw_response)
+            response = raw_response.json()
+            all_items.extend(response.get("data", []))
 
         return all_items
 

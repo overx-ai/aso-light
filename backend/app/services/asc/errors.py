@@ -75,3 +75,12 @@ class ASCRateLimitError(ASCAPIError):
     def __init__(self, response_body: dict, retry_after: float | None = None):
         self.retry_after = retry_after
         super().__init__(429, response_body)
+
+
+class ASCNetworkError(ASCAPIError):
+    """No HTTP answer from App Store Connect: a connect failure or timeout."""
+
+    def __init__(self, cause: Exception):
+        super().__init__(
+            0, {"errors": [{"detail": f"network error: {type(cause).__name__}: {cause}"}]}
+        )
