@@ -252,6 +252,7 @@ class ScreenshotSyncRow(BaseModel):
     existing: int = 0
     uploads: int = 0
     deletes: int = 0
+    processing: int = 0
     error: str | None = None
     count: int | None = None
 

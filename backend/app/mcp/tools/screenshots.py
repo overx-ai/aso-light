@@ -626,6 +626,7 @@ def _sync_row(step: SyncStep) -> ScreenshotSyncRow:
         existing=len(step.existing),
         uploads=step.uploads,
         deletes=step.deletes,
+        processing=step.processing,
         error=step.error,
     )
 

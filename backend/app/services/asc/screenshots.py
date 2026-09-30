@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 # alpha channel, ...) even though every HTTP call returned 2xx.
 ASSET_STATE_COMPLETE = "COMPLETE"
 ASSET_STATE_FAILED = "FAILED"
+ASSET_STATE_UPLOAD_COMPLETE = "UPLOAD_COMPLETE"
 
 
 def build_source_url(image_asset: dict | None) -> str | None:
@@ -872,6 +873,14 @@ class SyncStep:
         ]
 
     @property
+    def processing(self) -> int:
+        return sum(
+            1
+            for existing, export_file in zip(self.existing, self.files)
+            if _slot_processing(existing, export_file)
+        )
+
+    @property
     def uploads(self) -> int:
         return len(self._changed())
 
@@ -893,11 +902,21 @@ class SyncStep:
         return "replace"
 
 
+def _slot_processing(existing: dict, export_file: ExportFile) -> bool:
+    # Apple reports no sourceFileChecksum until it has processed a committed
+    # upload; the same name in the same slot is taken as the file, not a change.
+    return (
+        existing.get("checksum") is None
+        and existing.get("state") == ASSET_STATE_UPLOAD_COMPLETE
+        and existing.get("file_name") == export_file.path.name
+    )
+
+
 def _slot_matches(existing: dict, export_file: ExportFile) -> bool:
     return (
         existing.get("state") != ASSET_STATE_FAILED
         and existing.get("checksum") == export_file.md5
-    )
+    ) or _slot_processing(existing, export_file)
 
 
 def _sync_roots() -> list[Path]:

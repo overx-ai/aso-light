@@ -2703,3 +2703,52 @@ def test_cpp_sync_whose_localization_fails_twice_reads_back_only_real_localizati
     assert fr.error is not None and APPLE_500 in fr.error
     assert _cpp_checksums(client, "cloc-de") == md5s["de-DE"]
     assert not any("/None/" in path for _, path in client.calls)
+
+
+# ------------------------------------------------------------------
+# Bug 009: an upload Apple is still processing is not a change
+# ------------------------------------------------------------------
+
+
+def _en_first_slot(client: FakeASC, **fields) -> None:
+    client.screenshots["shot-en-0"].update(fields)
+
+
+def _en_row(result):
+    return next(row for row in result.rows if row.locale == "en-US")
+
+
+def test_sync_counts_a_processing_upload_of_the_same_file_as_unchanged(
+    export, monkeypatch
+):
+    out, md5s = export
+    client = _sync_client(md5s)
+    _en_first_slot(client, state="UPLOAD_COMPLETE", checksum=None, file_name="01.png")
+
+    plan = _sync(monkeypatch, client, out)
+    assert (_en_row(plan).action, _en_row(plan).processing) == ("skip", 1)
+
+    client.calls.clear()
+    _sync(monkeypatch, client, out, apply=True, locales=["en-US"])
+    assert _writes(client) == []
+    assert "shot-en-0" in client.screenshots
+
+
+def test_sync_replaces_a_processing_slot_holding_another_file(export, monkeypatch):
+    out, md5s = export
+    client = _sync_client(md5s)
+    _en_first_slot(client, state="UPLOAD_COMPLETE", checksum=None, file_name="old.png")
+
+    row = _en_row(_sync(monkeypatch, client, out))
+
+    assert (row.action, row.uploads, row.processing) == ("replace", 1, 0)
+
+
+def test_sync_replaces_an_upload_that_was_never_committed(export, monkeypatch):
+    out, md5s = export
+    client = _sync_client(md5s)
+    _en_first_slot(client, state="AWAITING_UPLOAD", checksum=None, file_name="01.png")
+
+    row = _en_row(_sync(monkeypatch, client, out))
+
+    assert (row.action, row.uploads, row.processing) == ("replace", 1, 0)
