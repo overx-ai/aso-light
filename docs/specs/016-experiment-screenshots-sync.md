@@ -1,7 +1,7 @@
 ---
 id: 016
 title: "MCP: sync a Product Page Optimization treatment's screenshots from a local export directory"
-status: in-progress
+status: done
 created: 2026-09-30
 updated: 2026-09-30
 repo: aso-light
@@ -104,5 +104,7 @@ These go in `backend/tests/test_mcp_screenshots.py`, next to the CPP sync tests,
 
 - [x] Every T1 test was red before T2 and is green after it (the review added 6 more, 2 of them red first).
 - [x] The full suite is green, apart from bug 005's pinned test (567 passed).
-- [ ] A live dry run on a Mushtra treatment plans 8 iPhone uploads per locale; after an apply, a
-      re-run is all skip.
+- [x] Live, 2026-09-30, Mushtra «1.6 screenshots»: the dry run planned 39 × 8 iPhone `create_localization`
+      per treatment; one apply per treatment wrote 3 × 39 × 8 with no row error and no gap; a re-run was
+      39 `skip` × 3 with `processing` 0. A new treatment localization arrives holding the original's sets,
+      so the iPad set (7 per locale) was inherited, not uploaded.
