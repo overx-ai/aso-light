@@ -528,8 +528,8 @@ class LocalizationScreenshotService:
     A subclass is a *localization source*: it names the parent type and the
     set's relationship back to it, maps a version's locales to localization
     ids and, where the source allows it, creates a missing localization. The
-    main listing and a Custom Product Page are the two sources, so the sync
-    loop below exists once.
+    main listing, a Custom Product Page and a PPO treatment are the sources,
+    so the sync loop below exists once.
     """
 
     localization_type: ClassVar[str]

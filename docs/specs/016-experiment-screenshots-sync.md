@@ -65,7 +65,13 @@ tasks: []
   - `set_relationship = appStoreVersionExperimentTreatmentLocalization`;
   - `localizations_by_locale` and `ensure_localization` delegate to `ASCExperimentService`;
   - `editable_treatment(asc_app_id, experiment_id, treatment_id) -> EditableVersion` runs Requirements 2–3.
+    The state comes from the app's experiment list that the membership check already reads
+    (`assert_experiment_in_app` returns the entry), so there is no extra GET.
 - `ExperimentNotEditableError(NotEditableError)`, which `asc_tool_error` already maps to `ToolError`.
+  `asc_tool_error` also maps `ChildResourceNotFoundError`, so a failed membership check is a `ToolError`
+  in the sync too; `_experiment_service` uses the same helper.
+- The `SyncTarget` label is the app, as for a CPP: a locale directory that is neither a treatment
+  localization nor one of the app's locales is fixed by adding the locale to the app.
 - The tool lives in `backend/app/mcp/tools/experiment.py`. It is a `bind` that returns a `SyncTarget`
   (the treatment as the version, the app's locales as `creatable`) and calls `run_screenshot_sync`.
 
@@ -75,7 +81,7 @@ tasks: []
 |----|-------------|-------|------------|--------|-------|
 | T1 | Red: treatment sync tests (below), failing on the missing tool | dev | — | done (11 red: tool not registered) | `backend/tests/test_mcp_screenshots.py` |
 | T2 | Green: service, error, tool | dev | T1 | done (11 green; suite 528 passed, bug 005's pinned test excepted) | `backend/app/services/asc/experiment.py`, `backend/app/mcp/tools/experiment.py` |
-| T3 | Docs: PPO doc section, MCP reference, changelog | dev | T2 | open | `docs/015-product-page-optimization.md`, `docs/007-mcp-integration.md`, `docs/000-changelog.md` |
+| T3 | Docs: PPO doc section, MCP reference, changelog | dev | T2 | done | `docs/015-product-page-optimization.md`, `docs/007-mcp-integration.md`, `docs/000-changelog.md` |
 
 ## Tests (T1, all red before T2)
 
@@ -86,14 +92,17 @@ These go in `backend/tests/test_mcp_screenshots.py`, next to the CPP sync tests,
 - `test_treatment_sync_apply_replaces_as_a_unit_and_creates_the_missing_localization`
 - `test_treatment_sync_rerun_is_all_skip_with_zero_writes`
 - `test_treatment_sync_never_touches_another_display_type`
-- `test_treatment_sync_refuses_an_experiment_that_is_not_editable_before_any_write` (WAITING_FOR_REVIEW, IN_REVIEW, APPROVED, STOPPED)
+- `test_treatment_sync_plans_on_every_editable_state` (READY_FOR_REVIEW, REJECTED)
+- `test_treatment_sync_reads_the_state_from_the_membership_list`
+- `test_treatment_sync_names_the_app_for_a_locale_it_does_not_ship`
+- `test_treatment_sync_refuses_an_experiment_that_is_not_editable_before_any_write` (WAITING_FOR_REVIEW, IN_REVIEW, ACCEPTED, APPROVED, COMPLETED, STOPPED)
 - `test_treatment_sync_refuses_a_treatment_of_another_experiment`
 - `test_treatment_sync_refuses_an_experiment_of_another_app`
 - `test_treatment_sync_refuses_a_dir_outside_the_allowlist_before_any_asc_call`
 
 ## Acceptance Criteria
 
-- [ ] Every T1 test was red before T2 and is green after it.
-- [ ] The full suite is green, apart from bug 005's pinned test.
+- [x] Every T1 test was red before T2 and is green after it (the review added 6 more, 2 of them red first).
+- [x] The full suite is green, apart from bug 005's pinned test (567 passed).
 - [ ] A live dry run on a Mushtra treatment plans 8 iPhone uploads per locale; after an apply, a
       re-run is all skip.

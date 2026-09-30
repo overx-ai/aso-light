@@ -83,7 +83,20 @@ unchanged — `tests/test_cpp.py` still green).
 - Frontend: `npx tsc --noEmit`; `make dev` → open `/apps/:id/experiments`.
 - MCP smoke: `uv run python -c "import asyncio; from app.mcp.server import mcp; print([t.name for t in asyncio.run(mcp.list_tools()) if t.name.startswith('experiment_')])"`.
 
+## Directory sync (spec 016)
+`experiment_screenshots_sync {app_id, experiment_id, treatment_id, dir, locales?, display_types?, apply=false}`
+fills one treatment from a studio export (`<dir>/<locale>/NN.png`).
+- It runs through the shared sync (`run_screenshot_sync`) with `TreatmentScreenshotService`
+  (`services/asc/experiment.py`) as the localization source, so it gets the same dry run, MD5 skip,
+  per-type replace, allowlist, progress, one-apply guard, retries and row-level failure handling as
+  `screenshots_sync` / `cpp_screenshots_sync`.
+- Checks: membership (app → experiment → treatment) and the experiment's state come from one
+  `list_experiments` read.
+- See [docs/007](007-mcp-integration.md) and [spec 016](specs/016-experiment-screenshots-sync.md).
+
 ## Known limitations
+- `experiment_upload_treatment_screenshot` and `experiment_ensure_treatment_localization` do not check
+  that the experiment is still editable; only the sync does. Apple answers them with a 409.
 - **No programmatic results.** The API has no results/metrics endpoint; results are UI-only (ASC → Analytics → Product Pages). The page deep-links there.
 - **App previews** (`appPreviewSets`) are not yet uploaded through the UI — only screenshots. The video upload flow can be added later using the same shared media path.
 - **Alt app icons** must already ship in the published build; a treatment references an icon by `appIconName`, it does not upload it.

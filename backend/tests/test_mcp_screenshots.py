@@ -139,20 +139,14 @@ class FakeASC:
         if parts[0] == "apps" and parts[-1] == "appStoreVersionExperimentsV2":
             return {
                 "data": [
-                    {"type": "appStoreVersionExperiments", "id": experiment_id}
+                    {
+                        "type": "appStoreVersionExperiments",
+                        "id": experiment_id,
+                        "attributes": {"state": experiment["state"]},
+                    }
                     for experiment_id, experiment in self.experiments.items()
                     if experiment["app"] == parts[1]
                 ]
-            }
-
-        if parts[0] == "appStoreVersionExperiments" and len(parts) == 2:
-            experiment = self.experiments[parts[1]]
-            return {
-                "data": {
-                    "type": "appStoreVersionExperiments",
-                    "id": parts[1],
-                    "attributes": {"state": experiment["state"], "name": "test"},
-                }
             }
 
         if parts[0] == "appStoreVersionExperiments" and parts[-1] == (
@@ -2134,23 +2128,8 @@ def _treatment_sync_client(
     return client
 
 
-def _patch_experiment_tools(monkeypatch, client: FakeASC) -> None:
-    from app.mcp.tools import experiment as experiment_tools
-
-    _patch_tools(monkeypatch, client)
-
-    async def _fake_asc_client_for_app(app: App, session):
-        return await screenshot_tools._get_asc_client_for_app(app, session)
-
-    monkeypatch.setattr(experiment_tools, "session_scope", _fake_session_scope)
-    monkeypatch.setattr(experiment_tools, "resolve_app", _fake_resolve_app)
-    monkeypatch.setattr(
-        experiment_tools, "_get_asc_client_for_app", _fake_asc_client_for_app
-    )
-
-
 def _treatment_sync(monkeypatch, client: FakeASC, out: Path, **kwargs):
-    _patch_experiment_tools(monkeypatch, client)
+    _patch_tools(monkeypatch, client)
     kwargs.setdefault("experiment_id", EXPERIMENT_ID)
     kwargs.setdefault("treatment_id", TREATMENT_ID)
 
@@ -2159,12 +2138,6 @@ def _treatment_sync(monkeypatch, client: FakeASC, out: Path, **kwargs):
         return await tool.fn(app_id=7, dir=str(out), **kwargs)
 
     return run_async(go())
-
-
-def _treatment_checksums(client: FakeASC, localization_id: str) -> list[str]:
-    shot_set = client.set_for(localization_id, "APP_IPHONE_67")
-    assert shot_set is not None
-    return [client.screenshots[s]["checksum"] for s in shot_set["shots"]]
 
 
 def test_treatment_sync_dry_run_plans_create_localization_replace_and_skip(
@@ -2194,9 +2167,9 @@ def test_treatment_sync_apply_replaces_as_a_unit_and_creates_the_missing_localiz
     result = _treatment_sync(monkeypatch, client, out, apply=True)
 
     assert result.applied is True
-    assert _treatment_checksums(client, "tloc-de") == md5s["de-DE"]
+    assert _cpp_checksums(client, "tloc-de") == md5s["de-DE"]
     fr_loc = client.treatment_localizations[TREATMENT_ID]["fr-FR"]
-    assert _treatment_checksums(client, fr_loc) == md5s["fr-FR"]
+    assert _cpp_checksums(client, fr_loc) == md5s["fr-FR"]
     assert client.sets["cset-en-67"]["shots"] == ["cshot-en-0", "cshot-en-1"]
     assert all(
         shot_set["localization_id"] not in {"loc-en", "loc-de", "loc-fr"}
@@ -2230,7 +2203,40 @@ def test_treatment_sync_never_touches_another_display_type(export, monkeypatch):
     assert result.untouched.display_types == ["APP_WATCH_ULTRA"]
 
 
-@pytest.mark.parametrize("state", ["WAITING_FOR_REVIEW", "IN_REVIEW", "APPROVED", "STOPPED"])
+@pytest.mark.parametrize("state", ["READY_FOR_REVIEW", "REJECTED"])
+def test_treatment_sync_plans_on_every_editable_state(export, monkeypatch, state):
+    out, md5s = export
+    client = _treatment_sync_client(md5s, state=state)
+
+    result = _treatment_sync(monkeypatch, client, out)
+
+    assert _errors(result) == []
+
+
+def test_treatment_sync_reads_the_state_from_the_membership_list(export, monkeypatch):
+    out, md5s = export
+    client = _treatment_sync_client(md5s)
+
+    _treatment_sync(monkeypatch, client, out)
+
+    assert ("GET", f"/appStoreVersionExperiments/{EXPERIMENT_ID}") not in client.calls
+
+
+def test_treatment_sync_names_the_app_for_a_locale_it_does_not_ship(export, monkeypatch):
+    out, md5s = export
+    _png(out / "nl" / "01.png")
+    client = _treatment_sync_client(md5s)
+
+    result = _treatment_sync(monkeypatch, client, out)
+
+    assert _actions(result)[("nl", None)] == "error"
+    assert "app Refresher" in " ".join(_errors(result))
+
+
+@pytest.mark.parametrize(
+    "state",
+    ["WAITING_FOR_REVIEW", "IN_REVIEW", "ACCEPTED", "APPROVED", "COMPLETED", "STOPPED"],
+)
 def test_treatment_sync_refuses_an_experiment_that_is_not_editable_before_any_write(
     export, monkeypatch, state
 ):

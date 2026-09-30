@@ -59,6 +59,10 @@ _SET_LOCALIZATION_RELATIONSHIP = "appStoreVersionExperimentTreatmentLocalization
 # Apple allows at most this many treatments (variants) per experiment.
 MAX_TREATMENTS = 3
 
+# A treatment's localizations and screenshots change only in these experiment
+# states; from WAITING_FOR_REVIEW on, Apple is reviewing or running the test.
+_EDITABLE_EXPERIMENT_STATES = ("PREPARE_FOR_SUBMISSION", "READY_FOR_REVIEW", "REJECTED")
+
 
 class ExperimentLimitError(Exception):
     """Raised when an operation would exceed an Apple PPO limit (e.g. >3 treatments)."""
@@ -103,14 +107,13 @@ class ASCExperimentService:
 
     async def assert_experiment_in_app(
         self, asc_app_id: str, experiment_id: str,
-    ) -> None:
-        """Assert ``experiment_id`` belongs to ``asc_app_id``."""
-        existing = await self.list_experiments(asc_app_id)
+    ) -> dict:
+        """Assert ``experiment_id`` belongs to ``asc_app_id``; return its list entry."""
+        existing = {item["id"]: item for item in await self.list_experiments(asc_app_id)}
         self._assert_member(
-            experiment_id,
-            {item["id"] for item in existing},
-            "Experiment not found for this app",
+            experiment_id, set(existing), "Experiment not found for this app",
         )
+        return existing[experiment_id]
 
     async def assert_treatment_in_experiment(
         self, experiment_id: str, treatment_id: str,
@@ -553,9 +556,6 @@ class ASCExperimentService:
         }
 
 
-_EDITABLE_EXPERIMENT_STATES = ("PREPARE_FOR_SUBMISSION", "READY_FOR_REVIEW", "REJECTED")
-
-
 class ExperimentNotEditableError(shots.NotEditableError):
     def __init__(self, experiment_id: str, state: str | None) -> None:
         self.state = state
@@ -589,9 +589,10 @@ class TreatmentScreenshotService(shots.LocalizationScreenshotService):
     ) -> shots.EditableVersion:
         """The treatment as the sync's version, once it is proven to be this
         app's and its experiment still accepts edits."""
-        await self.experiments.assert_experiment_in_app(asc_app_id, experiment_id)
+        experiment = await self.experiments.assert_experiment_in_app(
+            asc_app_id, experiment_id
+        )
         await self.experiments.assert_treatment_in_experiment(experiment_id, treatment_id)
-        experiment = await self.experiments.get_experiment(experiment_id)
         state = (experiment.get("attributes") or {}).get("state")
         if state not in _EDITABLE_EXPERIMENT_STATES:
             raise ExperimentNotEditableError(experiment_id, state)

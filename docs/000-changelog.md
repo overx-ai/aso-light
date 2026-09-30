@@ -12,6 +12,11 @@ updated: 2026-09-30
 
 ## [Unreleased]
 
+### Added — `experiment_screenshots_sync`: a studio variant export as a PPO treatment's screenshots (2026-09-30)
+- **`experiment_screenshots_sync {app_id, experiment_id, treatment_id, dir, locales?, display_types?, apply=false}`** ([spec 016](specs/016-experiment-screenshots-sync.md), [docs/007](007-mcp-integration.md), [docs/015](015-product-page-optimization.md)). It is the 013/015 sync with a treatment as the third localization source.
+- The experiment must belong to the app and the treatment to the experiment. The experiment must still be editable (`PREPARE_FOR_SUBMISSION`, `READY_FOR_REVIEW`, `REJECTED`). Each check is refused by name before any write.
+- `asc_tool_error` now also maps `ChildResourceNotFoundError`, and the experiment tools share it.
+
 ### Fixed — App Store Connect retries, and a failing sync row no longer kills the apply (2026-09-30)
 - One Apple 500 mid-upload aborted a whole `cpp_screenshots_sync` apply ([bug 007](bugs/007-asc-client-does-not-retry-5xx.md)). `ASCClient` now retries with backoff through one `_send` loop, shared by requests, pagination, the upload PUT and the download GET:
   - 429 on any method;

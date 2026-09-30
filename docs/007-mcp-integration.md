@@ -130,7 +130,7 @@ Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 | `clash`       | 1     | Side-by-side competitor comparison                               |
 | `clone`       | 3     | Read and retry clone/swap operations — the status channel for the long-running `swap_*` tools |
 | `cpp`         | 10    | Custom Product Pages: CRUD, localizations, screenshots, a whole export directory in one call (`cpp_screenshots_sync`), consent-gated delete (`cpp_screenshots_delete`) |
-| `experiment`  | 14    | Product Page Optimization: experiments, treatments, treatment localizations + screenshots |
+| `experiment`  | 15    | Product Page Optimization: experiments, treatments, treatment localizations + screenshots, a whole export directory into one treatment (`experiment_screenshots_sync`) |
 | `growth`      | 1     | Ranked growth recommendations (pricing gaps, ASO gaps)           |
 | `indices`     | 3     | GDP / PPP / BigMac / Spotify / Netflix index status & refresh    |
 | `keywords`    | 13    | iTunes search/suggestions, keyword tracking, rankings, competitors |
@@ -321,6 +321,24 @@ version. The error names every state found. This holds for `cpp_ensure_localizat
 `cpp_upload_screenshot` has only a localization id, so it reads that localization's
 version with `?include=appCustomProductPageVersion`. A version that is not returned
 counts as not editable.
+
+**Ship a studio variant export as a PPO treatment's screenshots**
+
+`experiment_screenshots_sync(app_id, experiment_id, treatment_id, dir)` is the same
+sync with a Product Page Optimization treatment as the target
+([spec 016](specs/016-experiment-screenshots-sync.md)). `TreatmentScreenshotService` is
+the third localization source. Use it to A/B screenshot sets against the default page:
+a CPP only gets the traffic sent to its URL, while a PPO test has Apple split organic
+traffic.
+
+- The experiment must be the app's, and the treatment the experiment's. Both are
+  checked before any read of the treatment.
+- The experiment must be `PREPARE_FOR_SUBMISSION`, `READY_FOR_REVIEW` or `REJECTED`.
+  Anything in review, running or finished is refused by name before any write.
+- A missing treatment localization is planned as `create_localization`, as for a CPP.
+- There is no `missing_families`: a treatment is judged against the original, so sync
+  every family the treatment should show.
+- `version_id` in the reply is the treatment id.
 
 There are pre-built MCP prompts (`swap_product_safely`, `optimize_keywords`)
 that walk through these flows. Most LLM clients show prompts as quick-pick

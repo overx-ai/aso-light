@@ -23,7 +23,7 @@ from fastmcp.exceptions import ToolError
 from app.api.v1._deps import _get_asc_client_for_app
 from app.mcp.context import resolve_app, session_scope
 from app.mcp.server import mcp
-from app.mcp.tools.screenshots import run_screenshot_sync
+from app.mcp.tools.screenshots import asc_tool_error, run_screenshot_sync
 from app.models.app import App
 from app.schemas.experiment import (
     SETTABLE_EXPERIMENT_STATES,
@@ -41,7 +41,6 @@ from app.schemas.experiment import (
 )
 from app.schemas.screenshots import ScreenshotSyncResult, decode_screenshot_payload
 from app.services.asc.client import ASCClient
-from app.services.asc.errors import ASCAPIError, ChildResourceNotFoundError
 from app.services.asc.experiment import (
     ASCExperimentService,
     ExperimentLimitError,
@@ -76,12 +75,8 @@ async def _experiment_service(
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
         async with await _get_asc_client_for_app(app, session) as client:
-            try:
+            async with asc_tool_error():
                 yield ASCExperimentService(client), app.asc_app_id
-            except ChildResourceNotFoundError as exc:
-                raise ToolError(str(exc))
-            except ASCAPIError as exc:
-                raise ToolError(f"ASC API error: {exc.message}")
 
 
 # ==================================================================
@@ -428,7 +423,7 @@ async def sync_experiment_screenshots(
             service=service,
             version=version,
             localizations=await service.localizations_by_locale(treatment_id),
-            label=f"treatment {treatment_id}",
+            label=f"app {app.name or app.asc_app_id}",
             creatable=await ASCVersionScreenshotService(client).app_locales(
                 app.asc_app_id
             ),

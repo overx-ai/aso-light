@@ -77,7 +77,7 @@ _VERIFY_DELAY_SECONDS = 1.0
 
 @asynccontextmanager
 async def asc_tool_error() -> AsyncIterator[None]:
-    """Surface ASC failures as single-line ``ToolError``s (shared by the cpp tools).
+    """Surface ASC failures as single-line ``ToolError``s (shared by the cpp and experiment tools).
 
     :class:`NotEditableError` is included here so "the version is live"
     reads as a sentence naming the state instead of a 409 several calls later.
@@ -709,7 +709,8 @@ async def run_screenshot_sync(
 ) -> ScreenshotSyncResult:
     """Scan, plan and (with ``apply``) execute a sync into ``bind``'s target.
 
-    The one sync path behind ``screenshots_sync`` and ``cpp_screenshots_sync``.
+    The one sync path behind ``screenshots_sync``, ``cpp_screenshots_sync``
+    and ``experiment_screenshots_sync``.
     ``bind`` resolves the source's editable version and localizations; the
     root allowlist runs before it, so a refused ``dir`` makes no ASC call.
     An apply reports progress per row through ``ctx`` and is refused while
