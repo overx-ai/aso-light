@@ -78,9 +78,17 @@ class ASCRateLimitError(ASCAPIError):
 
 
 class ASCNetworkError(ASCAPIError):
-    """No HTTP answer from App Store Connect: a connect failure or timeout."""
+    """No HTTP answer from App Store Connect: a connect failure or timeout.
+
+    Carries 504 because REST handlers pass ``status_code`` straight to
+    ``HTTPException``; the message says "network error" so it is not read as
+    Apple's own gateway timeout.
+    """
+
+    STATUS = 504
 
     def __init__(self, cause: Exception):
         super().__init__(
-            0, {"errors": [{"detail": f"network error: {type(cause).__name__}: {cause}"}]}
+            self.STATUS,
+            {"errors": [{"detail": f"network error: {type(cause).__name__}: {cause}"}]},
         )

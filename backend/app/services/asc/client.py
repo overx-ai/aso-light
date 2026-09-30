@@ -41,9 +41,12 @@ def _error_body(response: httpx.Response) -> dict:
     if not response.content:
         return {"errors": []}
     try:
-        return response.json()
+        body = response.json()
     except ValueError:
-        return {"errors": [{"detail": response.text[:500]}]}
+        body = None
+    if isinstance(body, dict):
+        return body
+    return {"errors": [{"detail": response.text[:500]}]}
 
 
 def _raise_for_status(response: httpx.Response) -> None:
@@ -53,8 +56,20 @@ def _raise_for_status(response: httpx.Response) -> None:
         raise ASCAPIError(response.status_code, _error_body(response))
 
 
+def _backoff_delay(attempt: int) -> float:
+    return _BACKOFF_BASE * (2 ** attempt)
+
+
+def _retry_after(response: httpx.Response, attempt: int) -> float:
+    # Retry-After may also be an HTTP date; the exponential delay stands in for it.
+    try:
+        return float(response.headers["Retry-After"])
+    except (KeyError, ValueError):
+        return _backoff_delay(attempt)
+
+
 async def _backoff(method: str, reason: str, attempt: int) -> None:
-    delay = _BACKOFF_BASE * (2 ** attempt)
+    delay = _backoff_delay(attempt)
     logger.warning(
         "ASC API %s failed (%s), retrying in %.1fs (attempt %d/%d)",
         method,
@@ -190,10 +205,11 @@ class ASCClient:
 
         Retried: 429 (global backoff, any method); 500/502/503/504 and
         timeouts or dropped connections on an idempotent method; a connect
-        failure on any method. One 401 refreshes the token when asked to.
+        failure on any method. The first 401 refreshes the token when asked to.
         A network failure that is not retried, or outlasts the retries,
         raises :class:`ASCNetworkError`.
         """
+        refreshed = False
         for attempt in range(_MAX_RETRIES):
             last = attempt == _MAX_RETRIES - 1
             await self._throttle()
@@ -205,17 +221,16 @@ class ASCClient:
                 await _backoff(method, type(exc).__name__, attempt)
                 continue
 
+            if last:
+                return response
             status = response.status_code
-            if status == 401 and attempt == 0 and refresh_on_401:
+            if status == 401 and refresh_on_401 and not refreshed:
+                refreshed = True
                 logger.warning("ASC API returned 401, refreshing token")
                 await self.close()
                 continue
-            if last:
-                return response
             if status == 429:
-                retry_after = float(
-                    response.headers.get("Retry-After", _BACKOFF_BASE * (2 ** attempt))
-                )
+                retry_after = _retry_after(response, attempt)
                 # Global, so every concurrent request waits too.
                 self._backoff_until = time.time() + retry_after
                 logger.warning(
@@ -242,7 +257,6 @@ class ASCClient:
 
         Raises ASCAPIError (ASCRateLimitError for 429) on a final 4xx/5xx.
         """
-
         async def send() -> httpx.Response:
             client = await self._get_client()
             return await client.request(method, path, **kwargs)
@@ -293,12 +307,7 @@ class ASCClient:
                     headers={"Content-Type": content_type},
                 )
 
-        response = await self._send("PUT", send)
-        if response.status_code >= 400:
-            raise ASCAPIError(
-                response.status_code,
-                {"errors": [{"detail": response.text[:500]}]},
-            )
+        _raise_for_status(await self._send("PUT", send))
 
     async def _get_binary(self, url: str) -> bytes:
         """GET raw bytes from an absolute URL (Apple download endpoint).
@@ -313,11 +322,7 @@ class ASCClient:
                 return await dl.get(url)
 
         response = await self._send("GET", send)
-        if response.status_code >= 400:
-            raise ASCAPIError(
-                response.status_code,
-                {"errors": [{"detail": response.text[:500]}]},
-            )
+        _raise_for_status(response)
         return response.content
 
     # ------------------------------------------------------------------
@@ -362,7 +367,7 @@ class ASCClient:
                 client = await self._get_client()
                 return await client.get(url)
 
-            raw_response = await self._send("GET", send)
+            raw_response = await self._send("GET", send, refresh_on_401=True)
             _raise_for_status(raw_response)
             response = raw_response.json()
             all_items.extend(response.get("data", []))

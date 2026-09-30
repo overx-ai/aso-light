@@ -12,6 +12,15 @@ updated: 2026-09-30
 
 ## [Unreleased]
 
+### Fixed — App Store Connect retries, and a failing sync row no longer kills the apply (2026-09-30)
+- One Apple 500 mid-upload aborted a whole `cpp_screenshots_sync` apply ([bug 007](bugs/007-asc-client-does-not-retry-5xx.md)). `ASCClient` now retries with backoff through one `_send` loop, shared by requests, pagination, the upload PUT and the download GET:
+  - 429 on any method;
+  - 500/502/503/504, timeouts and dropped connections on GET/PUT/PATCH/DELETE;
+  - connect failures on any method.
+- A POST is never retried blind. A persistent network failure is `ASCNetworkError` (HTTP 504, "network error: …"). An HTML error body becomes the error's detail.
+- A sync row that fails is re-planned from its live set and applied once more; the re-plan sweeps the reservation the failure left behind. A second failure is reported on the row (`error: "apply failed twice: …"`) while every other row still applies, and a re-run repairs it.
+- Clone's one-shot POST retry skips network failures, which may have landed.
+
 ### Fixed — `cpp_screenshots_sync` names a device family the page would still lack (2026-09-30)
 - A Custom Product Page synced with iPhone shots only planned and applied clean, and App Store Connect then refused to submit it: "upload a screenshot for the iPad Pro 13-inch display" ([bug 008](bugs/008-cpp-sync-hides-missing-device-family.md), [docs/007](007-mcp-integration.md)). The result now has `missing_families`, per locale the display types the app's editable main listing holds that the page lacks after the sync, for the dry run and the apply. It is informational; an apply never refuses on it.
 

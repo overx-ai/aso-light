@@ -7,7 +7,7 @@ created: 2026-09-30
 updated: 2026-09-30
 source: manual
 repo: aso-light
-release: none
+release: 1.6.0
 files: backend/app/mcp/tools/screenshots.py, backend/app/mcp/tools/cpp.py, backend/app/services/asc/screenshots.py, backend/app/schemas/screenshots.py, backend/tests/test_mcp_screenshots.py
 ---
 

@@ -287,7 +287,9 @@ async def sync_cpp_screenshots(
     created on apply; it must be one of the app's own locales.
 
     Dry run by default; with ``apply=True`` nothing is written while any row
-    is an ``error``. A page whose only version is in review is refused.
+    is an ``error``. A page whose only version is in review is refused. A row
+    Apple fails twice during the apply carries ``error`` while the other rows
+    still apply, as in ``screenshots_sync``.
 
     App Store Connect refuses to submit a page that lacks a device family the
     app ships, and a sync of one family reports clean regardless. So the reply

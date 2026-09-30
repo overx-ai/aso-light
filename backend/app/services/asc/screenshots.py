@@ -641,12 +641,42 @@ class LocalizationScreenshotService:
         locale's other steps rather than looked up again."""
         for step in steps:
             if step.action != "skip":
-                await self.apply_sync_step(step, version_id)
+                await self._apply_or_record(step, version_id)
                 for sibling in steps:
                     if sibling.locale == step.locale and sibling.localization_id is None:
                         sibling.localization_id = step.localization_id
             if on_step is not None:
                 await on_step(step)
+
+    async def _apply_or_record(self, step: SyncStep, version_id: str) -> None:
+        """Apply one step; on an ASC failure re-plan it from the live set and
+        apply once more, then record a second failure on the step instead of
+        aborting the sync. The re-plan also sweeps what the first attempt left
+        half done, such as a reserved asset whose upload never committed."""
+        try:
+            await self.apply_sync_step(step, version_id)
+            return
+        except ASCAPIError as exc:
+            logger.warning(
+                "Sync row %s/%s failed (%s), re-planning it once",
+                step.locale,
+                step.display_type,
+                exc,
+            )
+        step.set_id = None
+        step.existing = []
+        try:
+            await self.plan_sync([step])
+            if step.action != "skip":
+                await self.apply_sync_step(step, version_id)
+        except ASCAPIError as exc:
+            logger.warning(
+                "Sync row %s/%s failed again (%s), recorded on the row",
+                step.locale,
+                step.display_type,
+                exc,
+            )
+            step.failed = str(exc)
 
     async def apply_sync_step(self, step: SyncStep, version_id: str) -> None:
         """Make one set exactly the step's files, in order, slot by slot.
@@ -831,6 +861,7 @@ class SyncStep:
     localization_id: str | None = None
     set_id: str | None = None
     existing: list[dict] = field(default_factory=list)
+    failed: str | None = None
 
     def _changed(self) -> list[int]:
         return [

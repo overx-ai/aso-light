@@ -265,7 +265,8 @@ class ScreenshotSyncUntouched(BaseModel):
 class ScreenshotSyncResult(BaseModel):
     """``applied`` stays false while any row is an ``error``: nothing is written
     until the whole directory plans cleanly. After an apply, ``count`` and
-    ``inventory`` are the read-back, not the upload responses.
+    ``inventory`` are the read-back, not the upload responses, and a row whose
+    apply failed twice carries ``error`` under its planned ``action``.
 
     ``missing_families`` is per locale the display types the app's main listing
     holds that this Custom Product Page would still lack once the sync is

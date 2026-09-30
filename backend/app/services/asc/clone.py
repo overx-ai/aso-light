@@ -32,7 +32,7 @@ from app.models.subscription import (
     SubscriptionPrice,
 )
 from app.models.territory import Territory
-from app.services.asc.errors import ASCAPIError
+from app.services.asc.errors import ASCAPIError, ASCNetworkError
 
 if TYPE_CHECKING:
     from app.services.asc.pricing import ASCPricingService
@@ -144,6 +144,11 @@ async def _find_target_price_point_id(
 # Subscription cloner
 # ---------------------------------------------------------------------------
 
+
+
+def _retry_post_once(exc: ASCAPIError) -> bool:
+    # A network failure (504, ASCNetworkError) may have landed the POST; re-sending could duplicate it.
+    return exc.status_code >= 500 and not isinstance(exc, ASCNetworkError)
 
 class SubscriptionCloner:
     def __init__(
@@ -423,7 +428,7 @@ class SubscriptionCloner:
                             break
                         except ASCAPIError as exc:
                             last_exc = exc
-                            if exc.status_code < 500 or attempt == 1:
+                            if not _retry_post_once(exc) or attempt == 1:
                                 break
                             await asyncio.sleep(1.0)
                     if last_exc is not None:
@@ -615,7 +620,7 @@ class SubscriptionCloner:
                                 break
                             except ASCAPIError as exc:
                                 last_exc = exc
-                                if exc.status_code < 500 or attempt == 1:
+                                if not _retry_post_once(exc) or attempt == 1:
                                     break
                                 await asyncio.sleep(2.0)
                         if last_exc is not None:

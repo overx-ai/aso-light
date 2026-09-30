@@ -2325,7 +2325,7 @@ def test_the_apply_guard_is_released_when_an_apply_fails(export, monkeypatch):
     out, md5s = export
     client = _sync_client(md5s)
     apply_step = shots.LocalizationScreenshotService.apply_sync_step
-    failures = [ASCAPIError(500, {"errors": [{"detail": "upstream exploded"}]})]
+    failures = [shots.ExportChangedError("01.png changed between plan and apply")]
 
     async def failing_once(self, step, version_id):
         if failures:
@@ -2368,3 +2368,104 @@ def test_a_cancelled_apply_releases_the_guard_and_stops_the_heartbeat(
         return await tool.fn(app_id=7, dir=str(out), apply=True)
 
     assert run_async(go()).applied is True
+
+
+# ------------------------------------------------------------------
+# Bug 007: a failing row is retried once from live state, then reported
+# ------------------------------------------------------------------
+
+APPLE_500 = "An unexpected error occurred on the server side."
+
+
+def _fail_uploads(client: FakeASC, failures: int) -> None:
+    """The first ``failures`` upload PUTs raise the 5xx Apple sent live, after
+    the reservation POST, so each leaves an uncommitted asset in its set."""
+    real_put = client._put_binary
+    puts = 0
+
+    async def put(url: str, data: bytes, content_type: str = "application/octet-stream"):
+        nonlocal puts
+        puts += 1
+        if puts <= failures:
+            client.calls.append(("PUT", url))
+            raise ASCAPIError(500, {"errors": [{"detail": APPLE_500}]})
+        await real_put(url, data, content_type)
+
+    client._put_binary = put
+
+
+def _checksums(client: FakeASC, localization_id: str) -> list[str | None]:
+    shot_set = client.set_for(localization_id, "APP_IPHONE_67")
+    assert shot_set is not None
+    return [client.screenshots[s].get("checksum") for s in shot_set["shots"]]
+
+
+def test_sync_apply_retries_a_failed_row_from_live_state_and_sweeps_the_orphan(
+    export, monkeypatch
+):
+    out, md5s = export
+    client = _sync_client(md5s)
+    _fail_uploads(client, 1)
+
+    result = _sync(monkeypatch, client, out, apply=True)
+
+    assert result.applied is True
+    assert _checksums(client, "loc-de") == md5s["de-DE"]
+    assert _checksums(client, "loc-fr") == md5s["fr-FR"]
+    assert all(
+        shot.get("state") != "AWAITING_UPLOAD" for shot in client.screenshots.values()
+    )
+    assert [row.error for row in result.rows] == [None, None, None]
+    assert result.inventory is not None and result.inventory.gaps == []
+
+
+def test_sync_apply_reports_a_row_that_fails_twice_and_finishes_the_others(
+    export, monkeypatch
+):
+    out, md5s = export
+    client = _sync_client(md5s)
+    _fail_uploads(client, 2)
+
+    result = _sync(monkeypatch, client, out, apply=True)
+
+    assert result.applied is True
+    de = next(row for row in result.rows if row.locale == "de-DE")
+    assert de.error is not None and APPLE_500 in de.error
+    assert _checksums(client, "loc-fr") == md5s["fr-FR"]
+    assert next(row for row in result.rows if row.locale == "fr-FR").error is None
+    assert result.inventory is not None and result.inventory.gaps != []
+
+
+def test_sync_rerun_after_a_failed_row_repairs_it(export, monkeypatch):
+    out, md5s = export
+    client = _sync_client(md5s)
+    _fail_uploads(client, 2)
+    _sync(monkeypatch, client, out, apply=True)
+
+    again = _sync(monkeypatch, client, out, apply=True)
+
+    assert _checksums(client, "loc-de") == md5s["de-DE"]
+    assert [row.error for row in again.rows] == [None, None, None]
+
+
+def test_cpp_sync_whose_localization_fails_twice_reads_back_only_real_localizations(
+    export, monkeypatch
+):
+    out, md5s = export
+    client = _cpp_sync_client(md5s)
+    real_post = client._post
+
+    async def post(path: str, json: dict | None = None) -> dict:
+        if path == "/appCustomProductPageLocalizations":
+            client.calls.append(("POST", path))
+            raise ASCAPIError(500, {"errors": [{"detail": APPLE_500}]})
+        return await real_post(path, json)
+
+    client._post = post
+
+    result = _cpp_sync(monkeypatch, client, out, apply=True)
+
+    fr = next(row for row in result.rows if row.locale == "fr-FR")
+    assert fr.error is not None and APPLE_500 in fr.error
+    assert _cpp_checksums(client, "cloc-de") == md5s["de-DE"]
+    assert not any("/None/" in path for _, path in client.calls)

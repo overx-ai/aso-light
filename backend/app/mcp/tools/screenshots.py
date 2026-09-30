@@ -639,7 +639,10 @@ async def _sync_read_back(
     steps: list[SyncStep],
 ) -> VersionScreenshotInventory:
     """The 010 inventory of the synced locales and display types, re-read from ASC."""
-    synced = {step.locale: step.localization_id for step in steps}
+    # A locale whose localization could not be created has nothing to read back.
+    synced = {
+        step.locale: step.localization_id for step in steps if step.localization_id
+    }
     sets_by_locale = {
         locale: await service.get_screenshot_sets(localization_id)
         for locale, localization_id in synced.items()
@@ -745,8 +748,10 @@ async def run_screenshot_sync(
                                 for row in inventory.locales
                                 for status in row.display_types
                             }
-                            for row in rows:
+                            for row, step in zip(rows, scan.steps, strict=True):
                                 row.count = counts.get((row.locale, row.display_type))
+                                if step.failed:
+                                    row.error = f"apply failed twice: {step.failed}"
     except (SyncPathError, ExportChangedError) as exc:
         raise ToolError(str(exc)) from exc
 
@@ -797,7 +802,10 @@ async def sync_version_screenshots(
 
     Dry run by default. With ``apply=True`` nothing is written while any row
     is an ``error`` (unknown pixel size, unknown locale directory, over 10
-    files, a path leaving ``SCREENSHOT_SYNC_ROOTS``).
+    files, a path leaving ``SCREENSHOT_SYNC_ROOTS``). A row Apple fails
+    during the apply is re-planned and applied once more; a second failure
+    sets that row's ``error`` and the other rows still apply. Run it again to
+    repair the row.
 
     Args:
         app_id: The local app id.
