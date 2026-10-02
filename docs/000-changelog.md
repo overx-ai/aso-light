@@ -12,6 +12,12 @@ updated: 2026-09-30
 
 ## [Unreleased]
 
+### Fixed — a PPO test can be submitted, started and stopped (2026-10-02)
+- `experiment_submit_for_review` and `experiment_stop` PATCHed the read-only `state`, and Apple refused them ([bug 010](bugs/010-experiment-submit-patches-read-only-state.md)).
+- A submit now goes through a review submission. It refuses an open submission that already holds other items (REST 409), and a retry after a failed submit reuses the submission already holding the test.
+- Start and stop set `started`. There is a new consent-gated `experiment_start`.
+- `experiment_update` no longer takes `state`. The REST `PATCH {state}` routes to the new paths.
+
 ### Fixed — a sync no longer plans `replace` for uploads Apple is still processing (2026-09-30)
 - For a while after a commit, Apple reports a screenshot with no `sourceFileChecksum`, even once its state reads `COMPLETE`. The planner read those slots as changed, so re-running an apply deleted good uploads and sent them again ([bug 009](bugs/009-sync-reads-processing-uploads-as-changed.md), [docs/007](007-mcp-integration.md)).
 - A slot with no checksum now counts as the file when three things hold: it has an explicit state other than `AWAITING_UPLOAD`/`FAILED`, the same name, and the same byte size. The row reports these slots as `processing`.

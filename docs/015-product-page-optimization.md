@@ -48,7 +48,10 @@ Resource hierarchy:
   - `GET /v1/appStoreVersionExperimentTreatments/{id}/appStoreVersionExperimentTreatmentLocalizations`, `POST /v1/appStoreVersionExperimentTreatmentLocalizations` (no PATCH — mutate media via the set children)
 - Screenshots reuse the **standard** set/asset model — the same `appScreenshotSets` → `appScreenshots` (reserve → `PUT` to `uploadOperations` → `PATCH uploaded=true`) flow as CPP and the default page, the only difference being the set's parent relationship (`appStoreVersionExperimentTreatmentLocalization`).
 
-**Lifecycle** is driven by PATCHing `state`: submit for review → `WAITING_FOR_REVIEW`, stop a running experiment → `STOPPED`. A live experiment shows `APPROVED` + a populated `startDate`. Other states are server-assigned.
+**Lifecycle** ([bug 010](bugs/010-experiment-submit-patches-read-only-state.md)): `state` is read-only. Apple's update takes only `name`, `trafficProportion` and `started`.
+- **Submit:** add the experiment as a `reviewSubmissionItems` item (`appStoreVersionExperimentV2`) to the app's open review submission, or a new one, then `PATCH reviewSubmissions/{id} {submitted: true}`. A submission already holding other items is refused with a 409. One whose only item is this experiment is a retry and is just submitted.
+- **Start an approved test:** `started: true`. **Stop it:** `started: false`.
+- A live experiment shows `APPROVED` with a populated `startDate`.
 
 **Constraints enforced/handled:** ≤3 treatments (checked up-front in `create_treatment`, raises `ExperimentLimitError`); one draft experiment per app (Apple returns **409** on a second draft → surfaced as a clean error); delete only **before** start (Apple rejects otherwise → clean error). Locales are App Store locales (`en-US`), **not** alpha-2 territory codes.
 

@@ -54,6 +54,7 @@ from app.schemas.experiment import (
 from app.schemas.screenshots import Screenshot, ScreenshotSet
 from app.services.asc.errors import ASCAPIError, ChildResourceNotFoundError
 from app.services.asc.experiment import ASCExperimentService, ExperimentLimitError
+from app.services.asc.screenshots import NotEditableError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["experiment"])
@@ -74,9 +75,10 @@ async def _experiment_service(
     needs it (to scope the ASC call or its IDOR membership assert).
 
     An ``ASCAPIError`` raised in the ``async with`` body surfaces as a
-    ``502 Bad Gateway`` with Apple's message, and a child-membership violation
-    (``ChildResourceNotFoundError`` from the IDOR guards) as a ``404 Not
-    Found`` — never a traceback. The client is closed on exit either way.
+    ``502 Bad Gateway`` with Apple's message, a ``NotEditableError`` (such as
+    an open review submission holding other items) as a ``409 Conflict``, and
+    a child-membership violation (``ChildResourceNotFoundError`` from the IDOR
+    guards) as a ``404 Not Found`` — never a traceback. The client is closed on exit either way.
     """
     user_id = int(current_user["user_id"])
     app = await _get_verified_app(app_id, user_id, session)
@@ -86,6 +88,10 @@ async def _experiment_service(
         except ChildResourceNotFoundError as exc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+            ) from exc
+        except NotEditableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=exc.message,
             ) from exc
         except ASCAPIError as exc:
             raise HTTPException(
@@ -171,8 +177,9 @@ async def update_experiment(
 ) -> ExperimentResponse:
     """Update an experiment's name, traffic proportion, and/or lifecycle state.
 
-    ``state`` may only be ``WAITING_FOR_REVIEW`` (submit for review) or
-    ``STOPPED`` (stop) — other states are server-assigned.
+    ``state`` may only be ``WAITING_FOR_REVIEW`` (submit, through a review
+    submission) or ``STOPPED`` (``started = false``); Apple never accepts
+    ``state`` itself in a PATCH.
     """
     if body.state is not None and body.state not in SETTABLE_EXPERIMENT_STATES:
         raise HTTPException(
@@ -182,21 +189,26 @@ async def update_experiment(
                 f"{sorted(SETTABLE_EXPERIMENT_STATES)} (or omitted)."
             ),
         )
+    has_fields = body.name is not None or body.traffic_proportion is not None
+    if not has_fields and body.state is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Nothing to update: send name, traffic_proportion or state.",
+        )
     async with _experiment_service(app_id, current_user, session) as (
         service, asc_app_id,
     ):
         await service.assert_experiment_in_app(asc_app_id, experiment_id)
-        try:
+        if has_fields:
             resource = await service.update_experiment(
                 experiment_id,
                 name=body.name,
                 traffic_proportion=body.traffic_proportion,
-                state=body.state,
             )
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
-            ) from exc
+        if body.state == "WAITING_FOR_REVIEW":
+            resource = await service.submit_experiment_for_review(asc_app_id, experiment_id)
+        elif body.state == "STOPPED":
+            resource = await service.stop_experiment(experiment_id)
     return shape_experiment(resource)
 
 

@@ -49,12 +49,17 @@ logger = logging.getLogger(__name__)
 _EXPERIMENT_TYPE = "appStoreVersionExperiments"
 _TREATMENT_TYPE = "appStoreVersionExperimentTreatments"
 _LOCALIZATION_TYPE = "appStoreVersionExperimentTreatmentLocalizations"
-# A treatment links to its parent v2 experiment via this relationship.
-_TREATMENT_EXPERIMENT_RELATIONSHIP = "appStoreVersionExperimentV2"
+# A treatment and a review submission item link to their v2 experiment via
+# this relationship.
+_EXPERIMENT_RELATIONSHIP = "appStoreVersionExperimentV2"
 # A treatment localization links back to its treatment via this relationship.
 _LOCALIZATION_TREATMENT_RELATIONSHIP = "appStoreVersionExperimentTreatment"
 # A screenshot set links back to its treatment localization via this key.
 _SET_LOCALIZATION_RELATIONSHIP = "appStoreVersionExperimentTreatmentLocalization"
+_SUBMISSION_TYPE = "reviewSubmissions"
+_SUBMISSION_ITEM_TYPE = "reviewSubmissionItems"
+_OPEN_SUBMISSION_STATE = "READY_FOR_REVIEW"
+_DEFAULT_PLATFORM = "IOS"
 
 # Apple allows at most this many treatments (variants) per experiment.
 MAX_TREATMENTS = 3
@@ -184,7 +189,7 @@ class ASCExperimentService:
         asc_app_id: str,
         name: str,
         traffic_proportion: int,
-        platform: str = "IOS",
+        platform: str = _DEFAULT_PLATFORM,
     ) -> dict:
         """Create a Product Page Optimization experiment.
 
@@ -220,25 +225,21 @@ class ASCExperimentService:
         experiment_id: str,
         name: str | None = None,
         traffic_proportion: int | None = None,
-        state: str | None = None,
+        started: bool | None = None,
     ) -> dict:
         """Update an experiment (only provided attributes are sent).
 
-        ``PATCH /v2/appStoreVersionExperiments/{experiment_id}``
-
-        ``state`` drives lifecycle transitions — ``WAITING_FOR_REVIEW`` submits
-        for review, ``STOPPED`` stops a running experiment.
-
-        Returns:
-            The updated ``appStoreVersionExperiments`` resource dict.
+        ``PATCH /v2/appStoreVersionExperiments/{experiment_id}``. Apple accepts
+        ``name``, ``trafficProportion`` and ``started``; ``state`` is read-only,
+        so a submit goes through :meth:`submit_experiment_for_review`.
         """
         attributes: dict[str, object] = {}
         if name is not None:
             attributes["name"] = name
         if traffic_proportion is not None:
             attributes["trafficProportion"] = traffic_proportion
-        if state is not None:
-            attributes["state"] = state
+        if started is not None:
+            attributes["started"] = started
         if not attributes:
             raise ValueError("update_experiment called with no fields to update")
         body = {
@@ -254,15 +255,97 @@ class ASCExperimentService:
         )
         return response.get("data", {})
 
-    async def submit_experiment_for_review(self, experiment_id: str) -> dict:
-        """Submit an experiment for App Review (``state = WAITING_FOR_REVIEW``)."""
-        return await self.update_experiment(
-            experiment_id, state="WAITING_FOR_REVIEW"
+    async def submit_experiment_for_review(
+        self, asc_app_id: str, experiment_id: str
+    ) -> dict:
+        """Add the experiment to the app's open review submission (or a new
+        one), then mark that submission ``submitted``."""
+        experiment = await self.get_experiment(experiment_id)
+        platform = (experiment.get("attributes") or {}).get("platform") or _DEFAULT_PLATFORM
+        submission_id, holds_experiment = await self._open_submission_for(
+            asc_app_id, platform, experiment_id
         )
+        if not holds_experiment:
+            await self.client._post(
+                "/reviewSubmissionItems",
+                json={
+                    "data": {
+                        "type": _SUBMISSION_ITEM_TYPE,
+                        "relationships": {
+                            "reviewSubmission": {
+                                "data": {"type": _SUBMISSION_TYPE, "id": submission_id},
+                            },
+                            _EXPERIMENT_RELATIONSHIP: {
+                                "data": {"type": _EXPERIMENT_TYPE, "id": experiment_id},
+                            },
+                        },
+                    }
+                },
+            )
+        await self.client._patch(
+            f"/reviewSubmissions/{submission_id}",
+            json={
+                "data": {
+                    "type": _SUBMISSION_TYPE,
+                    "id": submission_id,
+                    "attributes": {"submitted": True},
+                }
+            },
+        )
+        return await self.get_experiment(experiment_id)
+
+    async def _open_submission_for(
+        self, asc_app_id: str, platform: str, experiment_id: str
+    ) -> tuple[str, bool]:
+        """``(submission id, already holds the experiment)`` for the submit.
+
+        Apple keeps one unsubmitted submission per app and platform. Submitting
+        one that holds anything but this experiment would send that too, so it
+        is refused; one holding only this experiment is a retry whose
+        ``submitted`` PATCH failed. ``UNRESOLVED_ISSUES`` submissions are left
+        alone: resubmitting one is a human's call in App Store Connect.
+        """
+        response = await self.client._get(
+            "/reviewSubmissions",
+            params={
+                "filter[app]": asc_app_id,
+                "filter[platform]": platform,
+                "filter[state]": _OPEN_SUBMISSION_STATE,
+                "limit": 1,
+            },
+        )
+        open_submissions = response.get("data") or []
+        if not open_submissions:
+            created = await self.client._post(
+                "/reviewSubmissions",
+                json={
+                    "data": {
+                        "type": _SUBMISSION_TYPE,
+                        "attributes": {"platform": platform},
+                        "relationships": {
+                            "app": {"data": {"type": "apps", "id": asc_app_id}},
+                        },
+                    }
+                },
+            )
+            return created["data"]["id"], False
+        submission_id = open_submissions[0]["id"]
+        items = await self.client._get_all_pages(
+            f"/reviewSubmissions/{submission_id}/items",
+            params={"include": _EXPERIMENT_RELATIONSHIP, "limit": 200},
+        )
+        others = [item for item in items if _item_experiment_id(item) != experiment_id]
+        if others:
+            raise ReviewSubmissionBusyError(submission_id, len(others))
+        return submission_id, bool(items)
+
+    async def start_experiment(self, experiment_id: str) -> dict:
+        """Start an approved experiment (``started = true``)."""
+        return await self.update_experiment(experiment_id, started=True)
 
     async def stop_experiment(self, experiment_id: str) -> dict:
-        """Stop a running experiment (``state = STOPPED``)."""
-        return await self.update_experiment(experiment_id, state="STOPPED")
+        """Stop a running experiment (``started = false``)."""
+        return await self.update_experiment(experiment_id, started=False)
 
     async def delete_experiment(self, experiment_id: str) -> None:
         """Delete an experiment.
@@ -329,7 +412,7 @@ class ASCExperimentService:
                 "type": _TREATMENT_TYPE,
                 "attributes": attributes,
                 "relationships": {
-                    _TREATMENT_EXPERIMENT_RELATIONSHIP: {
+                    _EXPERIMENT_RELATIONSHIP: {
                         "data": {"type": _EXPERIMENT_TYPE, "id": experiment_id},
                     },
                 },
@@ -554,6 +637,20 @@ class ASCExperimentService:
             "locale": locale,
             "uploaded_count": uploaded_count,
         }
+
+
+def _item_experiment_id(item: dict) -> str | None:
+    linkage = ((item.get("relationships") or {}).get(_EXPERIMENT_RELATIONSHIP) or {}).get("data")
+    return (linkage or {}).get("id")
+
+
+class ReviewSubmissionBusyError(shots.NotEditableError):
+    def __init__(self, submission_id: str, other_items: int) -> None:
+        super().__init__(
+            f"Review submission {submission_id} is open with {other_items} other "
+            "item(s); submitting it would send them too. Submit or remove them in "
+            "App Store Connect first."
+        )
 
 
 class ExperimentNotEditableError(shots.NotEditableError):

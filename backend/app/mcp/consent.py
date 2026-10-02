@@ -144,6 +144,10 @@ DESTRUCTIVE: dict[str, str] = {
         "Stops a running product page optimization test. Apple does not allow "
         "restarting it — the run and its accumulated data are finished."
     ),
+    "experiment_start": (
+        "Starts an approved product page optimization test: live App Store "
+        "traffic is split onto its treatments."
+    ),
     "experiment_submit_for_review": (
         "Submits an experiment to Apple's App Review. Externally visible and "
         "not silently undoable."

@@ -26,7 +26,6 @@ from app.mcp.server import mcp
 from app.mcp.tools.screenshots import asc_tool_error, run_screenshot_sync
 from app.models.app import App
 from app.schemas.experiment import (
-    SETTABLE_EXPERIMENT_STATES,
     EnsureTreatmentLocalizationResponse,
     ExperimentListResponse,
     ExperimentResponse,
@@ -131,18 +130,12 @@ async def update_experiment(
     experiment_id: str,
     name: str | None = None,
     traffic_proportion: int | None = None,
-    state: str | None = None,
 ) -> ExperimentResponse:
-    """Update an experiment's name, traffic proportion, and/or lifecycle state.
+    """Update an experiment's name and/or traffic proportion.
 
-    ``state`` may only be ``WAITING_FOR_REVIEW`` (submit for review) or
-    ``STOPPED`` (stop a running experiment); other states are server-assigned.
+    Lifecycle has its own consent-gated tools: ``experiment_submit_for_review``,
+    ``experiment_start`` and ``experiment_stop``.
     """
-    if state is not None and state not in SETTABLE_EXPERIMENT_STATES:
-        raise ToolError(
-            "state must be one of "
-            f"{sorted(SETTABLE_EXPERIMENT_STATES)} (or omitted)."
-        )
     if traffic_proportion is not None and not 1 <= traffic_proportion <= 100:
         raise ToolError("traffic_proportion must be between 1 and 100.")
     async with _experiment_service(app_id) as (service, asc_app_id):
@@ -152,7 +145,6 @@ async def update_experiment(
                 experiment_id,
                 name=name,
                 traffic_proportion=traffic_proportion,
-                state=state,
             )
         except ValueError as exc:
             raise ToolError(str(exc))
@@ -163,16 +155,31 @@ async def update_experiment(
 async def submit_experiment_for_review(
     app_id: int, experiment_id: str
 ) -> ExperimentResponse:
-    """Submit an experiment for App Review (state -> WAITING_FOR_REVIEW)."""
+    """Submit an experiment for App Review through a review submission.
+
+    The experiment is added to the app's open review submission (or a new one),
+    which is then submitted. An open submission already holding other items is
+    refused, since submitting it would send them too; one holding only this
+    experiment (a failed earlier submit) is just submitted.
+    """
     async with _experiment_service(app_id) as (service, asc_app_id):
         await service.assert_experiment_in_app(asc_app_id, experiment_id)
-        resource = await service.submit_experiment_for_review(experiment_id)
+        resource = await service.submit_experiment_for_review(asc_app_id, experiment_id)
+    return shape_experiment(resource)
+
+
+@mcp.tool(name="experiment_start")
+async def start_experiment(app_id: int, experiment_id: str) -> ExperimentResponse:
+    """Start an approved experiment (``started = true``)."""
+    async with _experiment_service(app_id) as (service, asc_app_id):
+        await service.assert_experiment_in_app(asc_app_id, experiment_id)
+        resource = await service.start_experiment(experiment_id)
     return shape_experiment(resource)
 
 
 @mcp.tool(name="experiment_stop")
 async def stop_experiment(app_id: int, experiment_id: str) -> ExperimentResponse:
-    """Stop a running experiment (state -> STOPPED)."""
+    """Stop a running experiment (``started = false``)."""
     async with _experiment_service(app_id) as (service, asc_app_id):
         await service.assert_experiment_in_app(asc_app_id, experiment_id)
         resource = await service.stop_experiment(experiment_id)

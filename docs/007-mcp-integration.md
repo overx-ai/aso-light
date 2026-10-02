@@ -130,7 +130,7 @@ Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 | `clash`       | 1     | Side-by-side competitor comparison                               |
 | `clone`       | 3     | Read and retry clone/swap operations — the status channel for the long-running `swap_*` tools |
 | `cpp`         | 10    | Custom Product Pages: CRUD, localizations, screenshots, a whole export directory in one call (`cpp_screenshots_sync`), consent-gated delete (`cpp_screenshots_delete`) |
-| `experiment`  | 15    | Product Page Optimization: experiments, treatments, treatment localizations + screenshots, a whole export directory into one treatment (`experiment_screenshots_sync`) |
+| `experiment`  | 16    | Product Page Optimization: experiments, treatments, treatment localizations + screenshots, a whole export directory into one treatment (`experiment_screenshots_sync`) |
 | `growth`      | 1     | Ranked growth recommendations (pricing gaps, ASO gaps)           |
 | `indices`     | 3     | GDP / PPP / BigMac / Spotify / Netflix index status & refresh    |
 | `keywords`    | 13    | iTunes search/suggestions, keyword tracking, rankings, competitors |
