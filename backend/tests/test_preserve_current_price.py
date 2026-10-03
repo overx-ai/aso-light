@@ -61,7 +61,8 @@ async def _apply_mcp(app_id, sub_id, user_id, request, monkeypatch):
 
 
 def _run(monkeypatch, path: str, request: dict, *,
-         current: dict[str, float] = CURRENT, failing_calls: frozenset = frozenset()):
+         current: dict[str, float] = CURRENT, failing_calls: frozenset = frozenset(),
+         starts: list | None = None):
     """Apply ``request`` over ``current`` cached prices.
 
     Returns the ``preserveCurrentPrice`` sent per call, in item order, and
@@ -76,8 +77,10 @@ def _run(monkeypatch, path: str, request: dict, *,
     sent: list[bool] = []
 
     async def _create(self, subscription_id, price_point_id,
-                      preserve_current_price=False):
+                      preserve_current_price=False, start_date=None):
         sent.append(preserve_current_price)
+        if starts is not None:
+            starts.append(start_date)
         if len(sent) - 1 in failing_calls:
             raise ASCAPIError(409, {"errors": [{"detail": "rejected"}]})
         return {}

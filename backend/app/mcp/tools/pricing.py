@@ -100,7 +100,10 @@ from app.services.asc.errors import (
     IAPScheduleUnsyncedError,
 )
 from app.services.asc.price_point_cache import PricePointCache
-from app.services.asc.pricing import ASCPricingService
+from app.services.asc.pricing import (
+    ASCPricingService,
+    subscription_price_start_date,
+)
 from app.services.export.csv import CSVExportService
 from app.services.export.excel import ExcelExportService
 from app.services.pricing.currency import effective_currency
@@ -1139,6 +1142,7 @@ async def apply_subscription_prices(
                         subscription_id=subscription.asc_subscription_id,
                         price_point_id=item.price_point_id,
                         preserve_current_price=preserve,
+                        start_date=subscription_price_start_date(current_price),
                     )
                     applied += 1
                     applied_alpha2.append(tc)
