@@ -83,6 +83,7 @@ from app.services.pricing.currency import effective_currency
 from app.services.pricing.preview import build_preview_items
 from app.services.pricing.safety import (
     exceeds_safety_band,
+    keeps_current_price,
     safety_skip_item,
 )
 from app.services.pricing.versions import (
@@ -866,6 +867,7 @@ async def apply_subscription_prices(
     skipped_items: list[PriceApplySkippedItem] = []
     resolved: dict[str, float] = {}
     applied_alpha2: list[str] = []
+    kept_price_alpha2: list[str] = []
 
     logger.info(
         "Apply request: subscription=%s items=%d sample=%s intro_offer=%s",
@@ -942,13 +944,19 @@ async def apply_subscription_prices(
                 )
                 continue
 
+            preserve = keeps_current_price(
+                body.preserve_current_price_on_increase, current_price, new_price,
+            )
             try:
                 await pricing_service.create_subscription_price(
                     subscription_id=subscription.asc_subscription_id,
                     price_point_id=item.price_point_id,
+                    preserve_current_price=preserve,
                 )
                 applied += 1
                 applied_alpha2.append(tc)
+                if preserve:
+                    kept_price_alpha2.append(tc)
             except ASCAPIError as exc:
                 failed += 1
                 errors.append(
@@ -1157,6 +1165,7 @@ async def apply_subscription_prices(
         response=response,
         resolved=resolved,
         applied=applied_alpha2,
+        kept_current_price=kept_price_alpha2,
     )
     return response
 

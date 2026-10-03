@@ -105,7 +105,7 @@ from app.services.export.csv import CSVExportService
 from app.services.export.excel import ExcelExportService
 from app.services.pricing.currency import effective_currency
 from app.services.pricing.preview import build_preview_items
-from app.services.pricing.safety import safety_skip_item
+from app.services.pricing.safety import keeps_current_price, safety_skip_item
 from app.services.pricing.versions import (
     get_version,
     list_versions,
@@ -1041,7 +1041,10 @@ async def apply_subscription_prices(
 
     ``request`` is a :class:`PriceApplyRequest` payload: ``items`` is a list of
     ``{territory_code, price_point_id, force?}`` and an optional
-    ``intro_offer`` ``{duration, number_of_periods}``.
+    ``intro_offer`` ``{duration, number_of_periods}``. Set
+    ``preserve_current_price_on_increase: true`` to keep existing
+    subscribers on their price wherever this apply raises it; a decrease
+    always reaches every subscriber.
     """
     body = PriceApplyRequest.model_validate(request)
     async with session_scope() as session:
@@ -1074,6 +1077,7 @@ async def apply_subscription_prices(
         skipped_items: list[PriceApplySkippedItem] = []
         resolved: dict[str, float] = {}
         applied_alpha2: list[str] = []
+        kept_price_alpha2: list[str] = []
 
         async with await _get_asc_client_for_app(app, session) as client:
             pricing_service = ASCPricingService(client)
@@ -1127,13 +1131,19 @@ async def apply_subscription_prices(
                     skipped_items.append(skip)
                     continue
 
+                preserve = keeps_current_price(
+                    body.preserve_current_price_on_increase, current_price, new_price,
+                )
                 try:
                     await pricing_service.create_subscription_price(
                         subscription_id=subscription.asc_subscription_id,
                         price_point_id=item.price_point_id,
+                        preserve_current_price=preserve,
                     )
                     applied += 1
                     applied_alpha2.append(tc)
+                    if preserve:
+                        kept_price_alpha2.append(tc)
                 except ASCAPIError as exc:
                     failed += 1
                     errors.append(f"Territory {tc}: {exc.message}")
@@ -1298,6 +1308,7 @@ async def apply_subscription_prices(
             response=response,
             resolved=resolved,
             applied=applied_alpha2,
+            kept_current_price=kept_price_alpha2,
         )
         return response
 
