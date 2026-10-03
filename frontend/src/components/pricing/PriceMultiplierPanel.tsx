@@ -176,7 +176,7 @@ export default function PriceMultiplierPanel({
 
   const handleApply = () => {
     const items =
-      isNoChanges || !preview
+      !preview
         ? []
         : preview.items
             .filter(

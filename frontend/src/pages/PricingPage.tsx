@@ -82,6 +82,23 @@ import type {
   IAPPricePreviewResponse,
 } from "@/types";
 
+// Mirrors backend SAFETY_BAND_PCT (app/api/v1/pricing.py).
+const SAFETY_BAND_PCT = 50;
+
+const MANUAL_PREVIEW_BASE: Omit<PricePreviewResponse, "items"> = {
+  subscription_id: 0,
+  subscription_name: "",
+  index_type: "manual",
+  base_price: 0,
+};
+
+function toPanelPreview(
+  items: PricePreviewItem[] | null,
+  preview: Omit<PricePreviewResponse, "items"> | null,
+): PricePreviewResponse | null {
+  return items ? { ...MANUAL_PREVIEW_BASE, ...preview, items } : null;
+}
+
 function SubscriptionsTab({ appId }: { appId: string }) {
   // Selection lives in the URL (?group=X&sub=Y) so a refresh keeps the
   // user's place. ``replace: true`` avoids polluting browser history.
@@ -253,6 +270,8 @@ function SubscriptionsTab({ appId }: { appId: string }) {
           onSuccess: () => {
             handleClearPreview();
             setForcedTerritories(new Set());
+            setManualTerritories(new Set());
+            setManualItems(new Map());
           },
         },
       );
@@ -314,7 +333,8 @@ function SubscriptionsTab({ appId }: { appId: string }) {
                 nearest_apple_price: resolved.customer_price,
                 price_point_id: resolved.price_point_id,
                 diff_percent: diffPercent,
-                would_be_skipped: false,
+                would_be_skipped:
+                  diffPercent !== null && Math.abs(diffPercent) > SAFETY_BAND_PCT,
               });
               return next;
             });
@@ -342,6 +362,11 @@ function SubscriptionsTab({ appId }: { appId: string }) {
     }
     return merged.length > 0 ? merged : null;
   }, [preview, manualItems]);
+
+  const panelPreview = useMemo(
+    () => toPanelPreview(mergedPreviewItems, preview),
+    [mergedPreviewItems, preview],
+  );
 
   const selectedSub = useMemo(() => {
     if (!selectedGroup || !selectedSubId) return null;
@@ -569,7 +594,7 @@ function SubscriptionsTab({ appId }: { appId: string }) {
             appId={appId}
             subId={selectedSubId}
             territories={territories}
-            preview={preview}
+            preview={panelPreview}
             forcedTerritories={forcedTerritories}
             onPreview={handlePreview}
             onApply={handleApply}
@@ -749,6 +774,8 @@ function IAPsTab({ appId }: { appId: string }) {
           onSuccess: () => {
             handleClearPreview();
             setForcedTerritories(new Set());
+            setManualTerritories(new Set());
+            setManualItems(new Map());
           },
         },
       );
@@ -809,7 +836,8 @@ function IAPsTab({ appId }: { appId: string }) {
                 nearest_apple_price: resolved.customer_price,
                 price_point_id: resolved.price_point_id,
                 diff_percent: diffPercent,
-                would_be_skipped: false,
+                would_be_skipped:
+                  diffPercent !== null && Math.abs(diffPercent) > SAFETY_BAND_PCT,
               });
               return next;
             });
@@ -873,17 +901,19 @@ function IAPsTab({ appId }: { appId: string }) {
     // Import results are displayed via notification from the hook.
   }, []);
 
-  // Adapt preview response to PricePreviewResponse shape for PriceMultiplierPanel
-  const panelPreview: PricePreviewResponse | null = useMemo(() => {
-    if (!preview) return null;
-    return {
-      subscription_id: preview.iap_id,
-      subscription_name: preview.iap_name,
-      index_type: preview.index_type,
-      base_price: preview.base_price,
-      items: preview.items,
-    };
-  }, [preview]);
+  const panelPreview = useMemo(
+    () =>
+      toPanelPreview(
+        mergedPreviewItems,
+        preview && {
+          subscription_id: preview.iap_id,
+          subscription_name: preview.iap_name,
+          index_type: preview.index_type,
+          base_price: preview.base_price,
+        },
+      ),
+    [mergedPreviewItems, preview],
+  );
 
   if (iapsLoading) {
     return (

@@ -249,7 +249,8 @@ export default function PriceGrid({
   }, [introOffers]);
   const hasIntroOffers = introOfferByTerritory.size > 0;
 
-  const hasPreview = previewItems !== null && previewItems.length > 0;
+  const hasPreview =
+    (previewItems?.length ?? 0) > 0 || (manualTerritories?.size ?? 0) > 0;
 
   const rows = useMemo(
     () =>
