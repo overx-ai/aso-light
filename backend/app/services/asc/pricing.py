@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from app.services.asc.errors import (
     ASCAPIError,
@@ -14,6 +16,20 @@ if TYPE_CHECKING:
     import httpx
 
     from app.services.asc.client import ASCClient
+
+# Apple's price schedule runs on US Pacific days, not UTC.
+APPLE_PRICING_TZ = ZoneInfo("America/Los_Angeles")
+
+
+def next_price_change_date(now: datetime | None = None) -> date:
+    """The next day on Apple's pricing calendar, the ``startDate`` of a price change."""
+    now = now or datetime.now(timezone.utc)
+    return now.astimezone(APPLE_PRICING_TZ).date() + timedelta(days=1)
+
+
+def subscription_price_start_date(current_price: float | None) -> date | None:
+    """Date a change to an existing price; leave a territory's first price undated."""
+    return next_price_change_date() if current_price is not None else None
 
 
 def _raise_for_asc_error(raw: httpx.Response) -> None:
@@ -351,6 +367,7 @@ class ASCPricingService:
         subscription_id: str,
         price_point_id: str,
         preserve_current_price: bool = False,
+        start_date: date | None = None,
     ) -> dict:
         """Set a new price for a subscription territory.
 
@@ -361,16 +378,20 @@ class ASCPricingService:
             price_point_id: ASC price point ID to set.
             preserve_current_price: Whether existing subscribers keep
                 their current price.
+            start_date: When the price takes effect. Required for every
+                price after the first: an undated price is the initial one,
+                which Apple refuses to create again once approved.
 
         Returns:
             The created subscriptionPrice resource dict.
         """
+        attributes: dict[str, bool | str] = {"preserveCurrentPrice": preserve_current_price}
+        if start_date is not None:
+            attributes["startDate"] = start_date.isoformat()
         body = {
             "data": {
                 "type": "subscriptionPrices",
-                "attributes": {
-                    "preserveCurrentPrice": preserve_current_price,
-                },
+                "attributes": attributes,
                 "relationships": {
                     "subscription": {
                         "data": {

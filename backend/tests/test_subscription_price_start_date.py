@@ -61,9 +61,11 @@ def test_a_dated_price_carries_its_start_date_and_an_initial_one_does_not():
 def test_the_apply_dates_a_change_and_leaves_a_first_price_undated(
     monkeypatch, path,
 ):
-    from app.services.asc.pricing import next_price_change_date
+    from app.services.asc import pricing
     from test_preserve_current_price import _run
 
+    tomorrow = date(2030, 1, 1)
+    monkeypatch.setattr(pricing, "next_price_change_date", lambda: tomorrow)
     starts: list = []
     sent, saved = _run(
         monkeypatch, path,
@@ -74,4 +76,4 @@ def test_the_apply_dates_a_change_and_leaves_a_first_price_undated(
         current={"US": 3.99},
         starts=starts,
     )
-    assert starts == [next_price_change_date(), None]
+    assert starts == [tomorrow, None]
