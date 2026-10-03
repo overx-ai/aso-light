@@ -183,18 +183,17 @@ class ASCPricingService:
     # Subscription Prices
     # ------------------------------------------------------------------
 
-    async def get_subscription_prices(self, subscription_id: str) -> list[dict]:
-        """Fetch current prices for a subscription.
+    async def get_subscription_prices(
+        self, subscription_id: str, today: date | None = None,
+    ) -> list[dict]:
+        """The price in effect today in every territory of a subscription.
 
-        ``GET /v1/subscriptions/{subscription_id}/prices``
-
-        Includes territory data so we can extract territory codes and
-        price point details in a single call.
-
-        Returns:
-            List of JSON:API resource objects with included territory
-            and subscriptionPricePoint data.
+        ``GET /v1/subscriptions/{subscription_id}/prices`` lists the whole
+        schedule: the undated initial price, past changes and changes not
+        started yet. Per territory, the row with the latest ``startDate``
+        on or before today (Apple's Pacific day) wins; undated sorts first.
         """
+        today = today or datetime.now(APPLE_PRICING_TZ).date()
         response = await self.client._get(
             f"/subscriptions/{subscription_id}/prices",
             params={
@@ -204,8 +203,21 @@ class ASCPricingService:
                 "limit": 200,
             },
         )
-        # Build lookup maps from included resources
-        included = response.get("included", [])
+        rows, included = await self._all_pages(response)
+
+        today_key = today.isoformat()
+        in_effect: dict[str | None, tuple[str, dict]] = {}
+        for price in rows:
+            start = price.get("attributes", {}).get("startDate") or ""
+            if start > today_key:
+                continue
+            territory = (
+                price.get("relationships", {}).get("territory", {})
+                .get("data", {}) or {}
+            ).get("id")
+            if territory not in in_effect or start >= in_effect[territory][0]:
+                in_effect[territory] = (start, price)
+
         price_points_map: dict[str, dict] = {}
         territories_map: dict[str, dict] = {}
         for item in included:
@@ -216,20 +228,13 @@ class ASCPricingService:
 
         # Enrich each price entry with resolved territory and price point data
         result: list[dict] = []
-        for price in response.get("data", []):
-            relationships = price.get("relationships", {})
-
+        for territory_id, (_, price) in in_effect.items():
             pp_ref = (
-                relationships.get("subscriptionPricePoint", {})
+                price.get("relationships", {})
+                .get("subscriptionPricePoint", {})
                 .get("data", {})
             )
-            territory_ref = (
-                relationships.get("territory", {})
-                .get("data", {})
-            )
-
             pp_id = pp_ref.get("id") if pp_ref else None
-            territory_id = territory_ref.get("id") if territory_ref else None
 
             pp_data = price_points_map.get(pp_id, {}) if pp_id else {}
             territory_data = territories_map.get(territory_id, {}) if territory_id else {}
@@ -255,6 +260,18 @@ class ASCPricingService:
     # Price Points
     # ------------------------------------------------------------------
 
+    async def _all_pages(self, first_page: dict) -> tuple[list[dict], list[dict]]:
+        """``data`` and ``included`` of a listing, following ``links.next``."""
+        data: list[dict] = []
+        included: list[dict] = []
+        page: dict | None = first_page
+        while page is not None:
+            data.extend(page.get("data", []))
+            included.extend(page.get("included", []))
+            next_url = page.get("links", {}).get("next")
+            page = await self.client._get(next_url) if next_url else None
+        return data, included
+
     async def _price_point_ladder(self, first_page: dict) -> list[dict]:
         """Every price point of a listing, enriched with its territory's currency.
 
@@ -262,16 +279,10 @@ class ASCPricingService:
         returning what was read so far would pass a truncated price ladder
         off as complete (docs/bugs/011).
         """
-        all_data: list[dict] = []
-        territories_map: dict[str, dict] = {}
-        page: dict | None = first_page
-        while page is not None:
-            all_data.extend(page.get("data", []))
-            for item in page.get("included", []):
-                if item["type"] == "territories":
-                    territories_map[item["id"]] = item
-            next_url = page.get("links", {}).get("next")
-            page = await self.client._get(next_url) if next_url else None
+        all_data, included = await self._all_pages(first_page)
+        territories_map = {
+            item["id"]: item for item in included if item["type"] == "territories"
+        }
 
         result: list[dict] = []
         for pp in all_data:

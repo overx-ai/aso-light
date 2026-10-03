@@ -11,6 +11,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS_DIR))
 sys.path.insert(0, str(TESTS_DIR.parent))
@@ -73,3 +75,51 @@ def test_the_sync_keeps_the_row_in_effect_on_every_page():
     current = {r["territory_code"]: r["customer_price"] for r in rows}
     assert current == {"BTN": 1.99, "ZAF": 32.99, "GEO": 0.99}
     assert len(rows) == 3
+
+
+class _OnePage:
+    def __init__(self, page):
+        self.page = page
+
+    async def _get(self, path, params=None):
+        return self.page
+
+
+def test_a_change_starting_today_is_in_effect_and_a_future_only_territory_is_unpriced():
+    from app.services.asc.pricing import ASCPricingService
+
+    page = {
+        "data": [
+            _row("r1", "BTN", "pp-btn-old", None),
+            _row("r2", "BTN", "pp-btn-new", TODAY.isoformat()),
+            _row("r3", "NPL", "pp-npl", "2026-10-04"),
+        ],
+        "included": [_pp("pp-btn-old", 1.99), _pp("pp-btn-new", 2.99),
+                     _pp("pp-npl", 4.99)],
+        "links": {},
+    }
+    rows = run_async(
+        ASCPricingService(_OnePage(page)).get_subscription_prices("sub-1", today=TODAY)
+    )
+    assert {r["territory_code"]: r["customer_price"] for r in rows} == {"BTN": 2.99}
+
+
+class _FailingNextPage:
+    async def _get(self, path, params=None):
+        from app.services.asc.errors import ASCAPIError
+
+        if path.startswith("/subscriptions/"):
+            return PAGES["first"]
+        raise ASCAPIError(500, {"errors": [{"detail": "server error"}]})
+
+
+def test_a_later_page_that_fails_raises_instead_of_truncating():
+    from app.services.asc.errors import ASCAPIError
+    from app.services.asc.pricing import ASCPricingService
+
+    with pytest.raises(ASCAPIError):
+        run_async(
+            ASCPricingService(_FailingNextPage()).get_subscription_prices(
+                "sub-1", today=TODAY,
+            )
+        )
