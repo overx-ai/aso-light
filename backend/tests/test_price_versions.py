@@ -12,6 +12,7 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS_DIR))
@@ -95,7 +96,7 @@ def test_iap_apply_saves_the_whole_schedule_and_its_config(monkeypatch):
 
     items = _by_code(v)
     assert set(items) == {"US", "DE", "FR"}, "Apple got the whole schedule"
-    assert items["US"]["origin"] == "requested"
+    assert items["US"]["origin"] == "applied"
     assert items["US"]["price_point_id"] == "pp-x"
     assert items["US"]["customer_price"] == 4.99
     assert items["US"]["currency"] == "USD"
@@ -241,7 +242,10 @@ def test_mcp_subscription_apply_saves_previous_prices(monkeypatch):
 
     async def go():
         app_id, _, user_id = await _seed_iap_fixture()
-        monkeypatch.setattr(mcp_context, "get_user_id", lambda: user_id)
+        monkeypatch.setattr(
+            mcp_context, "get_access_token",
+            lambda: SimpleNamespace(claims={"user_id": str(user_id)}),
+        )
         sub_id = await _seed_subscription(app_id)
         await _cache_sub_price(sub_id, "US", 3.99, "pp-old")
         tool = await mcp.get_tool("pricing_apply_subscription_prices")
@@ -274,7 +278,10 @@ def test_snapshot_records_the_cached_prices_as_a_baseline(monkeypatch):
 
     async def go():
         app_id, iap_id, user_id = await _seed_iap_fixture()
-        monkeypatch.setattr(mcp_context, "get_user_id", lambda: user_id)
+        monkeypatch.setattr(
+            mcp_context, "get_access_token",
+            lambda: SimpleNamespace(claims={"user_id": str(user_id)}),
+        )
         await _cache_prices(iap_id, ["US", "DE"])
         tool = await mcp.get_tool("pricing_snapshot_price_version")
         return await tool.fn(app_id=app_id, product_kind="iap",
@@ -294,3 +301,136 @@ def test_version_reads_are_read_only_and_the_snapshot_is_not_destructive():
             "pricing_get_price_version"} <= READ_ONLY
     assert "pricing_snapshot_price_version" not in READ_ONLY
     assert "pricing_snapshot_price_version" not in DESTRUCTIVE
+
+
+def test_a_rejected_batch_records_the_requested_territories_as_failed(
+    monkeypatch,
+):
+    """Resolving a price point is not Apple accepting it."""
+    from app.services.asc.errors import ASCAPIError
+    from app.services.asc.pricing import ASCPricingService
+
+    _patch_asc(monkeypatch, live_schedule=[])
+
+    async def _reject(self, iap_id, price_entries, base_territory_alpha3="USA"):
+        raise ASCAPIError(409, {"errors": [{"detail": "rejected"}]})
+
+    monkeypatch.setattr(ASCPricingService, "set_iap_price", _reject)
+
+    async def go():
+        app_id, iap_id, user_id = await _seed_iap_fixture()
+        await _cache_prices(iap_id, ["DE"])
+        await _apply_iap(app_id, iap_id, user_id, {
+            "items": [{"territory_code": "US", "price_point_id": "pp-x"}],
+        })
+        return await _versions(app_id, "iap", iap_id)
+
+    v = run_async(go())[0]
+    assert v.result["failed"] == 1
+    assert _by_code(v)["US"]["origin"] == "failed"
+
+
+def test_the_base_territory_saved_is_the_one_apple_got(monkeypatch):
+    submitted = _patch_asc(monkeypatch, live_schedule=[])
+
+    async def go():
+        app_id, iap_id, user_id = await _seed_iap_fixture()
+        await _apply_iap(app_id, iap_id, user_id, {
+            "items": [{"territory_code": "DE", "price_point_id": "pp-x"}],
+            "base_territory_code": "US",
+        })
+        return await _versions(app_id, "iap", iap_id)
+
+    v = run_async(go())[0]
+    assert submitted[0]["base"] == "DEU"
+    assert v.base_territory_code == "DE"
+
+
+def test_a_lost_version_number_race_takes_the_next_number(monkeypatch):
+    from app.db.session import async_session_factory
+    from app.services.pricing import versions
+
+    real_next = versions._next_version
+    stale = iter([1])
+
+    async def _racing_next(*args):
+        return next(stale, None) or await real_next(*args)
+
+    async def go():
+        app_id, iap_id, user_id = await _seed_iap_fixture()
+        kwargs = dict(
+            user_id=user_id, app_id=app_id, product_kind="iap",
+            product_ref_id=iap_id, product_id="com.example.iap",
+            source="baseline", current_prices=[], territory_by_id={},
+        )
+        async with async_session_factory() as session:
+            await versions.record_price_version(session, **kwargs)
+        monkeypatch.setattr(versions, "_next_version", _racing_next)
+        async with async_session_factory() as session:
+            row = await versions.record_price_version(session, **kwargs)
+        return row.version, await _versions(app_id, "iap", iap_id)
+
+    version, rows = run_async(go())
+    assert version == 2
+    assert [v.version for v in rows] == [2, 1]
+
+
+def test_a_failed_save_never_turns_an_applied_price_into_an_error(monkeypatch):
+    """Apple has already changed; the apply's result must still come back."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.services.pricing import versions
+
+    submitted = _patch_asc(monkeypatch, live_schedule=[])
+
+    async def _broken(*args):
+        raise OperationalError("SELECT max", {}, Exception("db down"))
+
+    monkeypatch.setattr(versions, "_next_version", _broken)
+
+    async def go():
+        app_id, iap_id, user_id = await _seed_iap_fixture()
+        result = await _apply_iap(app_id, iap_id, user_id, {
+            "items": [{"territory_code": "US", "price_point_id": "pp-x"}],
+        })
+        return result, await _versions(app_id, "iap", iap_id)
+
+    result, rows = run_async(go())
+    assert len(submitted) == 1 and result.applied == 1
+    assert rows == []
+
+
+def test_version_reads_refuse_another_apps_product(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    from fastmcp.exceptions import ToolError
+
+    from app.api.v1 import pricing as pricing_routes
+    from app.db.session import async_session_factory
+    from app.mcp import context as mcp_context
+    from app.mcp.server import mcp
+
+    async def go():
+        app_id, iap_id, user_id = await _seed_iap_fixture()
+        monkeypatch.setattr(
+            mcp_context, "get_access_token",
+            lambda: SimpleNamespace(claims={"user_id": str(user_id)}),
+        )
+        missing = iap_id + 999
+        async with async_session_factory() as session:
+            with pytest.raises(HTTPException) as rest:
+                await pricing_routes.list_price_versions(
+                    app_id=app_id, product_kind="iap", product_ref_id=missing,
+                    current_user={"user_id": str(user_id)}, session=session,
+                )
+        tool = await mcp.get_tool("pricing_list_price_versions")
+        with pytest.raises(ToolError):
+            await tool.fn(app_id=app_id, product_kind="iap",
+                          product_ref_id=missing)
+        snapshot = await mcp.get_tool("pricing_snapshot_price_version")
+        with pytest.raises(ToolError, match="sync"):
+            await snapshot.fn(app_id=app_id, product_kind="iap",
+                              product_ref_id=iap_id)
+        return rest.value.status_code
+
+    assert run_async(go()) == 404

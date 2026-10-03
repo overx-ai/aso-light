@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -234,6 +234,34 @@ class PriceApplyRequest(BaseModel):
     # manual price, so the IAP apply path ensures it is present in the
     # submitted ``manualPrices``. Ignored by the subscription apply path.
     base_territory_code: str = "US"
+    # The preview request that produced ``items``, stored verbatim on the
+    # saved price version so the exact config can be re-run later.
+    source_config: PricePreviewRequest | None = None
+    note: str | None = None
+
+
+ProductKind = Literal["subscription", "iap"]
+
+
+class PriceVersionResponse(BaseModel):
+    """One saved price version of a subscription or IAP."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    app_id: int
+    product_kind: ProductKind
+    product_ref_id: int
+    product_id: str
+    version: int
+    source: str
+    config: dict[str, Any] | None
+    base_territory_code: str | None
+    intro_offer: dict[str, Any] | None
+    items: list[dict[str, Any]]
+    result: dict[str, Any] | None
+    note: str | None
+    created_at: datetime
 
 
 class PriceApplySkippedItem(BaseModel):

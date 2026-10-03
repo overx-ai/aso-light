@@ -122,6 +122,11 @@ function SubscriptionsTab({ appId }: { appId: string }) {
   );
 
   const [preview, setPreview] = useState<PricePreviewResponse | null>(null);
+  const [previewRequest, setPreviewRequest] = useState<PricePreviewRequest | null>(null);
+  const handleClearPreview = useCallback(() => {
+    setPreview(null);
+    setPreviewRequest(null);
+  }, []);
   const [manualTerritories, setManualTerritories] = useState<Set<string>>(new Set());
   const [manualItems, setManualItems] = useState<Map<string, PricePreviewItem>>(new Map());
   const [forcedTerritories, setForcedTerritories] = useState<Set<string>>(new Set());
@@ -199,17 +204,17 @@ function SubscriptionsTab({ appId }: { appId: string }) {
   const handleGroupChange = useCallback(
     (value: string | null) => {
       setSelectedGroupId(value);
-      setPreview(null);
+      handleClearPreview();
     },
-    [setSelectedGroupId],
+    [setSelectedGroupId, handleClearPreview],
   );
 
   const handleSubChange = useCallback(
     (value: string | null) => {
       setSelectedSubId(value);
-      setPreview(null);
+      handleClearPreview();
     },
-    [setSelectedSubId],
+    [setSelectedSubId, handleClearPreview],
   );
 
   const handlePreview = useCallback(
@@ -217,7 +222,10 @@ function SubscriptionsTab({ appId }: { appId: string }) {
       previewMutation.mutate(
         { appId: pAppId, subId: pSubId, data },
         {
-          onSuccess: (result) => setPreview(result),
+          onSuccess: (result) => {
+            setPreview(result);
+            setPreviewRequest(data);
+          },
         },
       );
     },
@@ -238,20 +246,19 @@ function SubscriptionsTab({ appId }: { appId: string }) {
           data: {
             items,
             ...(introOffer ? { intro_offer: introOffer } : {}),
+            source_config: previewRequest,
           },
         },
         {
           onSuccess: () => {
-            setPreview(null);
+            handleClearPreview();
             setForcedTerritories(new Set());
           },
         },
       );
     },
-    [applyMutation],
+    [applyMutation, previewRequest, handleClearPreview],
   );
-
-  const handleClearPreview = useCallback(() => setPreview(null), []);
 
   const handleToggleManual = useCallback((territoryCode: string) => {
     setManualTerritories((prev) => {
@@ -659,6 +666,11 @@ function IAPsTab({ appId }: { appId: string }) {
   );
 
   const [preview, setPreview] = useState<IAPPricePreviewResponse | null>(null);
+  const [previewRequest, setPreviewRequest] = useState<PricePreviewRequest | null>(null);
+  const handleClearPreview = useCallback(() => {
+    setPreview(null);
+    setPreviewRequest(null);
+  }, []);
   const [manualTerritories, setManualTerritories] = useState<Set<string>>(new Set());
   const [manualItems, setManualItems] = useState<Map<string, PricePreviewItem>>(new Map());
   const [forcedTerritories, setForcedTerritories] = useState<Set<string>>(new Set());
@@ -701,11 +713,11 @@ function IAPsTab({ appId }: { appId: string }) {
   const handleIapChange = useCallback(
     (value: string | null) => {
       setSelectedIapId(value);
-      setPreview(null);
+      handleClearPreview();
       setManualTerritories(new Set());
       setManualItems(new Map());
     },
-    [setSelectedIapId],
+    [setSelectedIapId, handleClearPreview],
   );
 
   const handlePreview = useCallback(
@@ -714,7 +726,10 @@ function IAPsTab({ appId }: { appId: string }) {
       previewMutation.mutate(
         { appId, iapId: selectedIapId, data },
         {
-          onSuccess: (result) => setPreview(result),
+          onSuccess: (result) => {
+            setPreview(result);
+            setPreviewRequest(data);
+          },
         },
       );
     },
@@ -729,19 +744,17 @@ function IAPsTab({ appId }: { appId: string }) {
     ) => {
       if (!selectedIapId) return;
       applyMutation.mutate(
-        { appId, iapId: selectedIapId, data: { items } },
+        { appId, iapId: selectedIapId, data: { items, source_config: previewRequest } },
         {
           onSuccess: () => {
-            setPreview(null);
+            handleClearPreview();
             setForcedTerritories(new Set());
           },
         },
       );
     },
-    [appId, selectedIapId, applyMutation],
+    [appId, selectedIapId, applyMutation, previewRequest, handleClearPreview],
   );
-
-  const handleClearPreview = useCallback(() => setPreview(null), []);
 
   const handleToggleManual = useCallback((territoryCode: string) => {
     setManualTerritories((prev) => {

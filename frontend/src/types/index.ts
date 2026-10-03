@@ -165,6 +165,25 @@ export interface IntroOfferApplyConfig {
 export interface PriceApplyRequest {
   items: PriceApplyItem[];
   intro_offer?: IntroOfferApplyConfig | null;
+  source_config?: PricePreviewRequest | null;
+  note?: string | null;
+}
+
+export interface PriceVersion {
+  id: number;
+  app_id: number;
+  product_kind: "subscription" | "iap";
+  product_ref_id: number;
+  product_id: string;
+  version: number;
+  source: string;
+  config: PricePreviewRequest | null;
+  base_territory_code: string | null;
+  intro_offer: IntroOfferApplyConfig | null;
+  items: Record<string, unknown>[];
+  result: PriceApplyResponse | null;
+  note: string | null;
+  created_at: string;
 }
 
 export interface PriceApplySkippedItem {

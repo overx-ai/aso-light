@@ -29,6 +29,7 @@ from app.api.v1.pricing import (
     _bulk_sync_localizations,
     _get_territory_map,
     _get_verified_iap as _http_get_verified_iap,
+    _get_verified_product as _http_get_verified_product,
     _get_verified_subscription as _http_get_verified_subscription,
     _get_verified_subscription_group as _http_get_verified_subscription_group,
     _parse_group_localization,
@@ -41,7 +42,7 @@ from app.api.v1.pricing import (
     _upsert_iap_row,
 )
 from app.data.territories import ALPHA2_TO_ALPHA3
-from app.mcp.context import resolve_app, session_scope
+from app.mcp.context import get_user_id, resolve_app, session_scope
 from app.mcp.server import mcp
 from app.models.iap import IAPPrice, InAppPurchase
 from app.models.subscription import (
@@ -78,6 +79,8 @@ from app.schemas.pricing import (
     PricePreviewSkippedItem,
     PriceResolveRequest,
     PriceResolveResponse,
+    PriceVersionResponse,
+    ProductKind,
     ReviewScreenshotResponse,
     SubscriptionAvailabilityResponse,
     SubscriptionCreate,
@@ -103,6 +106,12 @@ from app.services.export.excel import ExcelExportService
 from app.services.pricing.currency import effective_currency
 from app.services.pricing.preview import build_preview_items
 from app.services.pricing.safety import safety_skip_item
+from app.services.pricing.versions import (
+    get_version,
+    list_versions,
+    record_apply_version,
+    record_price_version,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +140,15 @@ async def _get_verified_subscription(subscription_id, app_id, session):
 async def _get_verified_iap(iap_id, app_id, session):
     try:
         return await _http_get_verified_iap(iap_id, app_id, session)
+    except HTTPException as exc:
+        raise ToolError(str(exc.detail)) from exc
+
+
+async def _get_verified_product(product_kind, product_ref_id, app_id, session):
+    try:
+        return await _http_get_verified_product(
+            product_kind, product_ref_id, app_id, session,
+        )
     except HTTPException as exc:
         raise ToolError(str(exc.detail)) from exc
 
@@ -1054,6 +1072,7 @@ async def apply_subscription_prices(
         skipped = 0
         errors: list[str] = []
         skipped_items: list[PriceApplySkippedItem] = []
+        resolved: dict[str, float] = {}
         applied_alpha2: list[str] = []
 
         async with await _get_asc_client_for_app(app, session) as client:
@@ -1094,6 +1113,8 @@ async def apply_subscription_prices(
                         f"{item.price_point_id!r} not found in cached tiers"
                     )
                     continue
+
+                resolved[tc] = new_price
 
                 skip = safety_skip_item(
                     tc,
@@ -1253,7 +1274,7 @@ async def apply_subscription_prices(
                             f"territories failed"
                         )
 
-        return PriceApplyResponse(
+        response = PriceApplyResponse(
             applied=applied,
             failed=failed,
             skipped=skipped,
@@ -1263,6 +1284,22 @@ async def apply_subscription_prices(
             intro_offer_failed=intro_offer_failed,
             intro_offer_error=intro_offer_error,
         )
+        await record_apply_version(
+            session,
+            user_id=get_user_id(),
+            app_id=app.id,
+            product_kind="subscription",
+            product_ref_id=subscription.id,
+            product_id=subscription.product_id,
+            source="mcp",
+            current_prices=current_prices,
+            territory_by_id=territory_by_id,
+            body=body,
+            response=response,
+            resolved=resolved,
+            applied=applied_alpha2,
+        )
+        return response
 
 
 # ==================================================================
@@ -1969,6 +2006,7 @@ async def apply_iap_prices(
         skipped = 0
         errors: list[str] = []
         skipped_items: list[PriceApplySkippedItem] = []
+        resolved: dict[str, float] = {}
         price_entries: list[dict] = []
 
         for item in body.items:
@@ -2008,6 +2046,8 @@ async def apply_iap_prices(
                     f"{item.price_point_id!r} not found in cached tiers"
                 )
                 continue
+
+            resolved[tc] = new_price
 
             skip = safety_skip_item(
                 tc,
@@ -2059,13 +2099,33 @@ async def apply_iap_prices(
                     failed += submitted_count
                     errors.append(f"Batch apply failed: {exc.message}")
 
-        return PriceApplyResponse(
+        response = PriceApplyResponse(
             applied=applied,
             failed=failed,
             skipped=skipped,
             errors=errors,
             skipped_items=skipped_items,
         )
+        await record_apply_version(
+            session,
+            user_id=get_user_id(),
+            app_id=app.id,
+            product_kind="iap",
+            product_ref_id=iap.id,
+            product_id=iap.product_id,
+            source="mcp",
+            current_prices=current_prices,
+            territory_by_id=territory_by_id,
+            body=body,
+            response=response,
+            resolved=resolved,
+            applied=submitted_codes if applied else (),
+            submitted=price_entries,
+            base_territory_code=(
+                ALPHA3_TO_ALPHA2[base_alpha3] if base_alpha3 else None
+            ),
+        )
+        return response
 
 
 @mcp.tool(name="pricing_get_iap_review_screenshot")
@@ -2184,3 +2244,81 @@ async def import_prices_tool(
         for p in parsed
     ]
     return {"count": len(items), "items": items}
+
+
+# ==================================================================
+# Price versions
+# ==================================================================
+
+
+@mcp.tool(name="pricing_list_price_versions")
+async def list_price_versions(
+    app_id: int, product_kind: ProductKind, product_ref_id: int,
+) -> list[PriceVersionResponse]:
+    """Every saved price version of a subscription or IAP, newest first."""
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        await _get_verified_product(product_kind, product_ref_id, app.id, session)
+        rows = await list_versions(
+            session, app_id=app.id, product_kind=product_kind,
+            product_ref_id=product_ref_id,
+        )
+        return [PriceVersionResponse.model_validate(r) for r in rows]
+
+
+@mcp.tool(name="pricing_get_price_version")
+async def get_price_version(app_id: int, version_id: int) -> PriceVersionResponse:
+    """One saved price version: its config and full per-territory price list.
+
+    Re-apply a version by passing its ``items`` (territory_code +
+    price_point_id) to the matching ``pricing_apply_*_prices`` tool.
+    """
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        row = await get_version(session, app_id=app.id, version_id=version_id)
+        if row is None:
+            raise ToolError(f"Price version {version_id} not found")
+        return PriceVersionResponse.model_validate(row)
+
+
+@mcp.tool(name="pricing_snapshot_price_version")
+async def snapshot_price_version(
+    app_id: int,
+    product_kind: ProductKind,
+    product_ref_id: int,
+    note: str | None = None,
+) -> PriceVersionResponse:
+    """Save the cached prices as a ``baseline`` version (sync them first).
+
+    Writes only to aso-light's own DB — Apple is not touched.
+    """
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        product = await _get_verified_product(
+            product_kind, product_ref_id, app.id, session,
+        )
+        if product_kind == "iap":
+            prices_query = select(IAPPrice).where(IAPPrice.iap_id == product.id)
+        else:
+            prices_query = select(SubscriptionPrice).where(
+                SubscriptionPrice.subscription_id == product.id
+            )
+        current_prices = (await session.execute(prices_query)).scalars().all()
+        if not current_prices:
+            raise ToolError(
+                "No cached prices to snapshot — sync this product's prices first"
+            )
+        territory_map = await _get_territory_map(session)
+        row = await record_price_version(
+            session,
+            user_id=get_user_id(),
+            app_id=app.id,
+            product_kind=product_kind,
+            product_ref_id=product.id,
+            product_id=product.product_id,
+            source="baseline",
+            current_prices=current_prices,
+            territory_by_id={t.id: t for t in territory_map.values()},
+            note=note,
+        )
+        return PriceVersionResponse.model_validate(row)

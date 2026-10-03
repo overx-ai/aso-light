@@ -25,6 +25,7 @@ from app.models.metadata import (
 )
 from app.models.personal_access_token import PersonalAccessToken
 from app.models.preset import PricePreset
+from app.models.price_version import PriceVersion
 from app.models.revenuecat_credential import RevenueCatCredential
 from app.models.review_app_map import ReviewAppMap, ReviewResponseMap
 from app.models.review_theme import ReviewThemeCache
@@ -66,6 +67,7 @@ __all__ = [
     "MetadataTranslationCache",
     "PersonalAccessToken",
     "PricePreset",
+    "PriceVersion",
     "RevenueCatCredential",
     "ReviewAppMap",
     "ReviewResponseMap",

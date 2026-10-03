@@ -54,6 +54,8 @@ from app.schemas.pricing import (
     PricePreviewResponse,
     PriceResolveRequest,
     PriceResolveResponse,
+    PriceVersionResponse,
+    ProductKind,
     ReviewScreenshotResponse,
     SubscriptionAvailabilityResponse,
     SubscriptionCreate,
@@ -82,6 +84,11 @@ from app.services.pricing.preview import build_preview_items
 from app.services.pricing.safety import (
     exceeds_safety_band,
     safety_skip_item,
+)
+from app.services.pricing.versions import (
+    get_version,
+    list_versions,
+    record_apply_version,
 )
 
 # Reverse map: Apple territory IDs are alpha-3 (USA, GBR, ARE), our DB
@@ -219,6 +226,15 @@ async def _get_verified_iap(
             detail="In-app purchase not found for this app",
         )
     return iap
+
+
+async def _get_verified_product(
+    product_kind: ProductKind, product_ref_id: int, app_id: int,
+    session: AsyncSession,
+) -> Subscription | InAppPurchase:
+    if product_kind == "iap":
+        return await _get_verified_iap(product_ref_id, app_id, session)
+    return await _get_verified_subscription(product_ref_id, app_id, session)
 
 
 async def _get_territory_map(session: AsyncSession) -> dict[str, Territory]:
@@ -848,6 +864,7 @@ async def apply_subscription_prices(
     skipped = 0
     errors: list[str] = []
     skipped_items: list[PriceApplySkippedItem] = []
+    resolved: dict[str, float] = {}
     applied_alpha2: list[str] = []
 
     logger.info(
@@ -904,6 +921,8 @@ async def apply_subscription_prices(
                     f"{item.price_point_id!r} not found in cached tiers"
                 )
                 continue
+
+            resolved[tc] = new_price
 
             # Safety check: skip if change exceeds ±50% (unless item.force).
             # ``new_price`` is guaranteed non-None here (the unknown-id
@@ -1114,7 +1133,7 @@ async def apply_subscription_prices(
                     intro_offer_failed, len(cached_alpha2), len(applied_alpha2),
                 )
 
-    return PriceApplyResponse(
+    response = PriceApplyResponse(
         applied=applied,
         failed=failed,
         skipped=skipped,
@@ -1124,6 +1143,22 @@ async def apply_subscription_prices(
         intro_offer_failed=intro_offer_failed,
         intro_offer_error=intro_offer_error,
     )
+    await record_apply_version(
+        session,
+        user_id=user_id,
+        app_id=app.id,
+        product_kind="subscription",
+        product_ref_id=subscription.id,
+        product_id=subscription.product_id,
+        source="api",
+        current_prices=current_prices,
+        territory_by_id=territory_by_id,
+        body=body,
+        response=response,
+        resolved=resolved,
+        applied=applied_alpha2,
+    )
+    return response
 
 
 # ------------------------------------------------------------------
@@ -1815,6 +1850,7 @@ async def apply_iap_prices(
     skipped = 0
     errors: list[str] = []
     skipped_items: list[PriceApplySkippedItem] = []
+    resolved: dict[str, float] = {}
     price_entries: list[dict] = []
 
     for item in body.items:
@@ -1861,6 +1897,8 @@ async def apply_iap_prices(
                 f"{item.price_point_id!r} not found in cached tiers"
             )
             continue
+
+        resolved[tc] = new_price
 
         # Safety check: skip if change exceeds ±50% (unless item.force)
         skip = safety_skip_item(
@@ -1930,13 +1968,33 @@ async def apply_iap_prices(
                     iap_id, exc.status_code, exc.message, exc.response_body,
                 )
 
-    return PriceApplyResponse(
+    response = PriceApplyResponse(
         applied=applied,
         failed=failed,
         skipped=skipped,
         errors=errors,
         skipped_items=skipped_items,
     )
+    await record_apply_version(
+        session,
+        user_id=user_id,
+        app_id=app.id,
+        product_kind="iap",
+        product_ref_id=iap.id,
+        product_id=iap.product_id,
+        source="api",
+        current_prices=current_prices,
+        territory_by_id=territory_by_id,
+        body=body,
+        response=response,
+        resolved=resolved,
+        applied=submitted_codes if applied else (),
+        submitted=price_entries,
+        base_territory_code=(
+            ALPHA3_TO_ALPHA2[base_alpha3] if base_alpha3 else None
+        ),
+    )
+    return response
 
 
 # ------------------------------------------------------------------
@@ -3116,3 +3174,46 @@ async def delete_subscription_intro_offer(
             )
         except ASCAPIError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+
+# ------------------------------------------------------------------
+# Price versions
+# ------------------------------------------------------------------
+
+
+@router.get(
+    "/{app_id}/price-versions",
+    response_model=list[PriceVersionResponse],
+)
+async def list_price_versions(
+    app_id: int,
+    product_kind: ProductKind,
+    product_ref_id: int,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[PriceVersionResponse]:
+    """Every saved price version of one subscription or IAP, newest first."""
+    app = await _get_verified_app(app_id, int(current_user["user_id"]), session)
+    await _get_verified_product(product_kind, product_ref_id, app.id, session)
+    rows = await list_versions(
+        session, app_id=app.id, product_kind=product_kind,
+        product_ref_id=product_ref_id,
+    )
+    return [PriceVersionResponse.model_validate(r) for r in rows]
+
+
+@router.get(
+    "/{app_id}/price-versions/{version_id}",
+    response_model=PriceVersionResponse,
+)
+async def get_price_version(
+    app_id: int,
+    version_id: int,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> PriceVersionResponse:
+    app = await _get_verified_app(app_id, int(current_user["user_id"]), session)
+    row = await get_version(session, app_id=app.id, version_id=version_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Price version not found")
+    return PriceVersionResponse.model_validate(row)
