@@ -52,3 +52,14 @@ or `current` (a baseline). For an IAP, one version is therefore the complete pri
   `pricing_snapshot_price_version` (writes only to our DB).
 - Reads (`pricing_list_price_versions`, `pricing_get_price_version`, `GET /apps/{id}/price-versions[/{vid}]`)
   are owner-scoped and read-only in the consent gate.
+
+## Existing subscribers on a price increase
+
+- **The flag.** `preserve_current_price_on_increase` on a subscription apply sends Apple
+  `preserveCurrentPrice=true`, and only for territories whose price goes **up**. Existing subscribers keep
+  their old price; new subscribers pay the new one.
+- **Decreases always reach everyone**, flag or not.
+- **What the version records.** Each item's `preserve_current_price` is what Apple accepted, not what was
+  requested.
+- **Re-sync before applying.** "Up" is judged against the cached `subscription_prices`, so a stale cache can
+  misjudge a change.

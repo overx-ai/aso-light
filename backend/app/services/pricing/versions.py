@@ -48,6 +48,7 @@ async def record_price_version(
     response: PriceApplyResponse | None = None,
     resolved: dict[str, float] | None = None,
     applied: Collection[str] = (),
+    kept_current_price: Collection[str] = (),
     submitted: Sequence[dict[str, str]] = (),
     base_territory_code: str | None = None,
     note: str | None = None,
@@ -55,7 +56,8 @@ async def record_price_version(
     """Save one version. ``body is None`` records the cached prices as-is.
 
     ``resolved`` maps territory → customer price of the requested price point;
-    ``applied`` holds the territories Apple accepted; ``submitted`` is the IAP
+    ``applied`` holds the territories Apple accepted, ``kept_current_price``
+    those of them sent with ``preserveCurrentPrice``; ``submitted`` is the IAP
     schedule sent to Apple, whose entries outside ``body.items`` are the
     preserved territories.
     """
@@ -70,7 +72,8 @@ async def record_price_version(
         return prev.customer_price if prev else None
 
     def entry(code: str, price_point_id: str | None, price: float | None,
-              origin: str, force: bool = False) -> dict[str, Any]:
+              origin: str, force: bool = False,
+              preserve_current_price: bool = False) -> dict[str, Any]:
         prev = previous.get(code)
         return {
             "territory_code": code,
@@ -80,6 +83,7 @@ async def record_price_version(
             "previous_customer_price": previous_price(code),
             "previous_price_point_id": prev.price_point_id if prev else None,
             "force": force,
+            "preserve_current_price": preserve_current_price,
             "origin": origin,
         }
 
@@ -105,7 +109,8 @@ async def record_price_version(
                 i.territory_code, i.price_point_id,
                 resolved.get(i.territory_code),
                 requested_origin(i.territory_code),
-                i.force,
+                force=i.force,
+                preserve_current_price=i.territory_code in kept_current_price,
             )
             for i in body.items
         ]

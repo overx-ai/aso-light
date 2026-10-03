@@ -238,6 +238,9 @@ class PriceApplyRequest(BaseModel):
     # saved price version so the exact config can be re-run later.
     source_config: PricePreviewRequest | None = None
     note: str | None = None
+    # Subscription-only: existing subscribers keep their price wherever this
+    # apply raises it. Ignored by the IAP apply path.
+    preserve_current_price_on_increase: bool = False
 
 
 ProductKind = Literal["subscription", "iap"]

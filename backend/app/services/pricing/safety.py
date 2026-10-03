@@ -39,6 +39,20 @@ def exceeds_safety_band(
     )
 
 
+def keeps_current_price(
+    on_increase: bool, current_price: float | None, new_price: float | None,
+) -> bool:
+    """Apple's ``preserveCurrentPrice`` for one territory: only on an increase.
+
+    Preserving on a decrease would leave existing subscribers paying the
+    old, higher price.
+    """
+    return (
+        on_increase and current_price is not None and new_price is not None
+        and new_price > current_price
+    )
+
+
 def safety_skip_item(
     territory_code: str,
     *,
