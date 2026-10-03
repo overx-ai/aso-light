@@ -1,7 +1,7 @@
 ---
 id: 011
 title: "A rate-limited page silently truncates a price ladder, and the stub is cached forever"
-status: open
+status: fixed
 severity: high
 created: 2026-10-03
 updated: 2026-10-03
@@ -12,11 +12,10 @@ files: backend/app/services/asc/pricing.py, backend/tests/test_price_ladder_pagi
 
 # BUG 011 - A rate-limited page truncates a price ladder, and the stub is cached forever
 
-> **TL;DR** — `get_iap_price_points` and `get_price_points` page through Apple's price points with a bare
-> `http.get` loop that `break`s on any status ≥ 400. A 429 on page 2 kept page 1 (200 tiers) as if it were
-> the whole ladder, and `PricePointCache` stored it for good. Resolving a price above the 200th tier then
-> snapped to the highest visible one: Refresher's Lifetime shipped at €24.49 in Ireland (target €52.99) and
-> RM 64.90 in Malaysia.
+> **TL;DR** — The price-point pagers `break`ed on any status ≥ 400, so a 429 on page 2 kept page 1 (200
+> tiers) as the whole ladder and `PricePointCache` stored it for good; Refresher's Lifetime shipped at €24.49
+> in Ireland (target €52.99) and RM 64.90 in Malaysia. Every page now retries through `ASCClient._get` and a
+> page that keeps failing raises. Delete truncated cache files once after deploying.
 
 ## Symptom
 - `pricing_resolve_iap_price(IE, 52.99)` on Refresher's Lifetime IAP answers €24.49.
@@ -31,13 +30,15 @@ limiter, retry and backoff (`ASCClient._send`). The first 429 ends the loop, and
 short ladder from a full one.
 
 ## Fix
-Later pages go through `ASCClient._send` (throttle + 429/5xx/network retries + 401 refresh) and
-`_raise_for_asc_error`, so a ladder is either complete or the fetch raises and nothing is cached. The six
-truncated cache files are deleted so they are fetched again.
+`ASCPricingService._price_point_ladder` is the one pager for all three ladders (`get_price_points`,
+`get_price_point_equalizations`, `get_iap_price_points`). Every page, the IAP ladder's first page included,
+goes through `ASCClient._get` (throttle + 429/5xx/network retries + 401 refresh), so a ladder is either
+complete or the fetch raises `ASCAPIError` (`ASCRateLimitError` on a lasting 429) and nothing is cached.
+The eight truncated cache files (IAP IE, MY; subscription KE, KG, KH, KN, SI, SK) are deleted so they are
+fetched again.
 
 ## Regression test
-`backend/tests/test_price_ladder_pagination.py`:
+`backend/tests/test_price_ladder_pagination.py`, for the IAP, subscription and equalization ladders:
+- a first page answered 429 once is retried;
 - a second page answered 429 once is retried, and every tier is returned;
 - a second page that keeps failing raises `ASCAPIError` instead of returning page 1.
-
-Both run for the IAP and subscription ladders.

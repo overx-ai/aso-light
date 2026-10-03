@@ -57,10 +57,27 @@ def _service(monkeypatch, responses: list[httpx.Response]) -> ASCPricingService:
 async def _ladder(service: ASCPricingService, kind: str) -> list[dict]:
     if kind == "iap":
         return await service.get_iap_price_points("iap-1", territory_code="IRL")
+    if kind == "equalization":
+        return await service.get_price_point_equalizations("pp-0")
     return await service.get_price_points("sub-1", territory_code="IRL")
 
 
-@pytest.mark.parametrize("kind", ["iap", "subscription"])
+KINDS = ["iap", "subscription", "equalization"]
+
+
+@pytest.mark.parametrize("kind", KINDS)
+async def test_a_rate_limited_first_page_is_retried(monkeypatch, kind):
+    service = _service(monkeypatch, [
+        httpx.Response(429, json={"errors": [{"detail": "rate limited"}]}),
+        _page([1], None),
+    ])
+
+    ladder = await _ladder(service, kind)
+
+    assert [p["price_point_id"] for p in ladder] == ["pp-1"]
+
+
+@pytest.mark.parametrize("kind", KINDS)
 async def test_a_rate_limited_second_page_is_retried_not_dropped(monkeypatch, kind):
     service = _service(monkeypatch, [
         _page([1, 2], NEXT),
@@ -74,7 +91,7 @@ async def test_a_rate_limited_second_page_is_retried_not_dropped(monkeypatch, ki
     assert {p["currency_code"] for p in ladder} == {"EUR"}
 
 
-@pytest.mark.parametrize("kind", ["iap", "subscription"])
+@pytest.mark.parametrize("kind", KINDS)
 async def test_a_second_page_that_keeps_failing_raises_instead_of_truncating(monkeypatch, kind):
     service = _service(monkeypatch, [_page([1, 2], NEXT)])
 

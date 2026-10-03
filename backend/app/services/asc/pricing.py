@@ -239,6 +239,46 @@ class ASCPricingService:
     # Price Points
     # ------------------------------------------------------------------
 
+    async def _price_point_ladder(self, first_page: dict) -> list[dict]:
+        """Every price point of a listing, enriched with its territory's currency.
+
+        A later page that still fails after the client's retries raises:
+        returning what was read so far would pass a truncated price ladder
+        off as complete (docs/bugs/011).
+        """
+        all_data: list[dict] = []
+        territories_map: dict[str, dict] = {}
+        page: dict | None = first_page
+        while page is not None:
+            all_data.extend(page.get("data", []))
+            for item in page.get("included", []):
+                if item["type"] == "territories":
+                    territories_map[item["id"]] = item
+            next_url = page.get("links", {}).get("next")
+            page = await self.client._get(next_url) if next_url else None
+
+        result: list[dict] = []
+        for pp in all_data:
+            attrs = pp.get("attributes", {})
+            territory_ref = (
+                pp.get("relationships", {})
+                .get("territory", {})
+                .get("data", {})
+            )
+            territory_id = territory_ref.get("id") if territory_ref else None
+            territory_data = territories_map.get(territory_id, {}) if territory_id else {}
+
+            result.append({
+                "price_point_id": pp["id"],
+                "territory_code": territory_id,
+                "customer_price": float(attrs.get("customerPrice", 0)),
+                "proceeds": float(attrs.get("proceeds", 0)),
+                "currency_code": territory_data.get("attributes", {}).get(
+                    "currency", ""
+                ),
+            })
+        return result
+
     async def get_price_points(
         self,
         subscription_id: str,
@@ -271,50 +311,7 @@ class ASCPricingService:
             params=params,
         )
 
-        # Build territory lookup from included
-        included = response.get("included", [])
-        territories_map: dict[str, dict] = {}
-        for item in included:
-            if item["type"] == "territories":
-                territories_map[item["id"]] = item
-
-        # Paginate manually since we need included data
-        all_data = list(response.get("data", []))
-        next_url = response.get("links", {}).get("next")
-        while next_url:
-            client = await self.client._get_client()
-            raw = await client.get(next_url)
-            if raw.status_code >= 400:
-                break
-            page = raw.json()
-            all_data.extend(page.get("data", []))
-            for item in page.get("included", []):
-                if item["type"] == "territories":
-                    territories_map[item["id"]] = item
-            next_url = page.get("links", {}).get("next")
-
-        result: list[dict] = []
-        for pp in all_data:
-            attrs = pp.get("attributes", {})
-            territory_ref = (
-                pp.get("relationships", {})
-                .get("territory", {})
-                .get("data", {})
-            )
-            territory_id = territory_ref.get("id") if territory_ref else None
-            territory_data = territories_map.get(territory_id, {}) if territory_id else {}
-
-            result.append({
-                "price_point_id": pp["id"],
-                "territory_code": territory_id,
-                "customer_price": float(attrs.get("customerPrice", 0)),
-                "proceeds": float(attrs.get("proceeds", 0)),
-                "currency_code": territory_data.get("attributes", {}).get(
-                    "currency", ""
-                ),
-            })
-
-        return result
+        return await self._price_point_ladder(response)
 
     # ------------------------------------------------------------------
     # Price Point Equalizations
@@ -343,48 +340,7 @@ class ASCPricingService:
             },
         )
 
-        included = response.get("included", [])
-        territories_map: dict[str, dict] = {}
-        for item in included:
-            if item["type"] == "territories":
-                territories_map[item["id"]] = item
-
-        all_data = list(response.get("data", []))
-        next_url = response.get("links", {}).get("next")
-        while next_url:
-            client = await self.client._get_client()
-            raw = await client.get(next_url)
-            if raw.status_code >= 400:
-                break
-            page = raw.json()
-            all_data.extend(page.get("data", []))
-            for item in page.get("included", []):
-                if item["type"] == "territories":
-                    territories_map[item["id"]] = item
-            next_url = page.get("links", {}).get("next")
-
-        result: list[dict] = []
-        for pp in all_data:
-            attrs = pp.get("attributes", {})
-            territory_ref = (
-                pp.get("relationships", {})
-                .get("territory", {})
-                .get("data", {})
-            )
-            territory_id = territory_ref.get("id") if territory_ref else None
-            territory_data = territories_map.get(territory_id, {}) if territory_id else {}
-
-            result.append({
-                "price_point_id": pp["id"],
-                "territory_code": territory_id,
-                "customer_price": float(attrs.get("customerPrice", 0)),
-                "proceeds": float(attrs.get("proceeds", 0)),
-                "currency_code": territory_data.get("attributes", {}).get(
-                    "currency", ""
-                ),
-            })
-
-        return result
+        return await self._price_point_ladder(response)
 
     # ------------------------------------------------------------------
     # Create / Update Subscription Price
@@ -879,7 +835,6 @@ class ASCPricingService:
         Returns:
             List of enriched price point dicts with territory info.
         """
-        http = await self.client._get_client()
         base_v2 = self.client.BASE_URL.replace("/v1", "/v2")
 
         params_parts = [
@@ -892,55 +847,8 @@ class ASCPricingService:
             params_parts.append(f"filter[territory]={territory_code}")
 
         url = f"{base_v2}/inAppPurchases/{iap_id}/pricePoints?{'&'.join(params_parts)}"
-
-        raw = await http.get(url)
-        _raise_for_asc_error(raw)
-
-        response = raw.json()
-
-        # Build territory lookup from included
-        included = response.get("included", [])
-        territories_map: dict[str, dict] = {}
-        for item in included:
-            if item["type"] == "territories":
-                territories_map[item["id"]] = item
-
-        # Paginate manually since we need included data
-        all_data = list(response.get("data", []))
-        next_url = response.get("links", {}).get("next")
-        while next_url:
-            raw = await http.get(next_url)
-            if raw.status_code >= 400:
-                break
-            page = raw.json()
-            all_data.extend(page.get("data", []))
-            for item in page.get("included", []):
-                if item["type"] == "territories":
-                    territories_map[item["id"]] = item
-            next_url = page.get("links", {}).get("next")
-
-        result: list[dict] = []
-        for pp in all_data:
-            attrs = pp.get("attributes", {})
-            territory_ref = (
-                pp.get("relationships", {})
-                .get("territory", {})
-                .get("data", {})
-            )
-            territory_id = territory_ref.get("id") if territory_ref else None
-            territory_data = territories_map.get(territory_id, {}) if territory_id else {}
-
-            result.append({
-                "price_point_id": pp["id"],
-                "territory_code": territory_id,
-                "customer_price": float(attrs.get("customerPrice", 0)),
-                "proceeds": float(attrs.get("proceeds", 0)),
-                "currency_code": territory_data.get("attributes", {}).get(
-                    "currency", ""
-                ),
-            })
-
-        return result
+        response = await self.client._get(url)
+        return await self._price_point_ladder(response)
 
     # ------------------------------------------------------------------
     # Set IAP Prices (via inAppPurchasePriceSchedules)
