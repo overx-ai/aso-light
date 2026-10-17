@@ -50,6 +50,7 @@ updated: 2026-09-22
 | [010 - MCP Main-Listing Screenshots](specs/010-mcp-main-listing-screenshots.md) | `screenshots_list` / `_upload` / `_delete` for the main product page | done |
 | [011 - App Price Schedules](specs/011-app-price-schedules.md) | Paid-app price schedules — read, preview, apply | draft |
 | [012 - Bulk Locale Creation + Keyword Fixes](specs/012-bulk-locale-creation-and-keyword-research-fixes.md) | `create_missing` on bulk metadata, `keywords_suggestions` storefront header, real `keyword_intel` MCP tools, char-limit dedupe, ASA app scoping | approved |
+| [013 - Screenshots Sync from a Directory](specs/013-screenshots-sync-from-directory.md) | `screenshots_sync` — a studio export dir becomes the version's screenshots; only its display types replaced, Watch untouched | approved |
 
 ## Documentation Tree
 

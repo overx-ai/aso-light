@@ -96,3 +96,12 @@ Do NOT execute any tools in plan mode. Wait for me to switch back to act mode be
 - [docs/007-mcp-integration.md](docs/007-mcp-integration.md) — MCP server, PAT lifecycle, tool reference, client config
 - [docs/015-product-page-optimization.md](docs/015-product-page-optimization.md) — Product Page Optimization (App Store Version Experiments): CRUD, treatments, screenshot upload, v1/v2 split, results deep-link
 - [docs/017-iap-lifecycle-and-price-schedules.md](docs/017-iap-lifecycle-and-price-schedules.md) — IAP write paths, `familySharable`, the never-priced 404 probe, the whole-schedule-replace apply guard
+
+## Code comments
+
+- **A comment is written only when it is essential to understanding intricate logic** — a non-obvious
+  algorithm, a workaround and why the obvious way fails, an invariant the code cannot state. If the
+  code already says it, the comment is noise and gets deleted.
+- **No boilerplate docstrings.** Nothing on getters, setters, DTOs, config, plumbing, or anything the
+  signature already says. Never a comment "just in case".
+- Comments rot; code does not. A wrong comment is worse than none.
