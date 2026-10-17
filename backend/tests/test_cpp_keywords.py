@@ -121,6 +121,14 @@ def test_keywords_get_lists_the_assigned_and_the_offered_ids(monkeypatch):
     assert (result.keywords, result.available) == (["breathing"], ["breathing", "hrv"])
 
 
+def test_keywords_get_reads_a_live_page_that_has_no_editable_version(monkeypatch):
+    client = _client(["breathing"], ["breathing"], state="APPROVED")
+
+    result = _call(monkeypatch, client, "cpp_keywords_get")
+
+    assert (result.localization_id, result.keywords) == (LOCALIZATION, ["breathing"])
+
+
 def test_keywords_set_diffs_warns_and_refuses_a_keyword_apple_does_not_offer(monkeypatch):
     client = _client(["breathing", "calm"], ["breathing", "calm", "meditation timer"])
 

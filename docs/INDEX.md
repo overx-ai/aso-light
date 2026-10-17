@@ -1,7 +1,7 @@
 ---
 status: current
 created: 2026-04-26
-updated: 2026-09-22
+updated: 2026-10-17
 ---
 
 # Documentation Index
@@ -50,6 +50,7 @@ updated: 2026-09-22
 | [010 - MCP Main-Listing Screenshots](specs/010-mcp-main-listing-screenshots.md) | `screenshots_list` / `_upload` / `_delete` for the main product page | done |
 | [011 - App Price Schedules](specs/011-app-price-schedules.md) | Paid-app price schedules — read, preview, apply | draft |
 | [012 - Bulk Locale Creation + Keyword Fixes](specs/012-bulk-locale-creation-and-keyword-research-fixes.md) | `create_missing` on bulk metadata, `keywords_suggestions` storefront header, real `keyword_intel` MCP tools, char-limit dedupe, ASA app scoping | approved |
+| [017 - CPP Keywords, Promo Text + Previews](specs/017-cpp-keywords-promo-text-and-previews.md) | `cpp_keywords_get` / `cpp_keywords_set`, `cpp_ensure_localization.promotional_text`, app preview sync (`previews_sync`, `cpp_previews_sync`, `experiment_previews_sync`) on the shared `asset_sync.py` engine | done |
 
 ## Documentation Tree
 
@@ -99,6 +100,7 @@ updated: 2026-09-22
 | Metadata components | `frontend/src/components/metadata/*` |
 | CPP service | `backend/app/services/asc/cpp.py` (CRUD + screenshot upload + default/CPP screenshot fetch) |
 | Screenshot helpers + main-listing service | `backend/app/services/asc/screenshots.py` (parent-agnostic set/asset helpers shared by CPP + PPO; `ASCVersionScreenshotService` for the main product page) |
+| Asset-sync engine + app previews | `backend/app/services/asc/asset_sync.py` (`AssetKind`, scan, plan/apply shared by screenshots and previews), `backend/app/services/asc/previews.py` (ffprobe probe + preview services), `backend/app/mcp/tools/previews.py` |
 | Main-listing screenshot MCP tools | `backend/app/mcp/tools/screenshots.py` (`screenshots_list` / `screenshots_upload` / `screenshots_delete` / `screenshots_compare`) |
 | Visual compositor | `backend/app/services/visual/compare.py` (Pillow before/after montage) |
 | ASA→CPP ad wiring | `backend/app/services/asa/cpp_ads.py` + `backend/app/mcp/tools/asa.py` (`asa.assign_cpp` / `asa.unassign_cpp` / `asa.list_cpp_ads`) |

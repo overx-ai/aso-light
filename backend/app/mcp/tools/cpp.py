@@ -17,13 +17,13 @@ from app.api.v1._deps import _get_asc_client_for_app
 from app.mcp.context import resolve_app, session_scope
 from app.mcp.server import mcp
 from app.mcp.tools.screenshots import (
+    SyncBinder,
     asc_tool_error,
     check_delete_selectors,
     delete_from_localization,
     run_screenshot_sync,
 )
 from app.models.app import App
-from app.mcp.tools.screenshots import SyncBinder
 from app.schemas.cpp import (
     CPPEnsureLocalizationResponse,
     CPPKeywordsResponse,

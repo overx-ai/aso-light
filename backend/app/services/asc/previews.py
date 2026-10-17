@@ -35,7 +35,7 @@ from app.services.asc.asset_sync import (
     FileRefused,
     LocalizationAssetService,
     SyncPathError,
-    source_checksum,
+    require_unchanged,
     within_sync_roots,
 )
 from app.services.asc.cpp import CPPSource
@@ -43,6 +43,10 @@ from app.services.asc.experiment import TreatmentSource
 from app.services.asc.screenshots import MainListingSource
 
 _FFPROBE_TIMEOUT_S = 60
+# Only a local file, parsed only by the MP4/MOV demuxer: Apple takes no other
+# container (a renamed MPEG-TS would otherwise pass the probe), and nothing in
+# the file can make ffprobe open a URL.
+_FFPROBE_INPUT_GUARDS = ("-protocol_whitelist", "file", "-format_whitelist", "mov")
 _HASH_CHUNK_BYTES = 8 * 1024 * 1024
 _FRAME_TIME_CODE = re.compile(r"^\d{2}:\d{2}:\d{2}:\d{2}$")
 _ACCEPTED_SIZES = " / ".join(f"{w}x{h}" for w, h in PREVIEW_TYPE_BY_SIZE)
@@ -55,6 +59,7 @@ def run_ffprobe(path: Path) -> dict:
             [
                 settings.FFPROBE_BIN,
                 "-v", "error",
+                *_FFPROBE_INPUT_GUARDS,
                 "-print_format", "json",
                 "-show_format",
                 "-show_streams",
@@ -65,10 +70,10 @@ def run_ffprobe(path: Path) -> dict:
             text=True,
             timeout=_FFPROBE_TIMEOUT_S,
         )
-    except FileNotFoundError as exc:
+    except OSError as exc:
         raise SyncPathError(
-            f"ffprobe is not available at FFPROBE_BIN={settings.FFPROBE_BIN!r}; "
-            "install ffmpeg or point FFPROBE_BIN at it."
+            f"ffprobe is not available at FFPROBE_BIN={settings.FFPROBE_BIN!r} "
+            f"({exc.strerror}); install ffmpeg or point FFPROBE_BIN at it."
         ) from exc
     except subprocess.TimeoutExpired as exc:
         raise FileRefused("ffprobe timed out reading it") from exc
@@ -84,11 +89,19 @@ def _frame_rate(stream: dict) -> Fraction | None:
     for key in ("avg_frame_rate", "r_frame_rate"):
         try:
             rate = Fraction(stream.get(key) or "")
-        except (ValueError, ZeroDivisionError):
+        except (TypeError, ValueError, ZeroDivisionError):
             continue
         if rate > 0:
             return rate
     return None
+
+
+def _probed_number(value: object, cast: type[int] | type[float]) -> int | float:
+    """An ffprobe number, 0 when it is absent or not a number."""
+    try:
+        return cast(value or 0)
+    except (TypeError, ValueError):
+        return cast(0)
 
 
 def preview_type_of(probe: dict) -> str:
@@ -100,17 +113,15 @@ def preview_type_of(probe: dict) -> str:
         raise FileRefused("no video stream")
 
     problems: list[str] = []
-    width, height = int(video.get("width") or 0), int(video.get("height") or 0)
+    width = _probed_number(video.get("width"), int)
+    height = _probed_number(video.get("height"), int)
     preview_type = PREVIEW.type_for_size(width, height)
     if preview_type is None:
         problems.append(
             f"{width}x{height} is not an App Store preview size "
             f"(accepted: {_ACCEPTED_SIZES}, either orientation)"
         )
-    try:
-        duration = float((probe.get("format") or {}).get("duration") or 0)
-    except ValueError:
-        duration = 0.0
+    duration = _probed_number((probe.get("format") or {}).get("duration"), float)
     if not PREVIEW_MIN_S <= duration <= PREVIEW_MAX_S:
         problems.append(f"{duration:.1f} s long, not {PREVIEW_MIN_S}–{PREVIEW_MAX_S} s")
     if video.get("codec_name") != PREVIEW_VIDEO_CODEC:
@@ -122,7 +133,7 @@ def preview_type_of(probe: dict) -> str:
         problems.append(f"{float(rate):.2f} fps, over {PREVIEW_MAX_FPS}")
     if audio is None:
         problems.append("no audio track (Apple wants stereo)")
-    elif int(audio.get("channels") or 0) != PREVIEW_AUDIO_CHANNELS:
+    elif _probed_number(audio.get("channels"), int) != PREVIEW_AUDIO_CHANNELS:
         problems.append(f"{audio.get('channels')}-channel audio, not stereo")
     if problems:
         raise FileRefused("; ".join(problems))
@@ -156,7 +167,10 @@ def _checked_file(path: Path) -> int:
         raise FileRefused("not a file")
     if path.suffix.lower() not in PREVIEW_SUFFIXES:
         raise FileRefused("not an MP4, MOV or M4V file")
-    size = path.stat().st_size
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise FileRefused(f"unreadable ({exc.strerror})") from exc
     if size > PREVIEW_MAX_BYTES:
         raise FileRefused(f"over the {PREVIEW_MAX_BYTES}-byte cap")
     return size
@@ -187,15 +201,13 @@ def read_planned_preview(export_file: ExportFile) -> bytes:
     """The file's bytes, refused unless they still hash to the planned MD5."""
     try:
         _checked_file(export_file.path)
-        data = export_file.path.read_bytes()
+        # One byte past the planned size: a file that grew fails the MD5
+        # without being read whole.
+        with export_file.path.open("rb") as handle:
+            data = handle.read(export_file.size + 1)
     except (FileRefused, OSError) as exc:
         raise ExportChangedError(f"{export_file.path}: {exc}.") from exc
-    if source_checksum(data) != export_file.md5:
-        raise ExportChangedError(
-            f"{export_file.path} changed after it was planned and was not "
-            "uploaded; rerun the sync."
-        )
-    return data
+    return require_unchanged(export_file, data)
 
 
 class PreviewSyncService(LocalizationAssetService):

@@ -53,6 +53,10 @@ CROWDED_CATEGORY_TERMS: tuple[str, ...] = (
     "palm reading",
     "tarot",
 )
+_UNOFFERED_KEYWORD_ERROR = (
+    "Apple offers no such keyword for this locale. A CPP takes "
+    "only keywords from the app's own keyword field."
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +102,16 @@ def crowded_terms(keyword: str) -> list[str]:
     ]
 
 
+def _crowded_warning(keyword: str) -> str | None:
+    terms = crowded_terms(keyword)
+    if not terms:
+        return None
+    return (
+        f"matches the crowded 4.3(b) category {', '.join(terms)}; App Review "
+        "may reject a page that targets it."
+    )
+
+
 def plan_search_keywords(
     requested: list[str], current: list[str], offered: list[str]
 ) -> list[CPPKeywordRow]:
@@ -116,13 +130,7 @@ def plan_search_keywords(
         if not key or key in wanted:
             continue
         wanted.add(key)
-        terms = crowded_terms(keyword)
-        warning = (
-            f"matches the crowded 4.3(b) category {', '.join(terms)}; App Review "
-            "may reject a page that targets it."
-            if terms
-            else None
-        )
+        warning = _crowded_warning(keyword)
         keyword_id = known.get(key)
         if keyword_id is None:
             rows.append(
@@ -130,10 +138,7 @@ def plan_search_keywords(
                     keyword=keyword,
                     action="error",
                     warning=warning,
-                    error=(
-                        "Apple offers no such keyword for this locale. A CPP takes "
-                        "only keywords from the app's own keyword field."
-                    ),
+                    error=_UNOFFERED_KEYWORD_ERROR,
                 )
             )
         else:
@@ -149,6 +154,10 @@ def plan_search_keywords(
 
 def _keyword_linkages(keyword_ids: list[str]) -> dict:
     return {"data": [{"type": _KEYWORD_TYPE, "id": keyword_id} for keyword_id in keyword_ids]}
+
+
+def _search_keywords_path(localization_id: str) -> str:
+    return f"/{_CPP_LOCALIZATION_TYPE}/{localization_id}/relationships/{_SEARCH_KEYWORDS}"
 
 
 class ASCCustomProductPageService:
@@ -477,8 +486,7 @@ class ASCCustomProductPageService:
     async def list_search_keyword_ids(self, localization_id: str) -> list[str]:
         """``GET /v1/appCustomProductPageLocalizations/{id}/relationships/searchKeywords``"""
         linkages = await self.client._get_all_pages(
-            f"/{_CPP_LOCALIZATION_TYPE}/{localization_id}/relationships/{_SEARCH_KEYWORDS}",
-            params={"limit": 200},
+            _search_keywords_path(localization_id), params={"limit": 200}
         )
         return [linkage["id"] for linkage in linkages]
 
@@ -497,7 +505,7 @@ class ASCCustomProductPageService:
         self, localization_id: str, add: list[str], remove: list[str]
     ) -> None:
         """``POST`` then ``DELETE`` the localization's ``searchKeywords`` linkages."""
-        path = f"/{_CPP_LOCALIZATION_TYPE}/{localization_id}/relationships/{_SEARCH_KEYWORDS}"
+        path = _search_keywords_path(localization_id)
         if add:
             await self.client._post(path, json=_keyword_linkages(add))
         if remove:

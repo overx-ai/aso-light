@@ -232,7 +232,8 @@ async def upload_asset(
     Returns:
         The committed asset resource dict.
     """
-    checksum = source_checksum(file_bytes)
+    # Off the event loop: a preview is up to PREVIEW_MAX_BYTES.
+    checksum = await asyncio.to_thread(source_checksum, file_bytes)
 
     reserve_body = {
         "data": {
@@ -611,6 +612,16 @@ class ExportFile:
     md5: str
     size: int
     attributes: dict[str, str] = field(default_factory=dict, hash=False)
+
+
+def require_unchanged(export_file: ExportFile, data: bytes) -> bytes:
+    """``data``, refused unless it still hashes to the planned MD5."""
+    if source_checksum(data) != export_file.md5:
+        raise ExportChangedError(
+            f"{export_file.path} changed after it was planned and was not "
+            "uploaded; rerun the sync."
+        )
+    return data
 
 
 @dataclass

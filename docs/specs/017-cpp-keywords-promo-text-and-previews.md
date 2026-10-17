@@ -1,7 +1,7 @@
 ---
 id: 017
 title: "MCP: CPP search keywords and promotional text; app preview videos synced from a directory"
-status: approved
+status: done
 priority: p1
 created: 2026-10-17
 updated: 2026-10-17
@@ -16,7 +16,7 @@ tasks: []
 
 # 017 - CPP Keywords, CPP Promotional Text and App Preview Sync
 
-> **TL;DR** — Will add three things. CPPs get their own search keywords and promotional text. App preview videos sync from a fastlane-style directory into the listing, a CPP or a PPO treatment, using the screenshot sync's scan, plan and apply engine. Each preview is checked first: 15–30 s, 886×1920 iPhone or 1200×1600 iPad. Pilot: Refresher (6759679041).
+> **TL;DR** — Added CPP promotional text and search keywords: `cpp_keywords_set` links only `appKeywords` ids Apple lists, warns on 4.3(b) crowded terms and is a dry run by default. App previews sync from `<dir>/<locale>/NN_*.mp4` to the listing, a CPP or a PPO treatment, each ffprobe-checked first, on the screenshot engine moved to `asset_sync.py`. Confirm the keyword id format live on Refresher.
 
 **Prerequisites**:
 - [013 - Screenshots sync from a directory](013-screenshots-sync-from-directory.md), [015 - CPP screenshots sync](015-cpp-screenshots-sync.md), [016 - Experiment screenshots sync](016-experiment-screenshots-sync.md). Their scan, plan, apply, allowlist and one-apply guard are reused, not copied.
@@ -83,21 +83,21 @@ tasks: []
 ## Tasks
 | ID | Description | Agent | Depends On | Status | Files |
 |----|-------------|-------|------------|--------|-------|
-| T1 | Confirm the API: `appKeywords` id format and source, `searchKeywords` linkage bodies, `previewType` enums, `appPreviews` reserve and commit fields | dev | — | todo | docs/013-custom-product-pages-and-visual-compare.md |
-| T2 | CPP promotional text write | dev | T1 | todo | backend/app/services/asc/cpp.py, backend/app/mcp/tools/cpp.py |
-| T3 | CPP keywords get/set with the crowded-term warning | dev | T1 | todo | backend/app/services/asc/cpp.py, backend/app/mcp/tools/cpp.py |
-| T4 | Extract `asset_sync.py` from `screenshots.py`, with no behaviour change | dev | — | todo | backend/app/services/asc/asset_sync.py, backend/app/services/asc/screenshots.py |
-| T5 | Preview probe and the three preview sync services and tools | dev | T1, T4 | todo | backend/app/services/asc/previews.py, backend/app/mcp/tools/ |
-| T6 | Tests: promo text PATCH and the 170 limit; keyword diff and warning; preview probe refusals; preview reserve, upload and commit on a mocked ASC | test-writer | T2, T3, T5 | todo | backend/tests/ |
-| T7 | Contract test for the published tool schemas | test-writer | T5 | todo | backend/tests/ |
-| T8 | `docs/PINS.md`: pin the hero 069 export layout | dev | — | todo | docs/PINS.md |
-| T9 | Docs: CPP keywords and previews in docs/013 and docs/015; B-004 moves to done | dev | T5 | todo | docs/ |
+| T1 | Confirm the API: `appKeywords` id format and source, `searchKeywords` linkage bodies, `previewType` enums, `appPreviews` reserve and commit fields | dev | — | done (Apple docs JSON; live Refresher GET not run — see docs/013) | docs/013-custom-product-pages-and-visual-compare.md |
+| T2 | CPP promotional text write | dev | T1 | done | backend/app/services/asc/cpp.py, backend/app/mcp/tools/cpp.py |
+| T3 | CPP keywords get/set with the crowded-term warning | dev | T1 | done | backend/app/services/asc/cpp.py, backend/app/mcp/tools/cpp.py |
+| T4 | Extract `asset_sync.py` from `screenshots.py`, with no behaviour change | dev | — | done | backend/app/services/asc/asset_sync.py, backend/app/services/asc/screenshots.py |
+| T5 | Preview probe and the three preview sync services and tools | dev | T1, T4 | done | backend/app/services/asc/previews.py, backend/app/mcp/tools/ |
+| T6 | Tests: promo text PATCH and the 170 limit; keyword diff and warning; preview probe refusals; preview reserve, upload and commit on a mocked ASC | test-writer | T2, T3, T5 | done | backend/tests/ |
+| T7 | Contract test for the published tool schemas | test-writer | T5 | done (`tests/contract/test_spec_017_tools.py`) | backend/tests/ |
+| T8 | `docs/PINS.md`: pin the hero 069 export layout | dev | — | done | docs/PINS.md |
+| T9 | Docs: CPP keywords and previews in docs/013 and docs/015; B-004 moves to done | dev | T5 | done | docs/ |
 
 ## Acceptance Criteria
-- [ ] `cpp_ensure_localization` writes promotional text. Over 170 chars is refused before any call.
-- [ ] `cpp_keywords_set` dry run shows add/remove/keep and warns on crowded terms; apply makes the linkage calls.
-- [ ] `previews_sync` dry run on a directory of mixed files plans only the files that pass the probe; refusals are named.
-- [ ] A preview applied to a mocked CPP goes reserve → upload → commit, and the MD5 skip makes a second run a no-op.
-- [ ] The screenshot sync tests pass unchanged.
-- [ ] All tests passing
-- [ ] Code review clean
+- [x] `cpp_ensure_localization` writes promotional text. Over 170 chars is refused before any call.
+- [x] `cpp_keywords_set` dry run shows add/remove/keep and warns on crowded terms; apply makes the linkage calls.
+- [x] `previews_sync` dry run on a directory of mixed files plans only the files that pass the probe; refusals are named.
+- [x] A preview applied to a mocked CPP goes reserve → upload → commit, and the MD5 skip makes a second run a no-op.
+- [x] The screenshot sync tests pass unchanged.
+- [x] All tests passing (654 passed; the one failure is bug 005's pinned red test, untouched)
+- [x] Code review clean

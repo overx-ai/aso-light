@@ -61,6 +61,7 @@ from app.services.asc.asset_sync import (  # noqa: F401
     list_set_resources,
     locales_of,
     missing_families,
+    require_unchanged,
     resolve_sync_dir,
     scan_export_dir,
     set_asset_order,
@@ -324,27 +325,32 @@ async def delete_screenshot_set(client: ASCClient, set_id: str) -> None:
 
 
 class VersionNotEditableError(NotEditableError):
-    """Raised when an app has no App Store version accepting screenshot writes.
+    """Raised when an app has no App Store version accepting asset writes.
 
     Carries the offending ``state`` so the caller can name it — a live or
     locked version otherwise surfaces as an opaque 409 from Apple, several
-    calls later.
+    calls later. ``noun`` is the asset kind the write was for.
     """
 
-    def __init__(self, state: str | None, version_string: str | None = None) -> None:
+    def __init__(
+        self,
+        state: str | None,
+        version_string: str | None = None,
+        noun: str = SCREENSHOT.noun,
+    ) -> None:
         self.state = state
         self.version_string = version_string
         label = f" {version_string}" if version_string else ""
         if state is None:
             message = (
-                "This app has no App Store version to attach screenshots to. "
+                f"This app has no App Store version to attach {noun}s to. "
                 "Create a new version in App Store Connect first."
             )
         else:
             message = (
                 f"App Store version{label} is in state {state}, which has no "
-                "editable screenshot sets. Screenshots can only be changed on a "
-                "version in one of: "
+                f"editable {noun} sets. {noun.capitalize()}s can only be changed "
+                "on a version in one of: "
                 f"{', '.join(sorted(EDITABLE_VERSION_STATES))}. Create a new "
                 "version in App Store Connect first."
             )
@@ -449,7 +455,7 @@ class MainListingSource(LocalizationAssetService):
         self.metadata = ASCMetadataService(client)
 
     async def resolve_editable_version(self, asc_app_id: str) -> EditableVersion:
-        """Resolve the version whose screenshots may be edited.
+        """Resolve the version whose screenshots and previews may be edited.
 
         Raises:
             VersionNotEditableError: When no version is in an editable state.
@@ -473,10 +479,11 @@ class MainListingSource(LocalizationAssetService):
 
         newest = _most_recent(await self.metadata.list_app_store_versions(asc_app_id))
         if newest is None:
-            raise VersionNotEditableError(None)
+            raise VersionNotEditableError(None, noun=self.kind.noun)
         raise VersionNotEditableError(
             _version_state(newest),
             (newest.get("attributes", {}) or {}).get("versionString"),
+            noun=self.kind.noun,
         )
 
     async def localizations_by_locale(self, version_id: str) -> dict[str, str]:
@@ -554,9 +561,4 @@ def read_planned_bytes(export_file: ExportFile) -> bytes:
         _, data = _read_export_file(export_file.path)
     except FileRefused as exc:
         raise ExportChangedError(f"{export_file.path}: {exc}.") from exc
-    if source_checksum(data) != export_file.md5:
-        raise ExportChangedError(
-            f"{export_file.path} changed after it was planned and was not "
-            "uploaded; rerun the sync."
-        )
-    return data
+    return require_unchanged(export_file, data)

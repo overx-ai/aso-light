@@ -283,6 +283,19 @@ def test_a_processing_preview_of_the_same_file_is_not_uploaded_again(out, monkey
     assert _writes(client) == []
 
 
+def test_a_live_version_is_refused_naming_previews_before_any_write(out, monkeypatch):
+    directory, _probes = out
+    _video(directory / "en-US" / "01_preview.mp4", "en")
+    client = PreviewASC(
+        versions=[_version(state="READY_FOR_SALE")],
+        localizations={"ver-1": {"en-US": "loc-en"}},
+    )
+
+    with pytest.raises(ToolError, match="READY_FOR_SALE, which has no editable preview sets"):
+        _sync(monkeypatch, client, "previews_sync", directory, apply=True)
+    assert _writes(client) == []
+
+
 def test_a_missing_ffprobe_is_one_clear_error(tmp_path, monkeypatch):
     directory = tmp_path / "previews"
     _video(directory / "en-US" / "01_preview.mp4", "en")

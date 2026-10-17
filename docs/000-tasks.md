@@ -1,7 +1,7 @@
 ---
 status: current
 created: 2026-04-26
-updated: 2026-08-26
+updated: 2026-10-17
 ---
 
 # 000 - Tasks
@@ -49,6 +49,7 @@ updated: 2026-08-26
 | T-010 | Alembic migrations (replace create_all in dev) | Backend | 2026-05-09 | Startup now upgrades via Alembic before seeding territories |
 | T-025 | Bulk locale creation + keyword-research fixes (spec 012) | Backend | 2026-08-24 | R1 `create_missing` on bulk metadata (unblocks 31-locale fan-outs); R2 `X-Apple-Store-Front` header — `keywords_suggestions` had silently returned `[]` since day one; R3 real `keyword_intel_*` MCP tools, 2 mislabeled aliases deleted; R5 single `FIELD_CHAR_LIMITS` + retry-then-raise instead of mid-word truncation; R6 search-term report app-scoped. 331 → 347 tests |
 | T-026 | Main product-page screenshots over MCP (spec 010) | Backend | 2026-08-24 | `screenshots_list` / `_upload` / `_delete`; `delete_screenshot` / `delete_screenshot_set` are the first deletes in the screenshot service layer. `screenshots_list` is the resume/repair primitive for an interrupted bulk run |
+| B-004 | App preview videos (`appPreviewSets`) | Backend | 2026-10-17 | Spec 017: `previews_sync` / `cpp_previews_sync` / `experiment_previews_sync`, ffprobe-checked before any upload; the screenshot sync engine became `services/asc/asset_sync.py`, shared by both kinds |
 
 ## Backlog
 
@@ -57,7 +58,6 @@ updated: 2026-08-26
 | B-001 | Google Play price management | Backend | low | Double scope, not in MVP |
 | B-002 | DeepL / OpenAI / Gemini translation providers | Backend | low | Anthropic shipped in Phase 5; ABC ready — formalize `model_name` property when 2nd provider lands |
 | B-003 | In-App Events management | Backend | low | Phase 6+ |
-| B-004 | App preview videos (`appPreviewSets`) | Backend | low | Review + CPP + PPO + main-listing screenshots all shipped (T-017, spec 013, spec 015, spec 010). Preview *videos* are the remaining gap — same set/asset shape, so `services/asc/screenshots.py` generalizes |
 | B-014 | Hoist `asc_tool_error` into `app/mcp/context.py` | Backend | low | Defined identically in `mcp/tools/cpp.py` + `mcp/tools/screenshots.py`, a third variant in `experiment.py`, atop ~20 inline `except ASCAPIError → ToolError`. **`screenshots.py`'s copy is a superset** (also maps `VersionNotEditableError`) — a naive hoist loses that. Deferred from spec 012 as partial-DRY churn |
 | B-015 | `screenshots_list` reports `complete=True` for a version with zero screenshot sets | Backend | medium | No sets → no display types → no gaps → the "is this submittable?" flag says yes. `total_screenshots: 0` is the only tell. Either require `display_types` or infer required device families |
 | B-016 | `run_providers` continues on a poisoned session | Backend | medium | A provider raising a DB error leaves the session unusable, so every later `upsert_intel` fails too. Pre-existing (inherited verbatim from the REST route); a savepoint per provider fixes it |

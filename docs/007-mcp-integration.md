@@ -356,6 +356,8 @@ fastlane `previews/` layout, and hero-ai's `appstore-exports/previews/<locale>/0
 
 - **Probe first.** Every file is checked with ffprobe (`FFPROBE_BIN`, default `ffprobe`
   on `PATH`) before it is planned. A failure is an `error` row that names each rule broken:
+  - an MP4/MOV container: ffprobe parses it with the MOV demuxer only and opens no URL,
+    so a renamed MPEG-TS is "not a readable video";
   - 15–30 s long;
   - 886×1920 (`IPHONE_67`) or 1200×1600 (`IPAD_PRO_3GEN_129`), either orientation. A
     1290×2796 screenshot-sized export is refused;
