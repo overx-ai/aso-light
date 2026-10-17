@@ -352,7 +352,7 @@ traffic.
 above with `appPreviewSets` as the target ([spec 017](specs/017-cpp-keywords-promo-text-and-previews.md)).
 Each takes `locales?`, `preview_types?` and `apply=false`, and returns the same rows, with
 the `previewType` in `display_type`. The layout is `<dir>/<locale>/NN_*.mp4|mov|m4v`: the
-fastlane `previews/` layout, and hero-ai's `appstore-exports/previews/<locale>/01_preview.mp4`.
+fastlane `previews/` layout, and hero-ai's `appstore-exports/previews/<project_id>/<locale>/01_preview.mp4` (pass the project folder, hero's `export_dir`, as `dir`).
 
 - **Probe first.** Every file is checked with ffprobe (`FFPROBE_BIN`, default `ffprobe`
   on `PATH`) before it is planned. A failure is an `error` row that names each rule broken:
