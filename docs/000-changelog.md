@@ -12,6 +12,12 @@ updated: 2026-09-30
 
 ## [Unreleased]
 
+### Added — CPP search keywords and promotional text; app preview videos from a directory (2026-10-17)
+- **`cpp_keywords_get` / `cpp_keywords_set {app_id, cpp_id, locale, keywords[], apply=false}`** link a Custom Product Page localization's `searchKeywords` to the `appKeywords` ids Apple lists for the app's locale, so the page can rank in organic search ([spec 017](specs/017-cpp-keywords-promo-text-and-previews.md), [docs/013](013-custom-product-pages-and-visual-compare.md)). `set` returns `add` / `remove` / `keep`. A keyword Apple does not offer is an `error` row and blocks the apply; a crowded 4.3(b) term is a `warning`.
+- **`cpp_ensure_localization` takes `promotional_text`** (≤170 characters, refused before any call) and writes it to the editable version's localization.
+- **`previews_sync`, `cpp_previews_sync`, `experiment_previews_sync`** load app preview videos (`<dir>/<locale>/NN_*.mp4`) onto the main listing, a CPP or a PPO treatment ([docs/007](007-mcp-integration.md)). Before any upload, ffprobe (`FFPROBE_BIN`) checks each file: 15–30 s, 886×1920 or 1200×1600, H.264 at ≤30 fps, stereo audio, ≤500 MB. At most 3 per type. A `NN_*.poster.txt` sets the poster frame. Backlog B-004 is closed.
+- The screenshot sync's engine moved into `services/asc/asset_sync.py`, parameterised by an `AssetKind`; screenshots and previews share it. `services/asc/screenshots.py` keeps every public name, and the screenshot tests pass unchanged.
+
 ### Fixed — a PPO test can be submitted, started and stopped (2026-10-02)
 - `experiment_submit_for_review` and `experiment_stop` PATCHed the read-only `state`, and Apple refused them ([bug 010](bugs/010-experiment-submit-patches-read-only-state.md)).
 - A submit now goes through a review submission. It refuses an open submission that already holds other items (REST 409), and a retry after a failed submit reuses the submission already holding the test.

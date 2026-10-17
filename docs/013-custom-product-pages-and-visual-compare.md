@@ -1,14 +1,15 @@
 ---
 status: current
 created: 2026-06-16
-updated: 2026-09-29
+updated: 2026-10-17
 ---
 
 # 013 — Custom Product Pages + Visual Old-vs-New Screenshot Compare
 
 > **TL;DR** — Custom Product Page CRUD plus screenshot upload, a Pillow before/after
 > compositor for judging creative, and ASA wiring so each ad group serves a tailored
-> page. Driven by Refresher's ~3.45% conversion, where screenshots were the bottleneck.
+> page. Since spec 017 a page also takes promotional text, its own organic-search
+> keywords and app preview videos.
 
 ## Context & goal
 
@@ -38,6 +39,71 @@ Resource hierarchy (App Store Connect API):
 - `appCustomProductPageLocalizations` — attrs `{ locale, promotionalText }`; rel `appCustomProductPageVersion`, `appScreenshotSets`, `appPreviewSets`.
   - `GET /v1/appCustomProductPageVersions/{id}/appCustomProductPageLocalizations`, `POST /v1/appCustomProductPageLocalizations`
 - Screenshots reuse the **standard** set/asset model: `appScreenshotSets` (attr `screenshotDisplayType`, rel `appCustomProductPageLocalization`, `appScreenshots`) → `appScreenshots` (3-step reserve→`PUT` to `uploadOperations`→`PATCH uploaded=true`). The DEFAULT page's screenshots live under `appStoreVersionLocalizations/{id}/appScreenshotSets` — add a fetch helper for both.
+
+## Search keywords, promotional text and previews (spec 017)
+
+Since Oct 2025 a CPP can appear in organic search for keywords assigned to it (up to 70
+CPPs per app). Refresher's CPPs must earn that traffic, since paid-ads scaling was ruled
+out. [Spec 017](specs/017-cpp-keywords-promo-text-and-previews.md) added the write paths.
+The shapes below come from Apple's docs JSON, read 2026-10-17
+(`developer.apple.com/tutorials/data/documentation/appstoreconnectapi/<page>.json`).
+
+**Localization.** `appCustomProductPageLocalizations` has the attributes `locale` and
+`promotionalText`. Its `PATCH` takes only `promotionalText`. Its relationships are
+`appCustomProductPageVersion`, `appScreenshotSets`, `appPreviewSets`, `searchKeywords`
+and `placements`.
+
+**`appKeywords`.**
+- The resource is an `id` and `type: appKeywords`, with **no attributes**. `fields[appKeywords]`
+  lists no values, and the schema does not say what the id is. So `cpp_keywords_set`
+  never builds an id: it only links ids that Apple lists.
+- The lists are `GET /v1/apps/{id}/searchKeywords` (the app's keywords;
+  `filter[locale]`, `filter[platform]`, `limit` ≤ 200) and
+  `GET /v1/appStoreVersionLocalizations/{id}/searchKeywords`. For a CPP localization they
+  are `GET …/{id}/searchKeywords` (resources) and `GET …/{id}/relationships/searchKeywords`
+  (linkages).
+- Link and unlink with `POST` / `DELETE /v1/appCustomProductPageLocalizations/{id}/relationships/searchKeywords`.
+  The body is `{"data": [{"type": "appKeywords", "id": …}]}` and the reply is 204. The POST
+  also documents 409 and 422.
+- **Not verified live.** The read-only GET on Refresher's CPP was not run in the
+  implementing session. If Apple's ids turn out opaque, words never match: pass the ids
+  from `cpp_keywords_get.available` instead.
+
+**Tools.**
+- `cpp_ensure_localization {…, promotional_text?}` writes the text with the `PATCH` above.
+  Over 170 characters (`FIELD_CHAR_LIMITS`) is refused before any call, and only an
+  editable version is written.
+- `cpp_keywords_get {app_id, cpp_id, locale}` returns the localization's `keywords` and
+  `available`, the app's ids for that locale. It reads the editable version, or
+  whichever version holds the locale when none is editable.
+- `cpp_keywords_set {app_id, cpp_id, locale, keywords[], apply=false}` diffs the list
+  against the editable version's localization and returns `add` / `remove` / `keep` plus a
+  row per keyword:
+  - A keyword matches an `available` or assigned id when they are equal, ignoring case
+    and repeated spaces. Anything else is an `error` row, and nothing is written while
+    one exists.
+  - `CROWDED_CATEGORY_TERMS` (the 4.3(b) list: dating, flashlight, sound effects,
+    wallpaper, timer, fortune telling, astrology, horoscope, zodiac, palm reading, tarot)
+    is matched as whole words, plurals included. A hit is a `warning` on the row; it
+    never blocks.
+  - `apply` POSTs the adds, DELETEs the removes and reads the set back into `keywords`.
+- `cpp_previews_sync` loads app preview videos onto a page: see [007](007-mcp-integration.md).
+
+**`appPreviewSets` / `appPreviews`.**
+- A set has the attribute `previewType` and links to an `appStoreVersionLocalization`,
+  an `appCustomProductPageLocalization` or an `appStoreVersionExperimentTreatmentLocalization`.
+  These are the same three parents as screenshots.
+- `PreviewType` values: `IPHONE_67`, `IPHONE_65`, `IPHONE_61`, `IPHONE_58`, `IPHONE_55`,
+  `IPHONE_47`, `IPHONE_40`, `IPHONE_35`, `IPAD_PRO_3GEN_129`, `IPAD_PRO_3GEN_11`,
+  `IPAD_PRO_129`, `IPAD_105`, `IPAD_97`, `DESKTOP`, `APPLE_TV`, `APPLE_VISION_PRO`.
+  Apple's 886×1920 iPhone preview goes to `IPHONE_67`, and the 1200×1600 iPad one to
+  `IPAD_PRO_3GEN_129`.
+- Reserve with `POST /v1/appPreviews`. It takes `fileName` and `fileSize` (required),
+  `mimeType` and `previewFrameTimeCode`, plus the `appPreviewSet` relationship. Commit with
+  `PATCH` `uploaded`, `sourceFileChecksum` and, optionally, `previewFrameTimeCode`.
+- On read, `videoDeliveryState` (`AWAITING_UPLOAD`, `UPLOAD_COMPLETE`, `PROCESSING`,
+  `COMPLETE`, `FAILED`) replaces the deprecated `assetDeliveryState`, and
+  `previewFrameImage` replaces `previewImage`.
 
 ## ASA → CPP assignment (Apple Search Ads Campaign Management API)
 - A Custom Product Page ad is an **Ad** inside an ad group that references the CPP id. Endpoint family: `POST /campaigns/{campaignId}/adgroups/{adGroupId}/ads` with the creative referencing `productPageId` (the CPP id) — confirm exact body against the ASA `Ad` schema during impl (`backend/app/services/asa/` already has the authed ASA client + ad-group tools to mirror). List/patch/delete ads on the ad group to manage the link.

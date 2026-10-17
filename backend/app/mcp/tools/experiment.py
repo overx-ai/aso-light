@@ -23,7 +23,7 @@ from fastmcp.exceptions import ToolError
 from app.api.v1._deps import _get_asc_client_for_app
 from app.mcp.context import resolve_app, session_scope
 from app.mcp.server import mcp
-from app.mcp.tools.screenshots import asc_tool_error, run_screenshot_sync
+from app.mcp.tools.screenshots import SyncBinder, asc_tool_error, run_screenshot_sync
 from app.models.app import App
 from app.schemas.experiment import (
     EnsureTreatmentLocalizationResponse,
@@ -44,6 +44,7 @@ from app.services.asc.experiment import (
     ASCExperimentService,
     ExperimentLimitError,
     TreatmentScreenshotService,
+    TreatmentSource,
 )
 from app.services.asc.screenshots import (
     ASCVersionScreenshotService,
@@ -384,6 +385,29 @@ async def upload_treatment_screenshot(
     )
 
 
+def treatment_target(
+    experiment_id: str, treatment_id: str, service_type: type[TreatmentSource]
+) -> SyncBinder:
+    """Bind a sync to one PPO treatment of an experiment that is still editable."""
+
+    async def bind(client: ASCClient, app: App) -> SyncTarget:
+        service = service_type(client)
+        version = await service.editable_treatment(
+            app.asc_app_id, experiment_id, treatment_id
+        )
+        return SyncTarget(
+            service=service,
+            version=version,
+            localizations=await service.localizations_by_locale(treatment_id),
+            label=f"app {app.name or app.asc_app_id}",
+            creatable=await ASCVersionScreenshotService(client).app_locales(
+                app.asc_app_id
+            ),
+        )
+
+    return bind
+
+
 @mcp.tool(name="experiment_screenshots_sync")
 async def sync_experiment_screenshots(
     app_id: int,
@@ -421,25 +445,10 @@ async def sync_experiment_screenshots(
         apply: False (default) returns the plan and writes nothing.
     """
 
-    async def bind(client: ASCClient, app: App) -> SyncTarget:
-        service = TreatmentScreenshotService(client)
-        version = await service.editable_treatment(
-            app.asc_app_id, experiment_id, treatment_id
-        )
-        return SyncTarget(
-            service=service,
-            version=version,
-            localizations=await service.localizations_by_locale(treatment_id),
-            label=f"app {app.name or app.asc_app_id}",
-            creatable=await ASCVersionScreenshotService(client).app_locales(
-                app.asc_app_id
-            ),
-        )
-
     return await run_screenshot_sync(
         app_id,
         dir,
-        bind,
+        treatment_target(experiment_id, treatment_id, TreatmentScreenshotService),
         locales=locales,
         display_types=display_types,
         apply=apply,

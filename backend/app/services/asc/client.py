@@ -283,9 +283,9 @@ class ASCClient:
         """PATCH request."""
         return await self._request("PATCH", path, json=json)
 
-    async def _delete(self, path: str) -> None:
-        """DELETE request."""
-        await self._request("DELETE", path)
+    async def _delete(self, path: str, json: dict | None = None) -> None:
+        """DELETE request; ``json`` is the body of a relationship unlink."""
+        await self._request("DELETE", path, json=json)
 
     async def _put_binary(
         self,

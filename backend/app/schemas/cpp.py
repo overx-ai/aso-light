@@ -18,6 +18,8 @@ call sites.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 # Re-exported from the shared screenshot schema module (single source of truth).
@@ -121,3 +123,44 @@ class CPPEnsureLocalizationResponse(BaseModel):
     version_id: str
     localization_id: str
     locale: str
+    promotional_text: str | None = None
+
+
+# ------------------------------------------------------------------
+# CPP search keywords (spec 017)
+# ------------------------------------------------------------------
+
+
+class CPPKeywordsResponse(BaseModel):
+    """A CPP localization's assigned search keywords, and the ones Apple offers
+    for its locale (only an offered ``appKeywords`` id can be assigned)."""
+
+    cpp_id: str
+    locale: str
+    localization_id: str
+    keywords: list[str] = Field(default_factory=list)
+    available: list[str] = Field(default_factory=list)
+
+
+class CPPKeywordRow(BaseModel):
+    """``warning`` flags a crowded 4.3(b) category term; it never blocks."""
+
+    keyword: str
+    action: Literal["add", "remove", "keep", "error"]
+    warning: str | None = None
+    error: str | None = None
+
+
+class CPPKeywordsSetResult(BaseModel):
+    """``applied`` stays false while any row is an ``error``. After an apply,
+    ``keywords`` is the localization's set read back from Apple."""
+
+    cpp_id: str
+    locale: str
+    localization_id: str
+    applied: bool = False
+    add: list[str] = Field(default_factory=list)
+    remove: list[str] = Field(default_factory=list)
+    keep: list[str] = Field(default_factory=list)
+    rows: list[CPPKeywordRow] = Field(default_factory=list)
+    keywords: list[str] | None = None

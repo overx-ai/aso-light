@@ -1,7 +1,7 @@
 ---
 status: current
 created: 2026-07-21
-updated: 2026-07-21
+updated: 2026-10-17
 ---
 
 # 015 — Product Page Optimization (PPO / App Store Version Experiments)
@@ -97,9 +97,15 @@ fills one treatment from a studio export (`<dir>/<locale>/NN.png`).
   `list_experiments` read.
 - See [docs/007](007-mcp-integration.md) and [spec 016](specs/016-experiment-screenshots-sync.md).
 
+`experiment_previews_sync {app_id, experiment_id, treatment_id, dir, locales?, preview_types?, apply=false}`
+does the same for app preview videos (`<dir>/<locale>/NN_*.mp4`), with the same membership and state
+checks ([spec 017](specs/017-cpp-keywords-promo-text-and-previews.md)). `TreatmentSource` is the
+treatment as a localization source. `TreatmentScreenshotService` and `TreatmentPreviewService`
+(`services/asc/previews.py`) bind it to screenshots and to previews.
+
 ## Known limitations
 - `experiment_upload_treatment_screenshot` and `experiment_ensure_treatment_localization` do not check
   that the experiment is still editable; only the sync does. Apple answers them with a 409.
 - **No programmatic results.** The API has no results/metrics endpoint; results are UI-only (ASC → Analytics → Product Pages). The page deep-links there.
-- **App previews** (`appPreviewSets`) are not yet uploaded through the UI — only screenshots. The video upload flow can be added later using the same shared media path.
+- **App previews** (`appPreviewSets`) upload only through `experiment_previews_sync` (MCP), not the web UI.
 - **Alt app icons** must already ship in the published build; a treatment references an icon by `appIconName`, it does not upload it.

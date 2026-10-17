@@ -11,13 +11,19 @@ Screenshots reuse the standard set/asset model, so the same
 :meth:`ASCCustomProductPageService.get_cpp_screenshots` shaping logic also
 backs :meth:`get_default_screenshots` for the live (default) product page —
 the source for the old-vs-new visual comparison.
+
+A localization also carries its promotional text and, since Oct 2025, its own
+``searchKeywords``: ``appKeywords`` linkages that let the page appear in
+organic search (spec 017).
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
+from app.schemas.cpp import CPPKeywordRow
 from app.services.asc import screenshots as shots
 from app.services.asc.errors import ASCAPIError
 
@@ -29,6 +35,28 @@ if TYPE_CHECKING:
 # ``app.services.asc.screenshots`` (shared with PPO treatment localizations).
 _CPP_LOCALIZATION_TYPE = "appCustomProductPageLocalizations"
 _CPP_SET_RELATIONSHIP = "appCustomProductPageLocalization"
+_KEYWORD_TYPE = "appKeywords"
+_SEARCH_KEYWORDS = "searchKeywords"
+
+# Guideline 4.3(b) saturated categories (bible 07-app-store/01-review-guidelines,
+# 2026-10-16). A CPP keyword hitting one is a review risk the caller weighs.
+CROWDED_CATEGORY_TERMS: tuple[str, ...] = (
+    "dating",
+    "flashlight",
+    "sound effects",
+    "wallpaper",
+    "timer",
+    "fortune telling",
+    "astrology",
+    "horoscope",
+    "zodiac",
+    "palm reading",
+    "tarot",
+)
+_UNOFFERED_KEYWORD_ERROR = (
+    "Apple offers no such keyword for this locale. A CPP takes "
+    "only keywords from the app's own keyword field."
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +86,78 @@ class CPPVersionNotEditableError(shots.NotEditableError):
             f"version in one of: {', '.join(_EDITABLE_VERSION_STATES)}. Create "
             "a new version of the page in App Store Connect first."
         )
+
+
+def _keyword_key(keyword: str) -> str:
+    return " ".join(keyword.split()).casefold()
+
+
+def crowded_terms(keyword: str) -> list[str]:
+    """The 4.3(b) crowded-category terms ``keyword`` contains, as whole words."""
+    folded = _keyword_key(keyword)
+    return [
+        term
+        for term in CROWDED_CATEGORY_TERMS
+        if re.search(rf"\b{re.escape(term)}s?\b", folded)
+    ]
+
+
+def _crowded_warning(keyword: str) -> str | None:
+    terms = crowded_terms(keyword)
+    if not terms:
+        return None
+    return (
+        f"matches the crowded 4.3(b) category {', '.join(terms)}; App Review "
+        "may reject a page that targets it."
+    )
+
+
+def plan_search_keywords(
+    requested: list[str], current: list[str], offered: list[str]
+) -> list[CPPKeywordRow]:
+    """Diff a requested keyword set against a localization's current one.
+
+    Only an id Apple lists (``offered``, or already assigned) can be linked;
+    any other keyword is an ``error`` row, never sent. Matching ignores case
+    and repeated spaces; a row carries Apple's own id.
+    """
+    known = {_keyword_key(keyword_id): keyword_id for keyword_id in [*offered, *current]}
+    assigned = {_keyword_key(keyword_id) for keyword_id in current}
+    wanted: set[str] = set()
+    rows: list[CPPKeywordRow] = []
+    for keyword in requested:
+        key = _keyword_key(keyword)
+        if not key or key in wanted:
+            continue
+        wanted.add(key)
+        warning = _crowded_warning(keyword)
+        keyword_id = known.get(key)
+        if keyword_id is None:
+            rows.append(
+                CPPKeywordRow(
+                    keyword=keyword,
+                    action="error",
+                    warning=warning,
+                    error=_UNOFFERED_KEYWORD_ERROR,
+                )
+            )
+        else:
+            action = "keep" if key in assigned else "add"
+            rows.append(CPPKeywordRow(keyword=keyword_id, action=action, warning=warning))
+    rows.extend(
+        CPPKeywordRow(keyword=keyword_id, action="remove")
+        for keyword_id in current
+        if _keyword_key(keyword_id) not in wanted
+    )
+    return rows
+
+
+def _keyword_linkages(keyword_ids: list[str]) -> dict:
+    return {"data": [{"type": _KEYWORD_TYPE, "id": keyword_id} for keyword_id in keyword_ids]}
+
+
+def _search_keywords_path(localization_id: str) -> str:
+    return f"/{_CPP_LOCALIZATION_TYPE}/{localization_id}/relationships/{_SEARCH_KEYWORDS}"
 
 
 class ASCCustomProductPageService:
@@ -360,6 +460,57 @@ class ASCCustomProductPageService:
             },
         )
 
+    async def update_localization(
+        self, localization_id: str, promotional_text: str
+    ) -> dict:
+        """Write a localization's promotional text.
+
+        ``PATCH /v1/appCustomProductPageLocalizations/{localization_id}``
+        """
+        body = {
+            "data": {
+                "type": _CPP_LOCALIZATION_TYPE,
+                "id": localization_id,
+                "attributes": {"promotionalText": promotional_text},
+            }
+        }
+        response = await self.client._patch(
+            f"/{_CPP_LOCALIZATION_TYPE}/{localization_id}", json=body
+        )
+        return response.get("data", {})
+
+    # ------------------------------------------------------------------
+    # Search keywords (appKeywords linkages)
+    # ------------------------------------------------------------------
+
+    async def list_search_keyword_ids(self, localization_id: str) -> list[str]:
+        """``GET /v1/appCustomProductPageLocalizations/{id}/relationships/searchKeywords``"""
+        linkages = await self.client._get_all_pages(
+            _search_keywords_path(localization_id), params={"limit": 200}
+        )
+        return [linkage["id"] for linkage in linkages]
+
+    async def list_app_keyword_ids(self, asc_app_id: str, locale: str) -> list[str]:
+        """The ``appKeywords`` Apple offers the app for ``locale``.
+
+        ``GET /v1/apps/{id}/searchKeywords?filter[locale]=…``
+        """
+        keywords = await self.client._get_all_pages(
+            f"/apps/{asc_app_id}/{_SEARCH_KEYWORDS}",
+            params={"filter[locale]": locale, "limit": 200},
+        )
+        return [keyword["id"] for keyword in keywords]
+
+    async def link_search_keywords(
+        self, localization_id: str, add: list[str], remove: list[str]
+    ) -> None:
+        """``POST`` then ``DELETE`` the localization's ``searchKeywords`` linkages."""
+        path = _search_keywords_path(localization_id)
+        if add:
+            await self.client._post(path, json=_keyword_linkages(add))
+        if remove:
+            await self.client._delete(path, json=_keyword_linkages(remove))
+
     async def find_or_create_localization_id(
         self, version_id: str, locale: str
     ) -> str:
@@ -600,7 +751,7 @@ class ASCCustomProductPageService:
         )
 
 
-class CPPScreenshotService(shots.LocalizationScreenshotService):
+class CPPSource(shots.LocalizationAssetService):
     """A Custom Product Page as a localization source for the shared sync."""
 
     localization_type = _CPP_LOCALIZATION_TYPE
@@ -615,3 +766,7 @@ class CPPScreenshotService(shots.LocalizationScreenshotService):
 
     async def ensure_localization(self, version_id: str, locale: str) -> str:
         return await self.cpp.find_or_create_localization_id(version_id, locale)
+
+
+class CPPScreenshotService(CPPSource, shots.LocalizationScreenshotService):
+    """A Custom Product Page's screenshots."""

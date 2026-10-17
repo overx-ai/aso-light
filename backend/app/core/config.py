@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
     # Directories screenshots_sync may read an export from (after realpath).
     SCREENSHOT_SYNC_ROOTS: list[str] = [str(Path.home() / "JACK")]
+    # ffprobe probes each app preview before previews_sync plans it.
+    FFPROBE_BIN: str = "ffprobe"
 
     model_config = {
         "env_file": ".env",
