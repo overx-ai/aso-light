@@ -72,8 +72,9 @@ async def sync_version_previews(
 
     Args:
         app_id: The local app id.
-        dir: Absolute path under ``SCREENSHOT_SYNC_ROOTS``, e.g. hero-ai's
-            ``appstore-exports/previews`` or a fastlane ``previews/``.
+        dir: Absolute path under ``SCREENSHOT_SYNC_ROOTS``: one project's
+            hero-ai export (its ``export_dir``,
+            ``appstore-exports/previews/<project_id>``) or a fastlane ``previews/``.
         locales: Sync only these locale directories (default: every one).
         preview_types: Sync only these ``previewType`` values (default: every
             type the files map to). Required when one locale directory mixes two.
