@@ -44,6 +44,7 @@ from app.mcp.tools import (  # noqa: E402, F401
     metadata,
     pricing,
     presets,
+    previews,
     reviews,
     revenuecat,
     screenshots,

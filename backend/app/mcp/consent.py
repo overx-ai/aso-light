@@ -250,6 +250,7 @@ READ_ONLY: frozenset[str] = frozenset({
     # --- custom product pages ---
     "cpp_get",
     "cpp_list",
+    "cpp_keywords_get",
     "cpp_list_screenshots",
     # --- experiments (results are not exposed by Apple; these are config reads) ---
     "experiment_get",

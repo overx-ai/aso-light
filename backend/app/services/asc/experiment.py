@@ -663,7 +663,7 @@ class ExperimentNotEditableError(shots.NotEditableError):
         )
 
 
-class TreatmentScreenshotService(shots.LocalizationScreenshotService):
+class TreatmentSource(shots.LocalizationAssetService):
     """A PPO treatment as a localization source for the shared sync."""
 
     localization_type = _LOCALIZATION_TYPE
@@ -694,3 +694,7 @@ class TreatmentScreenshotService(shots.LocalizationScreenshotService):
         if state not in _EDITABLE_EXPERIMENT_STATES:
             raise ExperimentNotEditableError(experiment_id, state)
         return shots.EditableVersion(id=treatment_id, state=state, version_string=None)
+
+
+class TreatmentScreenshotService(TreatmentSource, shots.LocalizationScreenshotService):
+    """A PPO treatment's screenshots."""

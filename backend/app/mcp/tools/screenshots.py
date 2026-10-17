@@ -19,7 +19,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, nullcontext
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
@@ -42,9 +42,9 @@ from app.schemas.screenshots import (
     ScreenshotUploadResult,
     VersionScreenshotInventory,
     decode_screenshot_payload,
-    is_valid_display_type,
 )
 from app.services.asc.errors import ASCAPIError, ChildResourceNotFoundError
+from app.services.asc.asset_sync import SCREENSHOT, AssetKind, LocalizationAssetService
 from app.services.asc.screenshots import (
     ASSET_STATE_COMPLETE,
     ASSET_STATE_FAILED,
@@ -52,6 +52,7 @@ from app.services.asc.screenshots import (
     EditableVersion,
     ExportChangedError,
     LocalizationScreenshotService,
+    MainListingSource,
     NotEditableError,
     SyncPathError,
     SyncStep,
@@ -97,10 +98,14 @@ async def asc_tool_error() -> AsyncIterator[None]:
 # ==================================================================
 
 
-def _require_display_type(display_type: str) -> None:
+def _require_type(kind: AssetKind, type_value: str) -> None:
     """Reject a typo'd device family before it reaches Apple as a 502."""
-    if not is_valid_display_type(display_type):
-        raise ToolError(f"Unknown display_type '{display_type}'.")
+    if type_value not in kind.valid_types:
+        raise ToolError(f"Unknown {kind.type_param} '{type_value}'.")
+
+
+def _require_display_type(display_type: str) -> None:
+    _require_type(SCREENSHOT, display_type)
 
 
 def _usable(screenshots: list[dict]) -> list[dict]:
@@ -636,18 +641,18 @@ def _progress_label(step: SyncStep) -> str:
 
 
 async def _sync_read_back(
-    service: LocalizationScreenshotService,
+    service: LocalizationAssetService,
     app_id: int,
     version: EditableVersion,
     steps: list[SyncStep],
 ) -> VersionScreenshotInventory:
-    """The 010 inventory of the synced locales and display types, re-read from ASC."""
+    """The 010 inventory of the synced locales and set types, re-read from ASC."""
     # A locale whose localization could not be created has nothing to read back.
     synced = {
         step.locale: step.localization_id for step in steps if step.localization_id
     }
     sets_by_locale = {
-        locale: await service.get_screenshot_sets(localization_id)
+        locale: await service.read_back_sets(localization_id)
         for locale, localization_id in synced.items()
     }
     return _build_inventory(
@@ -662,20 +667,23 @@ async def _sync_read_back(
 
 
 SyncBinder = Callable[["ASCClient", "App"], Awaitable[SyncTarget]]
+SyncResult = TypeVar("SyncResult", bound=ScreenshotSyncResult)
 
 # ponytail: in-process only — the backend runs one worker. More workers need a
 # shared (DB or Redis) lock keyed the same way.
-_APPLYING: set[str] = set()
+_APPLYING: set[tuple[str, str]] = set()
 
 
 @asynccontextmanager
 async def _one_apply_per_page(target: SyncTarget) -> AsyncIterator[None]:
-    # Keyed by the ASC version id alone: it is unique across ASC, so two local
-    # app rows for one ASC app still share the key.
-    key = target.version.id
+    # Keyed by the asset kind and the ASC version id: the id is unique across
+    # ASC, so two local app rows for one ASC app still share the key, while a
+    # preview sync never plans from the screenshot sets another apply writes.
+    noun = target.service.kind.noun
+    key = (noun, target.version.id)
     if key in _APPLYING:
         raise ToolError(
-            f"A screenshot sync is already applying to {target.label} (version "
+            f"A {noun} sync is already applying to {target.label} (version "
             f"{target.version.id}). Wait for it to finish, then run the dry run "
             "again: it plans from what that apply left behind."
         )
@@ -698,27 +706,29 @@ async def _apply_with_progress(
         return await _sync_read_back(target.service, app_id, target.version, steps)
 
 
-async def run_screenshot_sync(
+async def run_asset_sync(
     app_id: int,
     directory: str,
     bind: SyncBinder,
     *,
+    kind: AssetKind,
+    types: list[str] | None,
     locales: list[str] | None,
-    display_types: list[str] | None,
     apply: bool,
-    ctx: Context | None = None,
-) -> ScreenshotSyncResult:
+    ctx: Context | None,
+    result_type: type[SyncResult],
+) -> SyncResult:
     """Scan, plan and (with ``apply``) execute a sync into ``bind``'s target.
 
-    The one sync path behind ``screenshots_sync``, ``cpp_screenshots_sync``
-    and ``experiment_screenshots_sync``.
-    ``bind`` resolves the source's editable version and localizations; the
-    root allowlist runs before it, so a refused ``dir`` makes no ASC call.
-    An apply reports progress per row through ``ctx`` and is refused while
-    another apply writes the same page.
+    The one sync path behind the screenshot and preview syncs of the main
+    listing, a CPP and a PPO treatment. ``bind`` resolves the source's
+    editable version and localizations; the root allowlist runs before it, so
+    a refused ``dir`` makes no ASC call. An apply reports progress per row
+    through ``ctx`` and is refused while another apply of the same kind
+    writes the same page.
     """
-    for display_type in display_types or []:
-        _require_display_type(display_type)
+    for type_value in types or []:
+        _require_type(kind, type_value)
 
     inventory: VersionScreenshotInventory | None = None
     try:
@@ -737,7 +747,7 @@ async def run_screenshot_sync(
                             root,
                             target,
                             locales=locales,
-                            display_types=display_types,
+                            types=types,
                         )
                         other_types = await target.service.plan_sync(scan.steps)
                         rows = [_sync_row(step) for step in scan.steps]
@@ -759,7 +769,7 @@ async def run_screenshot_sync(
     except (SyncPathError, ExportChangedError) as exc:
         raise ToolError(str(exc)) from exc
 
-    return ScreenshotSyncResult(
+    return result_type(
         app_id=app_id,
         dir=str(root),
         version_id=version.id,
@@ -776,15 +786,43 @@ async def run_screenshot_sync(
     )
 
 
-async def _bind_main_listing(client: ASCClient, app: App) -> SyncTarget:
-    service = ASCVersionScreenshotService(client)
-    version = await service.resolve_editable_version(app.asc_app_id)
-    return SyncTarget(
-        service=service,
-        version=version,
-        localizations=await service.localizations_by_locale(version.id),
-        label=f"App Store version {version.version_string or version.id}",
+async def run_screenshot_sync(
+    app_id: int,
+    directory: str,
+    bind: SyncBinder,
+    *,
+    locales: list[str] | None,
+    display_types: list[str] | None,
+    apply: bool,
+    ctx: Context | None = None,
+) -> ScreenshotSyncResult:
+    return await run_asset_sync(
+        app_id,
+        directory,
+        bind,
+        kind=SCREENSHOT,
+        types=display_types,
+        locales=locales,
+        apply=apply,
+        ctx=ctx,
+        result_type=ScreenshotSyncResult,
     )
+
+
+def main_listing_target(service_type: type[MainListingSource]) -> SyncBinder:
+    """Bind a sync to the app's editable App Store version."""
+
+    async def bind(client: ASCClient, app: App) -> SyncTarget:
+        service = service_type(client)
+        version = await service.resolve_editable_version(app.asc_app_id)
+        return SyncTarget(
+            service=service,
+            version=version,
+            localizations=await service.localizations_by_locale(version.id),
+            label=f"App Store version {version.version_string or version.id}",
+        )
+
+    return bind
 
 
 @mcp.tool(name="screenshots_sync")
@@ -832,7 +870,7 @@ async def sync_version_screenshots(
     return await run_screenshot_sync(
         app_id,
         dir,
-        _bind_main_listing,
+        main_listing_target(ASCVersionScreenshotService),
         locales=locales,
         display_types=display_types,
         apply=apply,

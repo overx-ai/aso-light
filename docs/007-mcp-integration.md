@@ -1,18 +1,18 @@
 ---
 status: current
 created: 2026-05-09
-updated: 2026-09-30
+updated: 2026-10-17
 ---
 
 # 007 — MCP Integration
 
-> **TL;DR** — The MCP server at `/mcp` exposing the full REST surface as 187 annotated
+> **TL;DR** — The MCP server at `/mcp` exposing the full REST surface as 200 annotated
 > tools, authenticated with Personal Access Tokens. Read-only tools skip the approval
 > prompt; destructive ones go through a per-operation consent gate. Includes client
 > config and the high-leverage workflows.
 
 ASO-Light ships a Model Context Protocol (MCP) server mounted on the FastAPI
-backend at `/mcp`. It exposes the project's full REST surface (187 tools
+backend at `/mcp`. It exposes the project's full REST surface (200 tools
 across apps, pricing, metadata, keywords, reviews, visibility, RevenueCat,
 ASO audit, swap, etc.) so an LLM client (Claude Desktop, OpenAI MCP client,
 custom agents) can drive the product programmatically.
@@ -117,7 +117,7 @@ Tool names are `<module>_<action>` — **underscores, never dots**. The
 Anthropic tool-name regex is `^[a-zA-Z0-9_-]{1,64}$`, so a dotted name breaks
 Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 
-190 tools across 23 modules:
+200 tools across 24 modules:
 
 | Module        | Tools | Domain                                                           |
 | ------------- | ----- | ---------------------------------------------------------------- |
@@ -129,7 +129,7 @@ Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 | `availability`| 2     | Get / update the app's available territories                     |
 | `clash`       | 1     | Side-by-side competitor comparison                               |
 | `clone`       | 3     | Read and retry clone/swap operations — the status channel for the long-running `swap_*` tools |
-| `cpp`         | 10    | Custom Product Pages: CRUD, localizations, screenshots, a whole export directory in one call (`cpp_screenshots_sync`), consent-gated delete (`cpp_screenshots_delete`) |
+| `cpp`         | 12    | Custom Product Pages: CRUD, localizations + promotional text, organic-search keywords (`cpp_keywords_get` / `cpp_keywords_set`), screenshots, a whole export directory in one call (`cpp_screenshots_sync`), consent-gated delete (`cpp_screenshots_delete`) |
 | `experiment`  | 16    | Product Page Optimization: experiments, treatments, treatment localizations + screenshots, a whole export directory into one treatment (`experiment_screenshots_sync`) |
 | `growth`      | 1     | Ranked growth recommendations (pricing gaps, ASO gaps)           |
 | `indices`     | 3     | GDP / PPP / BigMac / Spotify / Netflix index status & refresh    |
@@ -137,6 +137,7 @@ Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 | `keyword_intel`| 2    | Cached keyword volume/difficulty: read the cache, refresh the providers |
 | `metadata`    | 10    | App-info / version metadata, locale CRUD, bulk apply, AI translate |
 | `presets`     | 5     | Pricing-formula preset CRUD                                      |
+| `previews`    | 3     | App preview videos from an export directory, probed with ffprobe first: main listing (`previews_sync`), a CPP (`cpp_previews_sync`), a PPO treatment (`experiment_previews_sync`) |
 | `pricing`     | 48    | Subscription/IAP/group/intro-offer lifecycle + price CRUD, sync, apply, price points, bulk export/import |
 | `revenuecat`  | 23    | RC credential, products, entitlements, offerings, packages       |
 | `reviews`     | 7     | List, draft reply, translate, post/edit/delete responses         |
@@ -146,8 +147,8 @@ Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 | `visibility`  | 8     | Watches, snapshots, anomalies, share-of-voice                    |
 
 Every tool carries an MCP annotation so a client knows whether to prompt:
-83 are `readOnlyHint` (safe to call unattended, e.g. in plan mode), 38 are
-`destructiveHint` and go through the consent gate below, and the remaining 69
+86 are `readOnlyHint` (safe to call unattended, e.g. in plan mode), 39 are
+`destructiveHint` and go through the consent gate below, and the remaining 75
 are writes that still prompt. The classification lives in
 `backend/app/mcp/consent.py` (`READ_ONLY` / `DESTRUCTIVE`) as an **allowlist**,
 so anything unclassified fails closed — it keeps prompting rather than
@@ -283,7 +284,7 @@ writes. Dry runs are never refused. The guard is in-process, which fits the back
 single worker.
 
 The display type comes from the pixel size, portrait or landscape:
-`DISPLAY_TYPE_BY_SIZE` in `backend/app/services/asc/screenshots.py`. The 6.9"
+`DISPLAY_TYPE_BY_SIZE` in `backend/app/services/asc/asset_sync.py`. The 6.9"
 iPhone's 1320×2868 is filed under `APP_IPHONE_67`, because Apple has no
 `APP_IPHONE_69`. `SCREENSHOT_SYNC_ROOTS` (a JSON list, or comma-separated in `.env`)
 defaults to `~/JACK`.
@@ -292,12 +293,13 @@ defaults to `~/JACK`.
 
 `cpp_screenshots_sync(app_id, cpp_id, dir)` is `screenshots_sync` with a CPP's
 editable version as the target ([spec 015](specs/015-cpp-screenshots-sync.md)).
-Point it at a studio `out/variants/<name>/`. Both tools run one plan/apply path,
-`run_screenshot_sync` in `backend/app/mcp/tools/screenshots.py`. The target is a
-*localization source*, a subclass of `LocalizationScreenshotService`:
-`ASCVersionScreenshotService` for the main listing and `CPPScreenshotService` for a
-page. So the directory rules, the size table, the allowlist, the MD5 skip and the
-read-back above hold unchanged. One difference:
+Point it at a studio `out/variants/<name>/`. Every sync runs one plan/apply path,
+`run_asset_sync` in `backend/app/mcp/tools/screenshots.py`, over the engine in
+`backend/app/services/asc/asset_sync.py` (`LocalizationAssetService`). A service binds
+an asset kind (`LocalizationScreenshotService`, `PreviewSyncService`) to a
+*localization source*: `MainListingSource`, `CPPSource` or `TreatmentSource`. So the
+directory rules, the size table, the allowlist, the MD5 skip and the read-back above
+hold unchanged. One difference:
 
 - A locale directory the page has no localization for is planned as
   `create_localization`. On apply, the localization is created at that locale's
@@ -342,6 +344,46 @@ traffic.
 - There is no `missing_families`: a treatment is judged against the original, so sync
   every family the treatment should show.
 - `version_id` in the reply is the treatment id.
+
+**Ship app preview videos from an export directory**
+
+`previews_sync(app_id, dir)`, `cpp_previews_sync(app_id, cpp_id, dir)` and
+`experiment_previews_sync(app_id, experiment_id, treatment_id, dir)` are the three syncs
+above with `appPreviewSets` as the target ([spec 017](specs/017-cpp-keywords-promo-text-and-previews.md)).
+Each takes `locales?`, `preview_types?` and `apply=false`, and returns the same rows, with
+the `previewType` in `display_type`. The layout is `<dir>/<locale>/NN_*.mp4|mov|m4v`: the
+fastlane `previews/` layout, and hero-ai's `appstore-exports/previews/<locale>/01_preview.mp4`.
+
+- **Probe first.** Every file is checked with ffprobe (`FFPROBE_BIN`, default `ffprobe`
+  on `PATH`) before it is planned. A failure is an `error` row that names each rule broken:
+  - 15–30 s long;
+  - 886×1920 (`IPHONE_67`) or 1200×1600 (`IPAD_PRO_3GEN_129`), either orientation. A
+    1290×2796 screenshot-sized export is refused;
+  - H.264 video at ≤30 fps;
+  - a stereo audio track;
+  - ≤500 MB.
+
+  A missing ffprobe fails the whole call with one message.
+- **Poster frame.** An optional `NN_*.poster.txt` beside the video holds `HH:MM:SS:FF`
+  (default `00:00:05:00`). It goes into the reservation as `previewFrameTimeCode`. Identity
+  is the MD5, so changing only the poster file does not re-upload the video.
+- **Limits.** At most 3 previews per type per locale (`PREVIEW_MAX_PER_TYPE`). The
+  editability rules of each target, the allowlist, the MD5 skip, the `processing` rule for
+  a slot Apple is still transcoding, the read-back and per-row progress are the
+  screenshot sync's.
+- **One apply per page.** The guard is keyed by asset kind and version, so a preview apply
+  and a screenshot apply on one page may run together. `missing_families` is always empty.
+
+The rules live in one place, next to `DISPLAY_TYPE_BY_SIZE`: `PREVIEW_TYPE_BY_SIZE`,
+`PREVIEW_MIN_S`, `PREVIEW_MAX_S`, `PREVIEW_MAX_BYTES` and `PREVIEW_MAX_PER_TYPE` in
+`asset_sync.py`. The probe is `backend/app/services/asc/previews.py`.
+
+**Give a CPP its own search keywords and promotional text**
+
+`cpp_keywords_get` / `cpp_keywords_set` assign a page's organic-search keywords. Only ids
+Apple lists for the app's locale can be linked, and a crowded 4.3(b) term is a warning.
+`cpp_ensure_localization` takes `promotional_text` (≤170). See
+[013](013-custom-product-pages-and-visual-compare.md#search-keywords-promotional-text-and-previews-spec-017).
 
 There are pre-built MCP prompts (`swap_product_safely`, `optimize_keywords`)
 that walk through these flows. Most LLM clients show prompts as quick-pick
