@@ -176,7 +176,8 @@ class ITunesSearchService:
                 batch of searches. When omitted, a short-lived one is created.
 
         Returns:
-            List of dicts with keys: position, app_id, name, bundle_id, icon_url.
+            List of dicts with keys: position, app_id, name, bundle_id, icon_url,
+            rating_count.
         """
         await itunes_throttle()
         if client is not None:
@@ -216,6 +217,7 @@ class ITunesSearchService:
                 "name": result.get("trackName", ""),
                 "bundle_id": result.get("bundleId", ""),
                 "icon_url": result.get("artworkUrl60", ""),
+                "rating_count": result.get("userRatingCount") or 0,
             })
         return results
 

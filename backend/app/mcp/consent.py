@@ -1,6 +1,6 @@
 """Per-operation consent gate for destructive MCP tools.
 
-aso-light drives a real, published App Store listing through 187 agent-callable
+aso-light drives a real, published App Store listing through 188 agent-callable
 tools, several of which are irreversible: ``screenshots_delete`` wipes a device
 family's screenshots and Apple does not hand the binaries back;
 ``metadata_delete_locale`` delists a language; ``swap_subscription_product``
@@ -261,6 +261,9 @@ READ_ONLY: frozenset[str] = frozenset({
     "indices_list_gdp",
     "indices_status",
     "keyword_intel_list",
+    # --- free intel: hints/search reads; pack_fields only caches translations ---
+    "keyword_intel_pack_fields",
+    "keyword_intel_score_free",
     # --- keywords (search/suggestions proxy iTunes, but write nothing) ---
     "keywords_cross_localization",
     "keywords_get_rankings",

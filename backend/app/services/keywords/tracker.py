@@ -25,7 +25,7 @@ DEFAULT_TERRITORY_CODES = ["US"]
 # DB session. NOTE: a future background-task model (enqueue + poll) would be a
 # better home for this fan-out than an in-request loop.
 MAX_RANKING_CHECKS = 250
-_REFRESH_CONCURRENCY = 5
+REFRESH_CONCURRENCY = 5
 
 
 class KeywordRankingTracker:
@@ -120,7 +120,7 @@ class KeywordRankingTracker:
                 )
 
             ranks = await gather_bounded(
-                jobs, _rank, concurrency=_REFRESH_CONCURRENCY,
+                jobs, _rank, concurrency=REFRESH_CONCURRENCY,
             )
 
         recorded = 0

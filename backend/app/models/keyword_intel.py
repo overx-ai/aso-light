@@ -45,6 +45,8 @@ class KeywordIntelCache(Base):
     # Provider's native scale (e.g. ASA's 5–100 popularity). Useful for debugging
     # and for sources with non-linear normalization.
     raw_score: Mapped[int | None] = mapped_column(nullable=True)
+    # "asa" | "hints": which signal volume_score came from after the floor-5 blend.
+    popularity_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     # Provider-specific extras: ad_group_id, impressions, etc. — kept as JSON
     # so we don't churn the schema for each new source.
     extra: Mapped[dict | None] = mapped_column(JSON, nullable=True)

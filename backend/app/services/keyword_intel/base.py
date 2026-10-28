@@ -32,6 +32,7 @@ class KeywordIntel:
     volume_score: int | None = None
     difficulty_score: int | None = None
     raw_score: int | None = None
+    popularity_source: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -53,6 +54,9 @@ class KeywordIntelProvider(ABC):
         self, *, app_id: int, session: AsyncSession, **kwargs: Any,
     ) -> list[KeywordIntel]:
         """Pull intel rows. Implementations may take provider-specific kwargs."""
+
+    async def after_upsert(self, session: AsyncSession) -> None:
+        """Side effects beyond the cache, run once this provider's rows are written."""
 
 
 async def upsert_intel(
@@ -88,6 +92,7 @@ async def upsert_intel(
                     volume_score=r.volume_score,
                     difficulty_score=r.difficulty_score,
                     raw_score=r.raw_score,
+                    popularity_source=r.popularity_source,
                     extra=r.extra or None,
                 )
             )
@@ -95,6 +100,7 @@ async def upsert_intel(
             row.volume_score = r.volume_score
             row.difficulty_score = r.difficulty_score
             row.raw_score = r.raw_score
+            row.popularity_source = r.popularity_source
             row.extra = r.extra or None
         written += 1
     await session.flush()

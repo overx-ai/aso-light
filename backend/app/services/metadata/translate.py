@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal
@@ -50,7 +51,16 @@ FieldKind = Literal[
     "keywords",
     "promotional_text",
     "whats_new",
+    "keyword_variants",
 ]
+
+# Not an ASC field: one search term in, TRANSLATION_VARIANTS native candidates out,
+# one per line. A field kind rather than a new method so translate_with_cache's
+# cache and monthly cap cover it unchanged.
+VARIANTS_FIELD_KIND: Final = "keyword_variants"
+TRANSLATION_VARIANTS: Final[int] = 3
+VARIANT_SEPARATOR: Final[str] = "\n"
+_LIST_MARKER = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s*")
 
 # Applied to a field kind with no documented Apple limit (defensive; every
 # member of ``FieldKind`` is in FIELD_CHAR_LIMITS today).
@@ -384,7 +394,14 @@ def _build_system_prompt(
         f"Field type: {field_kind}. Hard character limit: {char_limit}.",
         ("Output ONLY the translated text — no quotes, explanations, or commentary."),
     ]
-    if field_kind == "keywords":
+    if field_kind == VARIANTS_FIELD_KIND:
+        lines.append(
+            f"This is one App Store search term. Output {TRANSLATION_VARIANTS} "
+            "different terms a native speaker would type into App Store search "
+            "for the same intent, most common first, one per line, lowercase, "
+            "no numbering or commentary.",
+        )
+    elif field_kind == "keywords":
         lines.append(
             "This is the App Store keywords field: comma-separated single-word "
             "search terms. Output comma-separated, no spaces after commas, "
@@ -414,7 +431,14 @@ def _post_process(text: str, field_kind: str) -> str:
     """Field-kind normalization applied to every raw completion."""
     if field_kind == "keywords":
         return _post_process_keywords(text)
+    if field_kind == VARIANTS_FIELD_KIND:
+        return VARIANT_SEPARATOR.join(split_variants(text))
     return text
+
+
+def split_variants(text: str) -> list[str]:
+    cleaned = (_LIST_MARKER.sub("", line).strip().lower() for line in text.splitlines())
+    return list(dict.fromkeys(v for v in cleaned if v))[:TRANSLATION_VARIANTS]
 
 
 def _post_process_keywords(text: str) -> str:

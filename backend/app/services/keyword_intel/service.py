@@ -21,16 +21,18 @@ from app.services.keyword_intel.asa_recommendations import (
 )
 from app.services.keyword_intel.asa_search_terms import ASASearchTermsProvider
 from app.services.keyword_intel.base import KeywordIntelProvider, upsert_intel
+from app.services.keyword_intel.free import FreeIntelProvider
 
 logger = logging.getLogger(__name__)
 
 # Provider order is also the merge priority used by callers that read multiple
 # rows for the same (keyword, locale): later sources override earlier on the
-# same field. Today both free providers slot in; paid providers will be
-# appended without changing this tuple's structure.
+# same field. FreeIntelProvider runs last because its floor-5 blend reads the
+# ASA recommendation rows written earlier in the same refresh.
 PROVIDER_FACTORIES: tuple[type[KeywordIntelProvider], ...] = (
     ASASearchTermsProvider,
     ASARecommendationsProvider,
+    FreeIntelProvider,
 )
 
 # Request bounds, shared by both surfaces so the REST query validators and the
@@ -83,6 +85,7 @@ async def run_providers(
             skipped[instance.name] = str(exc)
             continue
         written = await upsert_intel(session, app_id, rows)
+        await instance.after_upsert(session)
         by_source[instance.name] = written
         total += written
 
@@ -129,6 +132,7 @@ async def list_intel(
             volume_score=r.volume_score,
             difficulty_score=r.difficulty_score,
             raw_score=r.raw_score,
+            popularity_source=r.popularity_source,
             extra=r.extra,
             fetched_at=r.fetched_at,
         )

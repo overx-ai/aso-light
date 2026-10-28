@@ -19,10 +19,12 @@ from app.api.v1.keywords import (
     _build_tracking_response,
     _compute_competitor_keyword_matrix,
 )
+from app.core.config import settings
 from app.mcp.context import get_user_id, resolve_app, session_scope
 from app.mcp.server import mcp
 from app.models.competitor import CompetitorApp
 from app.models.keyword import Keyword, KeywordRanking, KeywordTracking
+from app.models.metadata import AppMetadataLocalization
 from app.models.territory import Territory
 from app.schemas.keyword import (
     CompetitorCreate,
@@ -37,7 +39,21 @@ from app.schemas.keyword import (
     RankDataPoint,
     SearchResult,
 )
-from app.schemas.keyword_intel import KeywordIntelOut, KeywordIntelRefreshOut
+from app.schemas.keyword_intel import (
+    FreeScoreOut,
+    KeywordIntelOut,
+    KeywordIntelRefreshOut,
+    PackFieldsOut,
+)
+from app.services.keyword_intel.free import (
+    DEFAULT_STOREFRONT,
+    MAX_FREE_TERMS,
+    MAX_PACK_LOCALES,
+    MAX_PACK_TERMS,
+    FreeKeywordIntel,
+    asa_popularity_by_term,
+    brand_token,
+)
 from app.services.keyword_intel.service import (
     DEFAULT_DAYS,
     DEFAULT_LIMIT,
@@ -46,13 +62,25 @@ from app.services.keyword_intel.service import (
     list_intel,
     run_providers,
 )
-from app.services.keywords.cross_localization import get_cross_localization_table
+from app.services.keywords.cross_localization import (
+    get_cross_localization_table,
+    get_indexed_locales_for_territory,
+)
 from app.services.keywords.itunes_search import (
     ITunesSearchService,
     is_valid_track_id,
 )
 from app.services.keywords.suggestions import ITunesSuggestionsService
 from app.services.keywords.tracker import KeywordRankingTracker
+from app.services.metadata.translate import (
+    VARIANTS_FIELD_KIND,
+    TranslationOverflowError,
+    TranslationQuotaExceededError,
+    TranslatorUnavailableError,
+    build_translator,
+    split_variants,
+    translate_with_cache,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +375,130 @@ async def refresh_keyword_intel_providers(
             raise ToolError(str(exc)) from exc
 
 
+def _clean_terms(terms: list[str], cap: int) -> list[str]:
+    cleaned = list(dict.fromkeys(t.strip() for t in terms if t and t.strip()))
+    if not 1 <= len(cleaned) <= cap:
+        raise ToolError(f"terms must hold between 1 and {cap} non-empty terms")
+    return cleaned
+
+
+@mcp.tool(name="keyword_intel_score_free")
+async def score_free_keyword_intel(
+    app_id: int,
+    terms: list[str],
+    storefront: str = DEFAULT_STOREFRONT,
+    brand: str | None = None,
+) -> FreeScoreOut:
+    """Free popularity, organic difficulty and competitor title mining for a term list.
+
+    Popularity comes from search-hint prefix depth (0-100, relative, not volume) and is
+    replaced by ASA popularity only where ASA is above its floor of 5;
+    ``popularity_source`` says which. Difficulty uses the iTunes top 10 (rating counts,
+    exact-term titles). ``candidates`` are 1-2-grams mined from those titles and the
+    app's registered competitors, minus stopwords and the brand token (default: first
+    word of the app name). Nothing is tracked or written. Terms are capped per call.
+    """
+    cleaned = _clean_terms(terms, MAX_FREE_TERMS)
+    storefront = storefront.strip().upper()
+    async with session_scope() as session:
+        app = await resolve_app(app_id, session)
+        brand = brand or brand_token(app.name)
+        competitor_titles = (await session.execute(
+            select(CompetitorApp.name).where(CompetitorApp.app_id == app_id)
+        )).scalars().all()
+        asa = await asa_popularity_by_term(session, app_id, storefront)
+    return await FreeKeywordIntel().score_terms(
+        cleaned, storefront,
+        asa_popularity=asa, brand=brand, extra_titles=competitor_titles,
+    )
+
+
+@mcp.tool(name="keyword_intel_pack_fields")
+async def pack_keyword_fields(
+    app_id: int,
+    terms: list[str],
+    storefront: str = DEFAULT_STOREFRONT,
+    source_locale: str = "en-US",
+    locales: list[str] | None = None,
+    name: str | None = None,
+    subtitle: str | None = None,
+) -> PackFieldsOut:
+    """Validate native terms and pack keyword fields for one storefront. Never applies.
+
+    For each target locale (default: the storefront's indexed locales the app has
+    metadata for, else the first one) every term is translated into up to 3 native
+    variants, each scored by search hints; the best wins, a term whose variants all
+    miss is ``not_searched_here``. Hints for 2-letter prefixes of the top validated
+    terms add ``expansion`` candidates. Fields are packed greedily by
+    popularity x (1 - difficulty/100) per char into <=100 chars, skipping words in
+    any name/subtitle and never repeating a word across the storefront's locales.
+    ``name``/``subtitle`` add a planned name/subtitle to that exclusion. Pass
+    ``bulk_preview`` to ``metadata_bulk_preview`` to review the diff.
+    """
+    cleaned = _clean_terms(terms, MAX_PACK_TERMS)
+    storefront = storefront.strip().upper()
+    indexed = get_indexed_locales_for_territory(storefront)
+    if not indexed:
+        raise ToolError(f"No indexed locales are known for storefront {storefront}")
+    unknown = [loc for loc in locales or [] if loc not in indexed]
+    if unknown:
+        raise ToolError(
+            f"Locales {unknown} are not indexed in {storefront}; expected some of {indexed}"
+        )
+
+    async with session_scope() as session:
+        await resolve_app(app_id, session)
+        info_rows = (await session.execute(
+            select(AppMetadataLocalization).where(
+                AppMetadataLocalization.app_id == app_id,
+                AppMetadataLocalization.kind == "app_info",
+                AppMetadataLocalization.locale.in_(indexed),
+            )
+        )).scalars().all()
+        info_by_locale = {r.locale: r for r in info_rows}
+        chosen = list(dict.fromkeys(locales or [])) or (
+            [loc for loc in indexed if loc in info_by_locale] or indexed[:1]
+        )[:MAX_PACK_LOCALES]
+        if len(chosen) > MAX_PACK_LOCALES:
+            raise ToolError(f"At most {MAX_PACK_LOCALES} locales per call")
+
+        names: dict[str, str | None] = {loc: r.name for loc, r in info_by_locale.items()}
+        subtitles: dict[str, str | None] = {loc: r.subtitle for loc, r in info_by_locale.items()}
+        names["planned"], subtitles["planned"] = name, subtitle
+
+        translator = build_translator(settings)
+
+        async def variants_for(term: str, locale: str) -> list[str]:
+            if translator is None:
+                return []
+            try:
+                text, _ = await translate_with_cache(
+                    translator, session, app_id, term, source_locale, locale,
+                    VARIANTS_FIELD_KIND,
+                )
+            except (
+                TranslationQuotaExceededError,
+                TranslatorUnavailableError,
+                TranslationOverflowError,
+            ) as exc:
+                logger.warning(
+                    "Keyword variants unavailable app=%s locale=%s term=%r: %s",
+                    app_id, locale, term, exc,
+                )
+                return []
+            return split_variants(text)
+
+        return await FreeKeywordIntel().build_pack(
+            terms=cleaned,
+            storefront=storefront,
+            source_locale=source_locale,
+            locales=chosen,
+            variants_for=variants_for,
+            names_by_locale=names,
+            subtitles_by_locale=subtitles,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Competitors (app-scoped)
 # ---------------------------------------------------------------------------
@@ -464,14 +616,3 @@ async def list_competitor_keywords(
     """
     return await _check_competitor_keywords(app_id, competitor_id)
 
-
-@mcp.tool(name="keywords_add_competitor_keywords")
-async def add_competitor_keywords(
-    app_id: int,
-    competitor_id: int,
-) -> list[CompetitorKeywordResult]:
-    """Alias for ``keywords.list_competitor_keywords`` — kicks off the
-    SERP-position matrix computation between the competitor and the app's
-    tracked keywords. Naming preserved for spec parity with the REST POST.
-    """
-    return await _check_competitor_keywords(app_id, competitor_id)
