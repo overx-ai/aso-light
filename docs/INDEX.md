@@ -29,7 +29,7 @@ updated: 2026-10-17
 | [006 - Product Swap iOS Integration](006-product-swap-ios-integration.md) | Clone+archive subscription/IAP swap flow + the iOS-side checklist |
 | [007 - MCP Integration](007-mcp-integration.md) | MCP server mounted at `/mcp`, Personal Access Token auth, tool reference, client config |
 | [009 - Reviews Theme Classifier + Reply Queue](009-reviews-theme-classifier.md) | LLM-tagged review themes + severity, priority-sorted reply queue, theme filter chips |
-| [010 - Keyword Intelligence](010-keyword-intelligence.md) | Provider-abstracted volume + difficulty cache; free ASA-derived providers |
+| [010 - Keyword Intelligence](010-keyword-intelligence.md) | Provider-abstracted volume + difficulty cache; ASA-derived + free Apple-hints providers, field packer |
 | [011 - Apple Search Ads Analytics](011-apple-search-ads-analytics.md) | ASA ingest pipeline, KPI dashboard, REST + MCP tools, paid-organic join |
 | [012 - Growth Recommendations Advisor](012-growth-recommendations.md) | Cross-domain recommendation engine powering the Growth page |
 | [013 - Custom Product Pages + Visual Compare](013-custom-product-pages-and-visual-compare.md) | CPP CRUD + screenshot upload, Pillow before/after compositor, ASA→CPP ad-group wiring (`asa.assign_cpp` / `asa.unassign_cpp` / `asa.list_cpp_ads`) |

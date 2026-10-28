@@ -63,6 +63,9 @@ MAX_FREE_TERMS = 25
 MAX_PACK_TERMS = 10
 MAX_PACK_LOCALES = 4
 MAX_VARIANT_STOREFRONTS = 2
+# Hard bound on hint calls per term: tracked keywords may be up to 255 chars, and a match
+# this deep would score near the floor anyway.
+MAX_PREFIX_PROBES = 20
 DIFFICULTY_TOP_N = 10
 MINING_MAX_NGRAM = 2
 LISTING_MAX_NGRAM = 3
@@ -134,7 +137,12 @@ class VariantPick:
 def pick_variant(scored: dict[str, int]) -> VariantPick:
     ranked = sorted(scored.items(), key=lambda kv: -kv[1])
     best, score = ranked[0]
-    return VariantPick(best, score, [t for t, _ in ranked[1:]], score == 0)
+    return VariantPick(
+        best=best,
+        score=score,
+        alternatives=[term for term, _ in ranked[1:]],
+        not_searched_here=score == 0,
+    )
 
 
 def mine_titles(
@@ -199,7 +207,8 @@ class FreeKeywordIntel:
             return cached[1]
 
         score = 0
-        for prefix_len in range(1, len(normalized) + 1):
+        saw_hints = False
+        for prefix_len in range(1, min(len(normalized), MAX_PREFIX_PROBES) + 1):
             if normalized[prefix_len - 1].isspace():
                 continue
             hints = [
@@ -208,6 +217,7 @@ class FreeKeywordIntel:
                     normalized[:prefix_len], storefront.lower(),
                 )
             ]
+            saw_hints = saw_hints or bool(hints)
             if normalized in hints:
                 score = prefix_depth_score(
                     prefix_len, len(normalized),
@@ -215,9 +225,13 @@ class FreeKeywordIntel:
                 )
                 break
 
-        while len(_hint_cache) >= HINT_CACHE_MAX_ENTRIES:
-            del _hint_cache[next(iter(_hint_cache))]
-        _hint_cache[key] = (time.monotonic(), score)
+        # get_suggestions swallows HTTP errors as []; a walk that saw no hints at all is
+        # most likely an outage, and caching its 0 would mark terms unsearched for a day.
+        if saw_hints:
+            _hint_cache.pop(key, None)
+            while len(_hint_cache) >= HINT_CACHE_MAX_ENTRIES:
+                del _hint_cache[next(iter(_hint_cache))]
+            _hint_cache[key] = (time.monotonic(), score)
         return score
 
     async def difficulty(self, term: str, storefront: str) -> tuple[int, list[str]]:
@@ -342,8 +356,9 @@ class FreeKeywordIntel:
             popularity.update(expansion)
 
             async def candidate(item: tuple[str, int]) -> PackCandidate:
-                difficulty, _ = await self.difficulty(item[0], storefront)
-                return PackCandidate(term=item[0], popularity=item[1], difficulty=difficulty)
+                term, term_popularity = item
+                difficulty, _ = await self.difficulty(term, storefront)
+                return PackCandidate(term=term, popularity=term_popularity, difficulty=difficulty)
 
             candidates_by_locale[locale] = await gather_bounded(
                 list(popularity.items()), candidate, concurrency=REFRESH_CONCURRENCY,
@@ -438,12 +453,13 @@ class FreeIntelProvider(KeywordIntelProvider):
             by_storefront.setdefault(storefront_for_locale(keyword.locale), []).append(keyword)
 
         intel = FreeKeywordIntel()
+        brand = brand_token(app.name)
         rows: list[KeywordIntel] = []
         for storefront, group in by_storefront.items():
             result = await intel.score_terms(
                 [k.text for k in group], storefront,
                 asa_popularity=await asa_popularity_by_term(session, app_id, storefront),
-                brand=brand_token(app.name),
+                brand=brand,
             )
             for keyword, score in zip(group, result.scores):
                 self._hints_by_keyword_id[keyword.id] = score.hints_popularity

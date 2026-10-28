@@ -1,7 +1,7 @@
 ---
 status: current
 created: 2026-05-09
-updated: 2026-10-17
+updated: 2026-10-28
 ---
 
 # 007 — MCP Integration
@@ -134,7 +134,7 @@ Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 | `growth`      | 1     | Ranked growth recommendations (pricing gaps, ASO gaps)           |
 | `indices`     | 3     | GDP / PPP / BigMac / Spotify / Netflix index status & refresh    |
 | `keywords`    | 13    | iTunes search/suggestions, keyword tracking, rankings, competitors |
-| `keyword_intel`| 2    | Cached keyword volume/difficulty: read the cache, refresh the providers |
+| `keyword_intel`| 4    | Cached keyword volume/difficulty: read the cache, refresh the providers; free hints scoring (`keyword_intel_score_free`) and keyword-field packing (`keyword_intel_pack_fields`, prompts) |
 | `metadata`    | 10    | App-info / version metadata, locale CRUD, bulk apply, AI translate |
 | `presets`     | 5     | Pricing-formula preset CRUD                                      |
 | `previews`    | 3     | App preview videos from an export directory, probed with ffprobe first: main listing (`previews_sync`), a CPP (`cpp_previews_sync`), a PPO treatment (`experiment_previews_sync`) |

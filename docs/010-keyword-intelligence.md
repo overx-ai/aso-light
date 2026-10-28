@@ -1,15 +1,15 @@
 ---
 status: current
 created: 2026-06-01
-updated: 2026-08-26
+updated: 2026-10-28
 ---
 
 # 010 — Keyword Intelligence
 
 > **TL;DR** — A provider ABC feeding normalized volume and difficulty per keyword/locale
-> into a cache table. Two free Apple-Search-Ads-backed providers ship today; paid ones
-> (MobileAction, AppTweak) slot in behind the same interface. Consumers read the cache,
-> never a provider.
+> into a cache table. Two ASA-backed providers plus a free Apple-hints provider (spec 014)
+> ship today; ASA popularity at its floor (≤5) falls back to the hints score, labelled by
+> `popularity_source`. Consumers read the cache, never a provider.
 
 A pluggable provider abstraction that feeds normalized **volume** + **difficulty**
 scores per keyword/locale into a cache table. Stage 0 ships two free providers
@@ -193,6 +193,8 @@ the rest still run.
 |---|---|---|
 | `keyword_intel_list(app_id, keyword?, locale?, source?, limit=200)` | `GET .../keyword-intel` | Cache read, newest first; `keyword` is a list |
 | `keyword_intel_refresh_providers(app_id, provider?, days=30)` | `POST .../keyword-intel/refresh` | `provider` narrows the run to one source; an unknown name is a `ToolError` |
+| `keyword_intel_score_free(app_id, terms, storefront)` | — | Hints-prefix popularity, organic difficulty, competitor title mining; ≤25 terms; read-only |
+| `keyword_intel_pack_fields(app_id, terms, storefront, source_locale, locales?)` | — | Variant-picks native terms, packs ≤100-char keyword fields per indexed locale, returns a `metadata_bulk_preview` payload; ≤10 terms, ≤4 locales. **Unclassified (prompts)** — it bills AI translations |
 
 Both run the same `resolve_app` ownership chain as every other app-scoped tool
 and share their bodies with the REST routes via
@@ -204,7 +206,27 @@ tracked keywords and writes nothing to this cache. Two mislabeled aliases
 shipped before the real tools existed and were **both deleted**, not renamed —
 each duplicated a `keywords_*` tool verbatim: `keyword_intel_refresh` →
 `keywords_refresh_rankings`, `keyword_intel_list_for_app` →
-`keywords_list_for_app`.
+`keywords_list_for_app`. `keywords_add_competitor_keywords` (an alias of the
+list tool) was removed by spec 014.
+
+---
+
+## Path C — free Apple hints (spec 014)
+
+`FreeIntelProvider` (`services/keyword_intel/free.py`), registered after the ASA
+providers so it can read their fresh rows.
+
+| Signal | How |
+|---|---|
+| Popularity | Shortest search-hint prefix that returns the term (≤`MAX_PREFIX_PROBES` probes), position in the list → 0–100. Also written to the shared `Keyword.popularity` (public data, app-independent) |
+| Blend | ASA popularity above its floor (5) wins, else hints; per-app row carries `popularity_source` = `asa` \| `hints` |
+| Difficulty | iTunes top-10: median rating count (log) + share of titles containing the term |
+| Native terms | Translator returns `TRANSLATION_VARIANTS` (3) options; best hints score wins, all-miss → `not_searched_here` |
+| Packer | `packer.py`, pure: value = popularity × (1 − difficulty/100), greedy by value/len, no name/subtitle words, no repeats across a storefront's indexed locales |
+
+A walk that saw no hints at all (Apple outage) is not cached, so an outage never
+marks terms as unsearched for the hint-cache TTL. Not search volume: a relative
+ranking. Live correlation against ASA has not been measured yet.
 
 ---
 
@@ -270,10 +292,11 @@ Ballpark pricing per vendor (2026):
 | Service ABC | `backend/app/services/keyword_intel/base.py` |
 | Path A provider | `backend/app/services/keyword_intel/asa_recommendations.py` |
 | Path B provider | `backend/app/services/keyword_intel/asa_search_terms.py` |
+| Path C provider + packer | `backend/app/services/keyword_intel/free.py`, `packer.py`, `tokenize.py`, `backend/app/data/stopwords.py` |
 | Schema | `backend/app/schemas/keyword_intel.py` |
 | Shared read/refresh | `backend/app/services/keyword_intel/service.py` (`PROVIDER_FACTORIES`, `run_providers`, `list_intel`) |
 | REST route | `backend/app/api/v1/keyword_intel.py` |
-| MCP tools | `backend/app/mcp/tools/keywords.py` (`keyword_intel_list`, `keyword_intel_refresh_providers`) |
+| MCP tools | `backend/app/mcp/tools/keywords.py` (`keyword_intel_list`, `keyword_intel_refresh_providers`, `keyword_intel_score_free`, `keyword_intel_pack_fields`) |
 | Migration | `backend/alembic/versions/03e831a0b230_add_keyword_intel_cache.py` |
 | Frontend hook + types | `frontend/src/lib/hooks.ts` (`useKeywordIntel`, `useRefreshKeywordIntel`, `bestIntelByKeyword`) |
 | Frontend consumer | `frontend/src/components/metadata/MetadataGrid.tsx` |

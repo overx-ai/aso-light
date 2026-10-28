@@ -261,8 +261,7 @@ READ_ONLY: frozenset[str] = frozenset({
     "indices_list_gdp",
     "indices_status",
     "keyword_intel_list",
-    # --- free intel: hints/search reads; pack_fields only caches translations ---
-    "keyword_intel_pack_fields",
+    # pack_fields is left unclassified like metadata_translate: it bills AI translations.
     "keyword_intel_score_free",
     # --- keywords (search/suggestions proxy iTunes, but write nothing) ---
     "keywords_cross_localization",

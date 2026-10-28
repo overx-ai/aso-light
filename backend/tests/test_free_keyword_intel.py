@@ -79,6 +79,44 @@ def test_popularity_stops_on_first_hit_and_misses_score_zero():
     assert miss == 0
 
 
+def test_popularity_does_not_cache_a_walk_that_saw_no_hints():
+    hints = _FakeHints({})
+    intel = FreeKeywordIntel(suggestions=hints, search=None)
+    run_async(intel.popularity("sleep", "US"))
+    hints.by_prefix = {"s": ["sleep"]}
+    assert run_async(intel.popularity("sleep", "US")) == 100
+
+
+class _LowCompetitionSearch:
+    async def search_apps(self, term, country="us", limit=200, *, client=None):
+        return [{"name": "Other", "rating_count": 10}]
+
+
+def test_build_pack_validates_variants_and_packs_each_locale():
+    hints = _FakeHints({"sl": ["sleep timer", "sleep"], "te": ["temporizador"]})
+    intel = FreeKeywordIntel(suggestions=hints, search=_LowCompetitionSearch())
+
+    async def variants_for(term: str, locale: str) -> list[str]:
+        return ["zzqx", "temporizador"] if term == "sleep timer" else []
+
+    out = run_async(intel.build_pack(
+        terms=["sleep timer", "qqqq"],
+        storefront="US",
+        source_locale="en-US",
+        locales=["en-US", "es-MX"],
+        variants_for=variants_for,
+        names_by_locale={},
+        subtitles_by_locale={},
+    ))
+    picks = {(p.locale, p.source_term): p for p in out.picks}
+    assert picks[("es-MX", "sleep timer")].best == "temporizador"
+    assert picks[("es-MX", "sleep timer")].alternatives == ["zzqx"]
+    assert picks[("en-US", "qqqq")].not_searched_here is True
+    assert out.expansion["en-US"] == ["sleep"]
+    assert out.values_by_locale == {"en-US": "sleep,timer", "es-MX": "temporizador"}
+    assert out.bulk_preview["field"] == "keywords"
+
+
 def test_difficulty_rises_with_rating_counts_and_title_matches():
     titles_none = ["Calm", "Headspace", "Balance"]
     titles_all = ["Sleep Timer", "Sleep Timer Pro", "Best Sleep Timer"]

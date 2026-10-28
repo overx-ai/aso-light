@@ -20,6 +20,7 @@ from app.api.v1.keywords import (
     _compute_competitor_keyword_matrix,
 )
 from app.core.config import settings
+from app.data.storefronts import STOREFRONT_ALIASES, STOREFRONTS
 from app.mcp.context import get_user_id, resolve_app, session_scope
 from app.mcp.server import mcp
 from app.models.competitor import CompetitorApp
@@ -382,6 +383,16 @@ def _clean_terms(terms: list[str], cap: int) -> list[str]:
     return cleaned
 
 
+def _clean_storefront(storefront: str) -> str:
+    # get_suggestions silently falls back to US for an unknown storefront, which
+    # would label US hints with the requested code.
+    code = storefront.strip().lower()
+    code = STOREFRONT_ALIASES.get(code, code)
+    if code not in STOREFRONTS:
+        raise ToolError(f"Unknown storefront {storefront!r}; expected an alpha-2 code like US")
+    return code.upper()
+
+
 @mcp.tool(name="keyword_intel_score_free")
 async def score_free_keyword_intel(
     app_id: int,
@@ -399,7 +410,7 @@ async def score_free_keyword_intel(
     word of the app name). Nothing is tracked or written. Terms are capped per call.
     """
     cleaned = _clean_terms(terms, MAX_FREE_TERMS)
-    storefront = storefront.strip().upper()
+    storefront = _clean_storefront(storefront)
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
         brand = brand or brand_token(app.name)
@@ -425,8 +436,8 @@ async def pack_keyword_fields(
 ) -> PackFieldsOut:
     """Validate native terms and pack keyword fields for one storefront. Never applies.
 
-    For each target locale (default: the storefront's indexed locales the app has
-    metadata for, else the first one) every term is translated into up to 3 native
+    For each target locale (default: up to 4 of the storefront's indexed locales the
+    app has metadata for, else the first one) every term is translated into up to 3 native
     variants, each scored by search hints; the best wins, a term whose variants all
     miss is ``not_searched_here``. Hints for 2-letter prefixes of the top validated
     terms add ``expansion`` candidates. Fields are packed greedily by
@@ -436,7 +447,7 @@ async def pack_keyword_fields(
     ``bulk_preview`` to ``metadata_bulk_preview`` to review the diff.
     """
     cleaned = _clean_terms(terms, MAX_PACK_TERMS)
-    storefront = storefront.strip().upper()
+    storefront = _clean_storefront(storefront)
     indexed = get_indexed_locales_for_territory(storefront)
     if not indexed:
         raise ToolError(f"No indexed locales are known for storefront {storefront}")
@@ -456,11 +467,13 @@ async def pack_keyword_fields(
             )
         )).scalars().all()
         info_by_locale = {r.locale: r for r in info_rows}
-        chosen = list(dict.fromkeys(locales or [])) or (
-            [loc for loc in indexed if loc in info_by_locale] or indexed[:1]
-        )[:MAX_PACK_LOCALES]
-        if len(chosen) > MAX_PACK_LOCALES:
-            raise ToolError(f"At most {MAX_PACK_LOCALES} locales per call")
+        if locales:
+            chosen = list(dict.fromkeys(locales))
+            if len(chosen) > MAX_PACK_LOCALES:
+                raise ToolError(f"At most {MAX_PACK_LOCALES} locales per call")
+        else:
+            with_metadata = [loc for loc in indexed if loc in info_by_locale]
+            chosen = (with_metadata or indexed[:1])[:MAX_PACK_LOCALES]
 
         names: dict[str, str | None] = {loc: r.name for loc, r in info_by_locale.items()}
         subtitles: dict[str, str | None] = {loc: r.subtitle for loc, r in info_by_locale.items()}

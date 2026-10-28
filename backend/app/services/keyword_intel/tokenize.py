@@ -25,13 +25,13 @@ def ngrams(
     brand: str | None = None,
 ) -> list[str]:
     """1..max_n-grams; a gram is dropped if it contains the brand or starts/ends with a stopword."""
-    brand_token = brand.casefold() if brand else None
+    folded_brand = brand.casefold() if brand else None
     out: list[str] = []
     for tokens in segments(text):
         for n in range(1, max_n + 1):
             for i in range(len(tokens) - n + 1):
                 gram = tokens[i:i + n]
-                if brand_token in gram:
+                if folded_brand in gram:
                     continue
                 if gram[0] in stopwords or gram[-1] in stopwords:
                     continue

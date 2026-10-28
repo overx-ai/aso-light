@@ -1,7 +1,7 @@
 ---
 id: 014
 title: "Free keyword intel: popularity proxy, organic difficulty, competitor title mining, native-term validation, field packer"
-status: approved
+status: done
 priority: p1
 created: 2026-09-25
 tasks: []
@@ -15,10 +15,10 @@ conflicts_with: []
 
 # 014 - Free Keyword Intel
 
-> **TL;DR** — Without ASA spend, keyword research today has no popularity for an arbitrary term, no
-> organic difficulty, no competitor mining, no native-term check and no field packer. All five can be
-> built from two free Apple endpoints we already call: search hints (MZSearchHints) and iTunes search.
-> Output is a relative ranking, not search volume — Apple publishes volume only via ASA.
+> **TL;DR** — Shipped a free Apple-hints provider: hints-prefix popularity (replaces ASA's floor-5 when
+> ASA has no estimate, labelled `popularity_source`), organic difficulty, title mining, native-term variant
+> picking and a 100-char field packer, via `keyword_intel_score_free` / `keyword_intel_pack_fields`. Live ASA
+> correlation is not measured yet.
 
 **Prerequisites**: [003 - Keyword analysis](../003-keyword-analysis.md), [010 - Keyword intelligence](../010-keyword-intelligence.md)
 
@@ -82,13 +82,13 @@ so cap terms per call.
 ## Tasks
 | ID | Description | Agent | Depends On | Status | Files |
 |----|-------------|-------|------------|--------|-------|
-| T1 | Stopwords + tokenizer (1–3-grams, brand-token drop) | dev | — | todo | backend/app/data/stopwords.py, backend/app/services/keyword_intel/free.py |
-| T2 | Hints-prefix popularity, organic difficulty, title mining, own-listing extraction | dev | T1 | todo | backend/app/services/keyword_intel/free.py |
-| T3 | Register provider; ASA/hints blend + `popularity_source`; write `Keyword.popularity` | dev | T2 | todo | backend/app/services/keyword_intel/service.py, backend/app/models/keyword_intel.py, backend/alembic/versions/ |
-| T4 | Translation variants (`TRANSLATION_VARIANTS`) + variant picker | dev | T2 | todo | backend/app/services/metadata/translate.py, backend/app/services/keyword_intel/free.py |
-| T5 | Field packer (pure) | dev | — | todo | backend/app/services/keyword_intel/packer.py |
-| T6 | MCP `keyword_intel_score_free`, `keyword_intel_pack_fields` (read-only); fix `keywords_add_competitor_keywords` alias | dev | T3, T5 | todo | backend/app/mcp/tools/keywords.py, backend/app/mcp/consent.py |
-| T7 | Tests per Acceptance | test-writer | T6 | todo | backend/tests/ |
+| T1 | Stopwords + tokenizer (1–3-grams, brand-token drop) | dev | — | done | backend/app/data/stopwords.py, backend/app/services/keyword_intel/free.py |
+| T2 | Hints-prefix popularity, organic difficulty, title mining, own-listing extraction | dev | T1 | done | backend/app/services/keyword_intel/free.py |
+| T3 | Register provider; ASA/hints blend + `popularity_source`; write `Keyword.popularity` | dev | T2 | done | backend/app/services/keyword_intel/service.py, backend/app/models/keyword_intel.py, backend/alembic/versions/ |
+| T4 | Translation variants (`TRANSLATION_VARIANTS`) + variant picker | dev | T2 | done | backend/app/services/metadata/translate.py, backend/app/services/keyword_intel/free.py |
+| T5 | Field packer (pure) | dev | — | done | backend/app/services/keyword_intel/packer.py |
+| T6 | MCP `keyword_intel_score_free`, `keyword_intel_pack_fields` (read-only); fix `keywords_add_competitor_keywords` alias | dev | T3, T5 | done | backend/app/mcp/tools/keywords.py, backend/app/mcp/consent.py |
+| T7 | Tests per Acceptance | test-writer | T6 | done | backend/tests/ |
 
 ## Acceptance
 
