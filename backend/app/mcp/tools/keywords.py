@@ -8,7 +8,6 @@ chain through :func:`resolve_app`.
 
 from __future__ import annotations
 
-
 from fastmcp.exceptions import ToolError
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload

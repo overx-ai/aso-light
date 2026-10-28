@@ -21,10 +21,15 @@ from app.schemas.keyword_intel import VariantPickOut
 from app.schemas.listing import ListingProposal
 from app.services.keyword_intel.free import FreeKeywordIntel, clear_hint_cache
 from app.services.keyword_intel.tokenize import words
+from app.services.listing.errors import ListingNotBrainstormedError, NoProposalDraftError
 from app.services.listing.proposals import is_valid_proposal, parse_proposals
 from app.services.listing.service import ListingOptimizerService
 from app.services.metadata.coloring import classify_keyword
-from app.services.metadata.translate import VARIANTS_FIELD_KIND
+from app.services.metadata.translate import (
+    PROPOSALS_FIELD_KIND,
+    VARIANTS_FIELD_KIND,
+    _build_system_prompt,
+)
 from app.services.metadata.validation import FIELD_CHAR_LIMITS
 from tests._async_harness import run_async
 
@@ -283,4 +288,23 @@ def test_listing_route_rejects_another_users_app():
                     app_id, current_user={"user_id": str(cred.user_id)}, session=session,
                 )
         assert exc.value.status_code in {403, 404}
+    run_async(go())
+
+
+def test_proposals_kind_gets_the_proposals_prompt_not_a_translation_prompt():
+    prompt = _build_system_prompt(PROPOSALS_FIELD_KIND, "en-US", 4000, ["Kcal"])
+    assert "JSON array" in prompt
+    assert "translating" not in prompt
+
+
+def test_propose_and_export_refuse_before_their_prerequisites():
+    async def go():
+        app_id = await _seed()
+        async with async_session_factory() as session:
+            app = await session.get(App, app_id)
+            service = _service(session, app)
+            with pytest.raises(ListingNotBrainstormedError):
+                await service.propose()
+            with pytest.raises(NoProposalDraftError):
+                await service.export("proposal")
     run_async(go())

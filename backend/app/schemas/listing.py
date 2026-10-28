@@ -32,8 +32,8 @@ class BrainstormTerm(BaseModel):
 
 
 class BrainstormIn(BaseModel):
-    storefront: str = DEFAULT_LISTING_STOREFRONT
-    competitor_track_id: str | None = None
+    storefront: str = Field(default=DEFAULT_LISTING_STOREFRONT, min_length=2, max_length=3)
+    competitor_track_id: str | None = Field(default=None, pattern=r"^\d+$", max_length=20)
 
 
 class BrainstormOut(BaseModel):
@@ -66,7 +66,7 @@ class RankingsRefreshOut(BaseModel):
 
 
 class ProposeIn(BaseModel):
-    storefront: str = DEFAULT_LISTING_STOREFRONT
+    storefront: str = Field(default=DEFAULT_LISTING_STOREFRONT, min_length=2, max_length=3)
 
 
 class ProposalsOut(BaseModel):

@@ -11,13 +11,14 @@ import json
 import logging
 from collections.abc import Sequence
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
 from app.data.stopwords import language_of, stopwords_for_locales
 from app.models.app import App
-from app.models.keyword import KeywordRanking, KeywordTracking
+from app.models.keyword import Keyword, KeywordRanking, KeywordTracking
 from app.models.keyword_intel import KeywordIntelCache
 from app.models.listing_draft import ListingDraft
 from app.models.metadata import AppMetadataLocalization, AppMetadataState
@@ -62,6 +63,7 @@ from app.services.listing.errors import (
     ListingQuotaError,
     ListingUpstreamError,
     NoProposalDraftError,
+    TranslationTooLongError,
     TranslatorNotConfiguredError,
     UnknownLocaleError,
     UnknownStorefrontError,
@@ -77,9 +79,11 @@ from app.services.metadata.coloring import classify_keyword
 from app.services.metadata.translate import (
     PROPOSALS_FIELD_KIND,
     AbstractTranslator,
+    FieldKind,
     TranslationOverflowError,
     TranslationQuotaExceededError,
     TranslatorUnavailableError,
+    build_translator,
     keyword_variants,
     translate_with_cache,
 )
@@ -99,7 +103,7 @@ BRAINSTORM_MAX_SEEDS = 10
 BRAINSTORM_MAX_CANDIDATES = MAX_FREE_TERMS - BRAINSTORM_MAX_SEEDS
 BRAINSTORM_VARIANT_TERMS = 5
 MAX_PROPOSAL_CANDIDATES = 30
-NAME_FIELDS: tuple[str, ...] = ("name", "subtitle")
+NAME_FIELDS: tuple[FieldKind, ...] = ("name", "subtitle")
 KEYWORDS_FIELD = "keywords"
 
 
@@ -114,12 +118,16 @@ def _term_out(score: FreeTermScore) -> BrainstormTerm:
     )
 
 
+def _row_value(row: KeywordIntelCache) -> float:
+    return float((row.extra or {}).get("value", 0.0))
+
+
 def _row_out(row: KeywordIntelCache) -> BrainstormTerm:
     return BrainstormTerm(
         term=row.keyword,
         popularity=row.volume_score or 0,
         difficulty=row.difficulty_score or 0,
-        value=float((row.extra or {}).get("value", 0.0)),
+        value=_row_value(row),
         popularity_source=row.popularity_source,
     )
 
@@ -155,6 +163,10 @@ class ListingOptimizerService:
         self.translator = translator
         self.intel = intel or FreeKeywordIntel()
         self._snapshot_cache: dict[str, dict[str, AppMetadataLocalization]] | None = None
+
+    @classmethod
+    def for_app(cls, session: AsyncSession, app: App) -> ListingOptimizerService:
+        return cls(session, app, translator=build_translator(settings))
 
     # ---- snapshot helpers ---------------------------------------------
 
@@ -215,20 +227,10 @@ class ListingOptimizerService:
         storefront = storefront.upper()
         source_locale = await self._source_locale(storefront)
         brand = brand_token(self.app.name)
-        if competitor_track_id:
-            stopwords = stopwords_for_locales([source_locale])
-            using = await listing_terms_from_lookup(
-                competitor_track_id, storefront, stopwords=stopwords, brand=None,
-            )
-            seeds = await listing_terms_from_lookup(
-                competitor_track_id, storefront, stopwords=stopwords, brand=None,
-                include_description=False,
-            )
-        else:
-            using = await own_listing_terms(self.session, self.app, source_locale)
-            seeds = await own_listing_terms(
-                self.session, self.app, source_locale, include_description=False,
-            )
+        using = await self._listing_terms(storefront, source_locale, competitor_track_id)
+        seeds = await self._listing_terms(
+            storefront, source_locale, competitor_track_id, include_description=False,
+        )
 
         asa = await asa_popularity_by_term(self.session, self.app.id, storefront)
         seed_list = sorted(seeds, key=lambda t: (-len(t.split()), t))[:BRAINSTORM_MAX_SEEDS]
@@ -266,6 +268,24 @@ class ListingOptimizerService:
             using=using_terms,
             missing=missing,
             variants=variants,
+        )
+
+    async def _listing_terms(
+        self,
+        storefront: str,
+        source_locale: str,
+        competitor_track_id: str | None,
+        *,
+        include_description: bool = True,
+    ) -> set[str]:
+        if competitor_track_id:
+            return await listing_terms_from_lookup(
+                competitor_track_id, storefront,
+                stopwords=stopwords_for_locales([source_locale]), brand=None,
+                include_description=include_description,
+            )
+        return await own_listing_terms(
+            self.session, self.app, source_locale, include_description=include_description,
         )
 
     async def _pick_variants(self, terms: Sequence[str], source_locale: str) -> list[VariantPickOut]:
@@ -345,22 +365,19 @@ class ListingOptimizerService:
         ])
         await self.session.flush()
 
+    async def _intel_rows(self, source: str, locale: str | None = None) -> list[KeywordIntelCache]:
+        query = select(KeywordIntelCache).where(
+            KeywordIntelCache.app_id == self.app.id, KeywordIntelCache.source == source,
+        )
+        if locale is not None:
+            query = query.where(KeywordIntelCache.locale == locale)
+        return list((await self.session.execute(query)).scalars().all())
+
     async def _brainstorm_rows(self, storefront: str) -> list[KeywordIntelCache]:
-        return list((await self.session.execute(
-            select(KeywordIntelCache).where(
-                KeywordIntelCache.app_id == self.app.id,
-                KeywordIntelCache.source == BRAINSTORM_SOURCE,
-                KeywordIntelCache.locale == storefront,
-            )
-        )).scalars().all())
+        return await self._intel_rows(BRAINSTORM_SOURCE, storefront)
 
     async def _variant_rows(self) -> list[KeywordIntelCache]:
-        return list((await self.session.execute(
-            select(KeywordIntelCache).where(
-                KeywordIntelCache.app_id == self.app.id,
-                KeywordIntelCache.source == VARIANT_SOURCE,
-            )
-        )).scalars().all())
+        return await self._intel_rows(VARIANT_SOURCE)
 
     async def stored_brainstorm(self, storefront: str = DEFAULT_LISTING_STOREFRONT) -> BrainstormOut | None:
         storefront = storefront.upper()
@@ -392,23 +409,22 @@ class ListingOptimizerService:
 
     async def _latest_ranks(self) -> dict[tuple[str, str], int | None]:
         """(keyword casefold, storefront) -> best latest rank across the keyword's trackings."""
+        latest = (
+            select(func.max(KeywordRanking.id).label("id"))
+            .join(KeywordTracking, KeywordTracking.id == KeywordRanking.tracking_id)
+            .where(KeywordTracking.app_id == self.app.id)
+            .group_by(KeywordRanking.tracking_id, KeywordRanking.territory_id)
+        )
         rows = (await self.session.execute(
-            select(KeywordRanking, Territory.code, KeywordTracking)
+            select(KeywordRanking.rank, Territory.code, Keyword.text)
             .join(Territory, Territory.id == KeywordRanking.territory_id)
             .join(KeywordTracking, KeywordTracking.id == KeywordRanking.tracking_id)
-            .options(selectinload(KeywordTracking.keyword))
-            .where(KeywordTracking.app_id == self.app.id)
-            .order_by(KeywordRanking.recorded_at.desc(), KeywordRanking.id.desc())
+            .join(Keyword, Keyword.id == KeywordTracking.keyword_id)
+            .where(KeywordRanking.id.in_(latest))
         )).all()
-        latest: dict[tuple[int, str], int | None] = {}
-        text_of: dict[int, str] = {}
-        for ranking, code, tracking in rows:
-            latest.setdefault((tracking.id, code), ranking.rank)
-            text_of[tracking.id] = tracking.keyword.text.casefold()
-
         ranks: dict[tuple[str, str], int | None] = {}
-        for (tracking_id, code), rank in latest.items():
-            key = (text_of[tracking_id], code)
+        for rank, code, text in rows:
+            key = (text.casefold(), code)
             known = ranks.get(key)
             if key not in ranks or (rank is not None and (known is None or rank < known)):
                 ranks[key] = rank
@@ -424,10 +440,11 @@ class ListingOptimizerService:
         }
         cells: list[GapCell] = []
         for keyword in keywords:
+            folded = keyword.casefold()
             for locale in locales:
                 storefront = storefront_for_locale(locale)
-                rank = ranks.get((keyword.casefold(), storefront))
-                variant = variants.get((keyword.casefold(), locale))
+                rank = ranks.get((folded, storefront))
+                variant = variants.get((folded, locale))
                 cells.append(GapCell(
                     keyword=keyword,
                     locale=locale,
@@ -447,7 +464,9 @@ class ListingOptimizerService:
 
     # ---- proposals ----------------------------------------------------
 
-    async def _translate(self, text: str, source_locale: str, target_locale: str, field_kind: str) -> str:
+    async def _translate(
+        self, text: str, source_locale: str, target_locale: str, field_kind: FieldKind,
+    ) -> str:
         if self.translator is None:
             raise TranslatorNotConfiguredError(
                 "AI translation not configured. Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY."
@@ -455,13 +474,17 @@ class ListingOptimizerService:
         try:
             translated, _ = await translate_with_cache(
                 self.translator, self.session, self.app.id, text,
-                source_locale, target_locale, field_kind,  # type: ignore[arg-type]
+                source_locale, target_locale, field_kind,
                 brand_allowlist=[b for b in [brand_token(self.app.name)] if b],
             )
         except TranslationQuotaExceededError as exc:
             raise ListingQuotaError(str(exc)) from exc
-        except (TranslatorUnavailableError, TranslationOverflowError) as exc:
+        except TranslatorUnavailableError as exc:
             raise ListingUpstreamError("All translation providers failed. Try again later.") from exc
+        except TranslationOverflowError as exc:
+            raise TranslationTooLongError(
+                f"The {target_locale} {field_kind} suggestion does not fit its char limit."
+            ) from exc
         return translated
 
     async def propose(self, storefront: str = DEFAULT_LISTING_STOREFRONT) -> ProposalsOut:
@@ -472,7 +495,7 @@ class ListingOptimizerService:
             raise ListingNotBrainstormedError(
                 f"No brainstorm for storefront {storefront} yet; run the brainstorm first."
             )
-        ranked = sorted(rows, key=lambda r: -float((r.extra or {}).get("value", 0.0)))
+        ranked = sorted(rows, key=lambda r: -_row_value(r))
         candidates = ranked[:MAX_PROPOSAL_CANDIDATES]
         current = await self._current(source_locale)
         payload = json.dumps({
@@ -532,12 +555,12 @@ class ListingOptimizerService:
             source_locale=source_locale,
             locked_fields=[f for f in PROPOSAL_FIELDS if f not in editable],
         )
+        if not wanted:
+            return out
         targets = list(dict.fromkeys(locales or live))
         others = [loc for loc in targets if loc != source_locale]
         batch = others[:MAX_PACK_LOCALES]
         out.remaining_locales = others[MAX_PACK_LOCALES:]
-        if not wanted:
-            return out
 
         values: dict[str, dict[str, str]] = {f: {} for f in wanted}
         if source_locale in targets:
@@ -551,9 +574,12 @@ class ListingOptimizerService:
                 elif self.translator is None:
                     out.warnings.append(f"{locale} {f}: translator not configured")
                 else:
-                    values[f][locale] = await self._translate(
-                        getattr(proposal, f), source_locale, locale, f,
-                    )
+                    try:
+                        values[f][locale] = await self._translate(
+                            getattr(proposal, f), source_locale, locale, f,
+                        )
+                    except TranslationTooLongError as exc:
+                        out.warnings.append(str(exc))
 
         if KEYWORDS_FIELD in wanted and batch:
             await self._localize_keywords(proposal, source_locale, batch, values, out)
@@ -588,10 +614,9 @@ class ListingOptimizerService:
             names: dict[str, str | None] = {}
             subtitles: dict[str, str | None] = {}
             for locale in get_indexed_locales_for_territory(storefront) or group:
-                planned = values.get("name", {}).get(locale)
-                names[locale] = planned or await self._field(locale, "name")
-                subtitles[locale] = values.get("subtitle", {}).get(locale) or await self._field(
-                    locale, "subtitle",
+                names[locale] = values.get("name", {}).get(locale) or await self._field(locale, "name")
+                subtitles[locale] = (
+                    values.get("subtitle", {}).get(locale) or await self._field(locale, "subtitle")
                 )
                 if locale not in group:
                     # Words already in another indexed locale's keyword field are spent.
@@ -614,9 +639,7 @@ class ListingOptimizerService:
         self, proposal: ListingProposal, storefront: str, previews: Sequence[ListingBulkPreview],
     ) -> None:
         proposal_hash = _proposal_hash(proposal, storefront)
-        draft = (await self.session.execute(
-            select(ListingDraft).where(ListingDraft.app_id == self.app.id)
-        )).scalar_one_or_none()
+        draft = await self._draft()
         merged: dict[str, dict[str, str]] = {}
         if draft is not None and draft.proposal_hash == proposal_hash:
             merged = {loc: dict(fields) for loc, fields in draft.values_json.items()}
@@ -632,24 +655,20 @@ class ListingOptimizerService:
             draft.values_json = merged
         await self.session.flush()
 
+    async def _draft(self) -> ListingDraft | None:
+        return (await self.session.execute(
+            select(ListingDraft).where(ListingDraft.app_id == self.app.id)
+        )).scalar_one_or_none()
+
     # ---- export -------------------------------------------------------
 
     async def export(self, source: ExportSource) -> ExportOut:
-        snapshot = await self._snapshot()
-        locales: dict[str, ExportLocale] = {}
-        for locale, rows in sorted(snapshot.items()):
-            info, version = rows.get("app_info"), rows.get("version")
-            locales[locale] = ExportLocale(
-                name=info.name if info else None,
-                subtitle=info.subtitle if info else None,
-                keywords=version.keywords if version else None,
-                promotional_text=version.promotional_text if version else None,
-                description=version.description if version else None,
-            )
+        locales = {
+            locale: ExportLocale(**{f: await self._field(locale, f) for f in ExportLocale.model_fields})
+            for locale in await self.live_locales()
+        }
         if source == "proposal":
-            draft = (await self.session.execute(
-                select(ListingDraft).where(ListingDraft.app_id == self.app.id)
-            )).scalar_one_or_none()
+            draft = await self._draft()
             if draft is None:
                 raise NoProposalDraftError("No localized proposal yet; localize a proposal first.")
             for locale, fields in draft.values_json.items():

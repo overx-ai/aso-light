@@ -391,6 +391,8 @@ def _build_system_prompt(
     ``overflow_by`` is set only on the retry after an over-long first attempt;
     it adds an explicit "must be under N characters" instruction.
     """
+    if field_kind == PROPOSALS_FIELD_KIND:
+        return _proposals_prompt(target_locale)
     lines = [
         (
             f"You are a localization expert translating App Store metadata "

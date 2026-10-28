@@ -22,7 +22,7 @@ updated: 2026-10-17
 |-----|-------|
 | [001 - Pricing System](001-pricing-system.md) | Price calculators, exchange rates, currency rounding, safety limits, price point cache, manual pins, IAP pricing, presets, export/import |
 | [002 - ASC Integration](002-asc-integration.md) | App Store Connect API (v1+v2), JWT auth, rate limiter, screenshot upload, .p8 key handling |
-| [003 - Keyword Analysis](003-keyword-analysis.md) | Ranking tracker, cross-localization, suggestions |
+| [003 - Keyword Analysis](003-keyword-analysis.md) | Ranking tracker, cross-localization, suggestions, listing optimizer |
 | [004 - Localization Management](004-localization-management.md) | Subscription/IAP display names & descriptions, bulk sync, JSON import |
 | [005 - Subscription Management](005-subscription-management.md) | Create / update groups, subscriptions, group localizations, introductory offers (CRUD via UI; submit-for-review manual) |
 | [006 - Metadata Editor + Cross-Loc](006-metadata-editor.md) | Per-locale app metadata CRUD, bulk fan-out, Claude AI translation, color-coded keyword coverage, cross-localization grid |

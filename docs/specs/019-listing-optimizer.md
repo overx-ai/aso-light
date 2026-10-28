@@ -1,7 +1,7 @@
 ---
 id: 019
 title: "Listing optimizer: brainstorm on add, market gap board, AI listing proposals, one-click localize, JSON export"
-status: approved
+status: done
 priority: p1
 created: 2026-10-26
 updated: 2026-10-28
@@ -14,12 +14,9 @@ conflicts_with: []
 
 # 019 - Listing Optimizer
 
-> **TL;DR** — We have keyword data (and, with [014](014-free-keyword-intel.md), scores without ASA) but
-> no workflow that turns it into a listing. This spec adds that workflow: add an app → see the keywords
-> it uses and the ones it's missing → see which markets lack the localized term → get three proposed
-> name/subtitle/keyword-field sets for the main storefront → localize the chosen one into every live
-> locale using the best-searched translation → preview and apply through the existing bulk path, or
-> export it as JSON. Everything is suggestion-only and available over MCP.
+> **TL;DR** — Shipped the listing optimizer: brainstorm (using vs missing, auto after sync), keyword × market
+> gaps with `missing_localized`, 3 AI name/subtitle/keyword proposals, batched localize into a bulk-preview
+> payload, and JSON export — REST, `ListingOptimizer` page and 5 MCP tools. Nothing auto-applies; live check not run yet.
 
 **Prerequisites**: [014 - Free keyword intel](014-free-keyword-intel.md) (popularity blend, variant
 picking, own-listing extraction, field packer), [004 - Localization management](../004-localization-management.md)
@@ -75,12 +72,12 @@ UI on a new `frontend/src/pages/ListingOptimizer.tsx` via hooks in `src/lib/hook
 ## Tasks
 | ID | Description | Agent | Depends On | Status | Files |
 |----|-------------|-------|------------|--------|-------|
-| T1 | `ListingOptimizerService`: brainstorm, gaps, propose, localize | dev | — | todo | backend/app/services/listing/ |
-| T2 | `classify_keyword` variant match + `missing_localized`; tracker territories from live locales | dev | — | todo | backend/app/services/metadata/coloring.py, backend/app/services/keywords/tracker.py |
-| T3 | Routes `/apps/{id}/listing/*`, `GET /apps/{id}/metadata/export`, brainstorm after apps sync | dev | T1 | todo | backend/app/api/v1/listing.py, backend/app/api/v1/metadata.py, backend/app/api/v1/apps.py, backend/app/api/v1/__init__.py, backend/app/schemas/listing.py |
-| T4 | MCP `listing_*`, `metadata_export` (read-only) | dev | T1 | todo | backend/app/mcp/tools/listing.py, backend/app/mcp/consent.py |
-| T5 | Frontend page + hooks + route | dev | T3 | todo | frontend/src/pages/ListingOptimizer.tsx, frontend/src/lib/hooks.ts, frontend/src/App.tsx |
-| T6 | Tests per Acceptance | test-writer | T4 | todo | backend/tests/ |
+| T1 | `ListingOptimizerService`: brainstorm, gaps, propose, localize | dev | — | done | backend/app/services/listing/ |
+| T2 | `classify_keyword` variant match + `missing_localized`; tracker territories from live locales | dev | — | done | backend/app/services/metadata/coloring.py, backend/app/services/keywords/tracker.py |
+| T3 | Routes `/apps/{id}/listing/*`, `GET /apps/{id}/metadata/export`, brainstorm after apps sync | dev | T1 | done | backend/app/api/v1/listing.py, backend/app/api/v1/metadata.py, backend/app/api/v1/apps.py, backend/app/api/v1/__init__.py, backend/app/schemas/listing.py |
+| T4 | MCP `listing_*`, `metadata_export` (read-only) | dev | T1 | done | backend/app/mcp/tools/listing.py, backend/app/mcp/consent.py |
+| T5 | Frontend page + hooks + route | dev | T3 | done | frontend/src/pages/ListingOptimizer.tsx, frontend/src/lib/hooks.ts, frontend/src/App.tsx |
+| T6 | Tests per Acceptance | test-writer | T4 | done | backend/tests/ |
 
 ## Acceptance
 

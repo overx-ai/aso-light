@@ -40,6 +40,7 @@ import {
   useRunListingBrainstorm,
 } from "@/lib/hooks";
 import type {
+  BrainstormOut,
   BrainstormTerm,
   BulkPreviewItem,
   GapCell,
@@ -65,6 +66,15 @@ const PLACEMENT_LABEL: Record<GapPlacement, string> = {
   none: "Absent",
   missing_localized: "Missing localized",
 };
+
+function gapKey(keyword: string, locale: string): string {
+  return `${keyword}\u0000${locale}`;
+}
+
+function previewStatus(item: BulkPreviewItem | undefined): string | null | undefined {
+  if (!item) return "";
+  return item.would_skip ? item.reason : item.action;
+}
 
 function TermTable({
   terms,
@@ -131,7 +141,7 @@ function GapBoard({ cells, locales, keywords }: {
 }) {
   const byKey = useMemo(() => {
     const map = new Map<string, GapCell>();
-    for (const cell of cells) map.set(`${cell.keyword}\u0000${cell.locale}`, cell);
+    for (const cell of cells) map.set(gapKey(cell.keyword, cell.locale), cell);
     return map;
   }, [cells]);
 
@@ -158,7 +168,7 @@ function GapBoard({ cells, locales, keywords }: {
             <Table.Tr key={keyword}>
               <Table.Td>{keyword}</Table.Td>
               {locales.map((locale) => {
-                const cell = byKey.get(`${keyword}\u0000${locale}`);
+                const cell = byKey.get(gapKey(keyword, locale));
                 if (!cell) return <Table.Td key={locale} />;
                 return (
                   <Table.Td key={locale}>
@@ -224,16 +234,48 @@ function ProposalCard({
   );
 }
 
+function BrainstormResult({
+  result,
+  storefront,
+  onTrack,
+}: {
+  result: BrainstormOut | null;
+  storefront: string;
+  onTrack: (term: string, locale: string) => void;
+}) {
+  if (!result) {
+    return (
+      <Text size="sm" c="dimmed">
+        No brainstorm for {storefront} yet. It runs automatically after an app is added.
+      </Text>
+    );
+  }
+  return (
+    <SimpleGrid cols={{ base: 1, md: 2 }}>
+      <div>
+        <Text fw={600} size="sm" mb="xs">
+          Using ({result.using.length})
+        </Text>
+        <TermTable terms={result.using} />
+      </div>
+      <div>
+        <Text fw={600} size="sm" mb="xs">
+          Missing ({result.missing.length})
+        </Text>
+        <TermTable
+          terms={result.missing}
+          onTrack={(term) => onTrack(term, result.source_locale)}
+        />
+      </div>
+    </SimpleGrid>
+  );
+}
+
 function FieldPreview({ appId, payload }: { appId: number; payload: ListingBulkPreview }) {
   const preview = usePreviewBulkMetadata(appId);
   const apply = useApplyBulkMetadata(appId);
   const [items, setItems] = useState<BulkPreviewItem[] | null>(null);
-  const body = {
-    field: payload.field,
-    value: null,
-    target_locales: payload.target_locales,
-    values_by_locale: payload.values_by_locale,
-  };
+  const body = { ...payload, value: null };
 
   return (
     <Card withBorder padding="sm">
@@ -278,7 +320,7 @@ function FieldPreview({ appId, payload }: { appId: number; payload: ListingBulkP
                 <Table.Td>{locale}</Table.Td>
                 <Table.Td>{item?.current_value ?? ""}</Table.Td>
                 <Table.Td>{payload.values_by_locale[locale]}</Table.Td>
-                <Table.Td>{item ? (item.would_skip ? item.reason : item.action) : ""}</Table.Td>
+                <Table.Td>{previewStatus(item)}</Table.Td>
               </Table.Tr>
             );
           })}
@@ -304,7 +346,7 @@ export default function ListingOptimizerPage() {
   const exportListing = useExportListing(appId);
   const addKeyword = useAddKeyword();
 
-  const result = runBrainstorm.data ?? brainstorm.data ?? null;
+  const result = brainstorm.data ?? null;
   const proposals = propose.data?.proposals ?? [];
   const chosen = selected !== null ? proposals[selected] : null;
 
@@ -364,30 +406,18 @@ export default function ListingOptimizerPage() {
           </Group>
           {brainstorm.isLoading ? (
             <Loader size="sm" />
-          ) : !result ? (
-            <Text size="sm" c="dimmed">
-              No brainstorm for {storefront} yet. It runs automatically after an app is added.
-            </Text>
+          ) : brainstorm.error ? (
+            <Alert color="red" icon={<IconAlertCircle size={16} />}>
+              Could not load the brainstorm for {storefront}.
+            </Alert>
           ) : (
-            <SimpleGrid cols={{ base: 1, md: 2 }}>
-              <div>
-                <Text fw={600} size="sm" mb="xs">
-                  Using ({result.using.length})
-                </Text>
-                <TermTable terms={result.using} />
-              </div>
-              <div>
-                <Text fw={600} size="sm" mb="xs">
-                  Missing ({result.missing.length})
-                </Text>
-                <TermTable
-                  terms={result.missing}
-                  onTrack={(term) =>
-                    addKeyword.mutate({ appId: String(appId), text: term, locale: result.source_locale })
-                  }
-                />
-              </div>
-            </SimpleGrid>
+            <BrainstormResult
+              result={result}
+              storefront={storefront}
+              onTrack={(term, locale) =>
+                addKeyword.mutate({ appId: String(appId), text: term, locale })
+              }
+            />
           )}
         </Card>
 
@@ -486,7 +516,11 @@ export default function ListingOptimizerPage() {
                 </Text>
               ))}
               {localize.data.bulk_previews.map((payload) => (
-                <FieldPreview key={payload.field} appId={appId} payload={payload} />
+                <FieldPreview
+                  key={`${payload.field}-${localize.submittedAt}`}
+                  appId={appId}
+                  payload={payload}
+                />
               ))}
             </Stack>
           )}

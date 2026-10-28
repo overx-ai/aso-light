@@ -8,12 +8,10 @@ from collections.abc import Iterable
 
 from sqlalchemy import select
 
-from app.core.config import settings
 from app.db.session import async_session_factory
 from app.models.app import App
 from app.models.keyword_intel import KeywordIntelCache
 from app.services.listing.service import BRAINSTORM_SOURCE, ListingOptimizerService
-from app.services.metadata.translate import build_translator
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +32,7 @@ async def brainstorm_new_apps(app_ids: Iterable[int]) -> None:
                 app = await session.get(App, app_id)
                 if already is not None or app is None:
                     continue
-                service = ListingOptimizerService(
-                    session, app, translator=build_translator(settings),
-                )
-                await service.brainstorm()
+                await ListingOptimizerService.for_app(session, app).brainstorm()
                 await session.commit()
                 logger.info("Post-sync brainstorm done app_id=%s", app_id)
         except Exception:  # noqa: BLE001 — background job, logged and dropped

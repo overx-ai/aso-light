@@ -32,6 +32,7 @@ from app.db.session import get_session
 from app.models.keyword import KeywordTracking
 from app.models.metadata import AppMetadataLocalization, AppMetadataState
 from app.models.territory import Territory
+from app.schemas.listing import ExportOut, ExportSource
 from app.schemas.metadata import (
     AppMetadataLocalizationOut,
     AppMetadataSnapshotOut,
@@ -49,10 +50,10 @@ from app.schemas.metadata import (
     TranslateOut,
     TranslateSuggestionItem,
 )
-from app.api.v1.listing import listing_service, run_listing
-from app.schemas.listing import ExportOut, ExportSource
 from app.services.asc.errors import ASCAPIError
 from app.services.keywords.cross_localization import CROSS_LOCALIZATION_DATA
+from app.services.listing.errors import NoProposalDraftError
+from app.services.listing.service import ListingOptimizerService
 from app.services.metadata.bulk import (
     APP_INFO_FIELDS as BULK_APP_INFO_FIELDS,
     FIELD_TO_ASC_ATTR,
@@ -786,8 +787,11 @@ async def export_metadata(
     session: AsyncSession = Depends(get_session),
 ) -> JSONResponse:
     """Per-locale listing fields as a JSON download; ``proposal`` overlays the last localized proposal."""
-    service = await listing_service(app_id, current_user, session)
-    exported = await run_listing(service.export(source))
+    app = await _get_verified_app(app_id, int(current_user["user_id"]), session)
+    try:
+        exported = await ListingOptimizerService(session, app, translator=None).export(source)
+    except NoProposalDraftError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     return JSONResponse(
         exported.model_dump(mode="json"),
         headers={

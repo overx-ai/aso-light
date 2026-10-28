@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1._deps import _get_verified_app
-from app.core.config import settings
 from app.core.security import get_current_user
 from app.db.session import get_session
 from app.schemas.listing import (
@@ -25,7 +24,6 @@ from app.schemas.listing import (
 )
 from app.services.listing.errors import ListingError
 from app.services.listing.service import ListingOptimizerService
-from app.services.metadata.translate import build_translator
 
 router = APIRouter(tags=["listing"])
 
@@ -36,7 +34,7 @@ async def listing_service(
     app_id: int, current_user: dict[str, Any], session: AsyncSession,
 ) -> ListingOptimizerService:
     app = await _get_verified_app(app_id, int(current_user["user_id"]), session)
-    return ListingOptimizerService(session, app, translator=build_translator(settings))
+    return ListingOptimizerService.for_app(session, app)
 
 
 async def run_listing(call: Awaitable[T]) -> T:

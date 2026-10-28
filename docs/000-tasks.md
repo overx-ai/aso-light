@@ -1,7 +1,7 @@
 ---
 status: current
 created: 2026-04-26
-updated: 2026-10-17
+updated: 2026-10-28
 ---
 
 # 000 - Tasks
@@ -55,6 +55,9 @@ updated: 2026-10-17
 
 | # | Task | Area | Priority | Notes |
 |---|------|------|----------|-------|
+| T-027 | `packer.pack_storefront`: explicit `spent_texts` param instead of `{locale}#keywords` keys in `names_by_locale` | keyword_intel | low | spec 019 review |
+| T-028 | Live check of free hints vs ASA popularity (Spearman, share of floor-5 terms rescued) on one ASA app | keyword_intel | medium | spec 014 acceptance, not run |
+| T-029 | Export download: parse Blob error body so the 404 "localize first" detail shows | frontend | low | spec 019 review |
 | B-001 | Google Play price management | Backend | low | Double scope, not in MVP |
 | B-002 | DeepL / OpenAI / Gemini translation providers | Backend | low | Anthropic shipped in Phase 5; ABC ready — formalize `model_name` property when 2nd provider lands |
 | B-003 | In-App Events management | Backend | low | Phase 6+ |

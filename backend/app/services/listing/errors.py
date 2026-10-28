@@ -37,3 +37,7 @@ class ListingQuotaError(ListingError):
 
 class ListingUpstreamError(ListingError):
     status_code = status.HTTP_502_BAD_GATEWAY
+
+
+class TranslationTooLongError(ListingUpstreamError):
+    pass

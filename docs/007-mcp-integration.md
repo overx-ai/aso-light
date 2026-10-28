@@ -135,6 +135,7 @@ Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 | `indices`     | 3     | GDP / PPP / BigMac / Spotify / Netflix index status & refresh    |
 | `keywords`    | 13    | iTunes search/suggestions, keyword tracking, rankings, competitors |
 | `keyword_intel`| 4    | Cached keyword volume/difficulty: read the cache, refresh the providers; free hints scoring (`keyword_intel_score_free`) and keyword-field packing (`keyword_intel_pack_fields`, prompts) |
+| `listing`     | 5     | Listing optimizer (spec 019): `listing_brainstorm` (using vs missing keywords), `listing_gaps` (keyword × market, `missing_localized`), `listing_propose` (3 name/subtitle/keywords sets), `listing_localize` (batched → bulk-preview payload), `metadata_export` (JSON). Only gaps + export are read-only; the LLM-billing ones prompt |
 | `metadata`    | 10    | App-info / version metadata, locale CRUD, bulk apply, AI translate |
 | `presets`     | 5     | Pricing-formula preset CRUD                                      |
 | `previews`    | 3     | App preview videos from an export directory, probed with ffprobe first: main listing (`previews_sync`), a CPP (`cpp_previews_sync`), a PPO treatment (`experiment_previews_sync`) |

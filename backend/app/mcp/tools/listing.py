@@ -8,7 +8,6 @@ from typing import TypeVar
 
 from fastmcp.exceptions import ToolError
 
-from app.core.config import settings
 from app.mcp.context import resolve_app, session_scope
 from app.mcp.server import mcp
 from app.schemas.listing import (
@@ -23,7 +22,6 @@ from app.schemas.listing import (
 )
 from app.services.listing.errors import ListingError
 from app.services.listing.service import ListingOptimizerService
-from app.services.metadata.translate import build_translator
 
 T = TypeVar("T")
 
@@ -31,7 +29,7 @@ T = TypeVar("T")
 async def _with_service(app_id: int, call: Callable[[ListingOptimizerService], Awaitable[T]]) -> T:
     async with session_scope() as session:
         app = await resolve_app(app_id, session)
-        service = ListingOptimizerService(session, app, translator=build_translator(settings))
+        service = ListingOptimizerService.for_app(session, app)
         try:
             return await call(service)
         except ListingError as exc:

@@ -1,7 +1,7 @@
 ---
 status: current
 created: 2026-04-26
-updated: 2026-08-26
+updated: 2026-10-28
 ---
 
 # 003 - Keyword Analysis
@@ -127,6 +127,23 @@ competitor_app (app_id FK, asc_app_id, name, bundle_id)
 **File**: `frontend/src/pages/KeywordsPage.tsx` — 4 tabs (Tracked, Search, Cross-Localization, Competitors)
 **File**: `frontend/src/components/keywords/RankHistoryChart.tsx` — Mantine Charts line chart, Y-axis inverted (rank 1 at top)
 **File**: `frontend/src/components/keywords/CrossLocalizationMatrix.tsx` — Territory × locale grid
+
+## Listing Optimizer (spec 019)
+
+The workflow on top of keyword data and [010](010-keyword-intelligence.md)'s free hints provider.
+Nothing here writes to App Store Connect: localize returns a bulk-preview payload, applied through
+the existing `bulk/apply`.
+
+| Step | REST (`/api/v1/apps/{id}/…`) | What it does |
+|---|---|---|
+| Brainstorm | `GET`/`POST listing/brainstorm` | `using` (own listing n-grams) vs `missing` (scored, not in listing), per-locale native variants. Runs in the background after apps sync for apps without one |
+| Gaps | `GET listing/gaps`, `POST listing/rankings/refresh` | Keyword × market grid; `missing_localized` when the term ranks poorly and its variant is absent. Refresh covers live storefronts, capped by `MAX_TRACKED_TERRITORIES` |
+| Propose | `POST listing/proposals` | LLM → 3 name/subtitle/keyword sets, invalid ones dropped, Σ popularity vs current; counts against the monthly AI cap |
+| Localize | `POST listing/localize` | Chosen set → live locales in batches of 4 (`remaining_locales`); respects `editable_fields`; saves a `listing_drafts` row |
+| Export | `GET metadata/export?source=current\|proposal` | Per-locale JSON download |
+
+Candidates and variants are `keyword_intel_cache` rows with sources `listing_brainstorm` / `listing_variant`.
+UI: `frontend/src/pages/ListingOptimizer.tsx`. Service: `backend/app/services/listing/service.py`.
 
 ## Future: Apple Search Ads Integration
 

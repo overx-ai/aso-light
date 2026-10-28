@@ -104,6 +104,17 @@ import type {
   ListingExportSource,
 } from "@/types";
 
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+}
+
 // ---- Query Keys ----
 
 export const queryKeys = {
@@ -1533,15 +1544,7 @@ export function useExportPrices() {
 
       const extension = format === "csv" ? "csv" : "xlsx";
       const filename = `${subscriptionName.replace(/\s+/g, "_")}.${extension}`;
-      const blob = new Blob([response.data]);
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
+      downloadBlob(new Blob([response.data]), filename);
     },
     onSuccess: () => {
       notifications.show({
@@ -2323,14 +2326,7 @@ export function useExportListing(appId: number) {
         params: { source },
         responseType: "blob",
       });
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `listing-${appId}-${source}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
+      downloadBlob(new Blob([response.data]), `listing-${appId}-${source}.json`);
     },
     onError: (error) => {
       notifications.show({
