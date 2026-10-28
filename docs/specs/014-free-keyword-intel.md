@@ -4,8 +4,13 @@ title: "Free keyword intel: popularity proxy, organic difficulty, competitor tit
 status: approved
 priority: p1
 created: 2026-09-25
-updated: 2026-10-28
 tasks: []
+updated: 2026-10-28
+repo: aso-light
+release:
+story:
+depends_on: []
+conflicts_with: []
 ---
 
 # 014 - Free Keyword Intel
@@ -73,6 +78,17 @@ so cap terms per call.
 - Absolute search volume (ASA-only).
 - Subtitle scraping from the App Store web page — add if title mining proves thin.
 - Scheduled rank refresh beyond US; metadata change history / impact attribution.
+
+## Tasks
+| ID | Description | Agent | Depends On | Status | Files |
+|----|-------------|-------|------------|--------|-------|
+| T1 | Stopwords + tokenizer (1–3-grams, brand-token drop) | dev | — | todo | backend/app/data/stopwords.py, backend/app/services/keyword_intel/free.py |
+| T2 | Hints-prefix popularity, organic difficulty, title mining, own-listing extraction | dev | T1 | todo | backend/app/services/keyword_intel/free.py |
+| T3 | Register provider; ASA/hints blend + `popularity_source`; write `Keyword.popularity` | dev | T2 | todo | backend/app/services/keyword_intel/service.py, backend/app/models/keyword_intel.py, backend/alembic/versions/ |
+| T4 | Translation variants (`TRANSLATION_VARIANTS`) + variant picker | dev | T2 | todo | backend/app/services/metadata/translate.py, backend/app/services/keyword_intel/free.py |
+| T5 | Field packer (pure) | dev | — | todo | backend/app/services/keyword_intel/packer.py |
+| T6 | MCP `keyword_intel_score_free`, `keyword_intel_pack_fields` (read-only); fix `keywords_add_competitor_keywords` alias | dev | T3, T5 | todo | backend/app/mcp/tools/keywords.py, backend/app/mcp/consent.py |
+| T7 | Tests per Acceptance | test-writer | T6 | todo | backend/tests/ |
 
 ## Acceptance
 

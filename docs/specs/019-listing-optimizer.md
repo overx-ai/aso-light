@@ -8,7 +8,7 @@ updated: 2026-10-28
 repo: aso-light
 release:
 story:
-depends_on: []
+depends_on: [014]
 conflicts_with: []
 ---
 
@@ -71,6 +71,16 @@ UI on a new `frontend/src/pages/ListingOptimizer.tsx` via hooks in `src/lib/hook
 - In-app chat and voice input — the MCP server is our agent surface.
 - Keyword finder for Apple Search Ads campaigns — separate spec.
 - Auto-apply of anything.
+
+## Tasks
+| ID | Description | Agent | Depends On | Status | Files |
+|----|-------------|-------|------------|--------|-------|
+| T1 | `ListingOptimizerService`: brainstorm, gaps, propose, localize | dev | — | todo | backend/app/services/listing/ |
+| T2 | `classify_keyword` variant match + `missing_localized`; tracker territories from live locales | dev | — | todo | backend/app/services/metadata/coloring.py, backend/app/services/keywords/tracker.py |
+| T3 | Routes `/apps/{id}/listing/*`, `GET /apps/{id}/metadata/export`, brainstorm after apps sync | dev | T1 | todo | backend/app/api/v1/listing.py, backend/app/api/v1/metadata.py, backend/app/api/v1/apps.py, backend/app/api/v1/__init__.py, backend/app/schemas/listing.py |
+| T4 | MCP `listing_*`, `metadata_export` (read-only) | dev | T1 | todo | backend/app/mcp/tools/listing.py, backend/app/mcp/consent.py |
+| T5 | Frontend page + hooks + route | dev | T3 | todo | frontend/src/pages/ListingOptimizer.tsx, frontend/src/lib/hooks.ts, frontend/src/App.tsx |
+| T6 | Tests per Acceptance | test-writer | T4 | todo | backend/tests/ |
 
 ## Acceptance
 
