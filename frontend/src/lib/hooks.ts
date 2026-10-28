@@ -94,6 +94,14 @@ import type {
   CompetitorSitesOut,
   FullSovOut,
   GrowthRecommendationsOut,
+  BrainstormOut,
+  GapsOut,
+  RankingsRefreshOut,
+  ProposalsOut,
+  ListingProposal,
+  ListingBulkPreview,
+  LocalizeOut,
+  ListingExportSource,
 } from "@/types";
 
 // ---- Query Keys ----
@@ -143,6 +151,9 @@ export const queryKeys = {
   appMetadata: (appId: string | number) => ["app-metadata", appId] as const,
   keywordCoverage: (appId: string | number) =>
     ["keyword-coverage", appId] as const,
+  listingBrainstorm: (appId: number, storefront: string) =>
+    ["listing-brainstorm", appId, storefront] as const,
+  listingGaps: (appId: number) => ["listing-gaps", appId] as const,
   crossLocalizationGrid: ["cross-localization-grid"] as const,
   cloneOperation: (appId: string, opId: number) =>
     ["clone-operation", appId, opId] as const,
@@ -2135,6 +2146,199 @@ export function useKeywordCoverage(appId: number) {
     },
     enabled: !!appId,
     staleTime: 60_000,
+  });
+}
+
+// ---- Listing Optimizer Hooks ----
+
+export function useListingBrainstorm(appId: number, storefront: string) {
+  return useQuery({
+    queryKey: queryKeys.listingBrainstorm(appId, storefront),
+    queryFn: async (): Promise<BrainstormOut | null> => {
+      const response = await api.get<BrainstormOut | null>(
+        `/apps/${appId}/listing/brainstorm`,
+        { params: { storefront } },
+      );
+      return response.data ?? null;
+    },
+    enabled: !!appId && storefront.length >= 2,
+    staleTime: 60_000,
+  });
+}
+
+export function useRunListingBrainstorm(appId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (storefront: string): Promise<BrainstormOut> => {
+      const response = await api.post<BrainstormOut>(
+        `/apps/${appId}/listing/brainstorm`,
+        { storefront },
+      );
+      return response.data;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(
+        queryKeys.listingBrainstorm(appId, data.storefront),
+        data,
+      );
+      queryClient.invalidateQueries({ queryKey: queryKeys.listingGaps(appId) });
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Brainstorm failed",
+        message: ascErrorMessage(error, "Could not brainstorm keywords."),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useListingGaps(appId: number) {
+  return useQuery({
+    queryKey: queryKeys.listingGaps(appId),
+    queryFn: async (): Promise<GapsOut> => {
+      const response = await api.get<GapsOut>(`/apps/${appId}/listing/gaps`);
+      return response.data;
+    },
+    enabled: !!appId,
+    staleTime: 60_000,
+  });
+}
+
+export function useRefreshListingRankings(appId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<RankingsRefreshOut> => {
+      const response = await api.post<RankingsRefreshOut>(
+        `/apps/${appId}/listing/rankings/refresh`,
+      );
+      return response.data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.listingGaps(appId) });
+      notifications.show({
+        title: "Rankings refreshed",
+        message: `Recorded ${data.recorded} rankings across ${data.territories.join(", ") || "US"}.`,
+        color: "green",
+      });
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Refresh failed",
+        message: ascErrorMessage(error, "Could not refresh rankings."),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useProposeListing(appId: number) {
+  return useMutation({
+    mutationFn: async (storefront: string): Promise<ProposalsOut> => {
+      const response = await api.post<ProposalsOut>(
+        `/apps/${appId}/listing/proposals`,
+        { storefront },
+      );
+      return response.data;
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Proposals failed",
+        message: ascErrorMessage(error, "Could not generate listing proposals."),
+        color: "red",
+      });
+    },
+  });
+}
+
+function mergeBulkPreviews(
+  into: Map<string, ListingBulkPreview>,
+  previews: ListingBulkPreview[],
+): void {
+  for (const preview of previews) {
+    const values = {
+      ...(into.get(preview.field)?.values_by_locale ?? {}),
+      ...preview.values_by_locale,
+    };
+    into.set(preview.field, {
+      field: preview.field,
+      value: null,
+      target_locales: Object.keys(values),
+      values_by_locale: values,
+    });
+  }
+}
+
+/** One click: the server localizes a bounded batch per call, so follow remaining_locales until done. */
+export function useLocalizeListing(appId: number) {
+  return useMutation({
+    mutationFn: async ({
+      proposal,
+      storefront,
+    }: {
+      proposal: ListingProposal;
+      storefront: string;
+    }): Promise<LocalizeOut> => {
+      const merged = new Map<string, ListingBulkPreview>();
+      const localized: string[] = [];
+      const warnings: string[] = [];
+      const picks: LocalizeOut["picks"] = [];
+      let locales: string[] | null = null;
+      let last: LocalizeOut;
+      do {
+        const response = await api.post<LocalizeOut>(
+          `/apps/${appId}/listing/localize`,
+          { proposal, storefront, locales },
+        );
+        last = response.data;
+        mergeBulkPreviews(merged, last.bulk_previews);
+        localized.push(...last.localized_locales);
+        warnings.push(...last.warnings);
+        picks.push(...last.picks);
+        locales = last.remaining_locales.length > 0 ? last.remaining_locales : null;
+      } while (locales);
+      return {
+        ...last,
+        bulk_previews: Array.from(merged.values()),
+        localized_locales: Array.from(new Set(localized)),
+        remaining_locales: [],
+        warnings,
+        picks,
+      };
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Localize failed",
+        message: ascErrorMessage(error, "Could not localize the proposal."),
+        color: "red",
+      });
+    },
+  });
+}
+
+export function useExportListing(appId: number) {
+  return useMutation({
+    mutationFn: async (source: ListingExportSource): Promise<void> => {
+      const response = await api.get(`/apps/${appId}/metadata/export`, {
+        params: { source },
+        responseType: "blob",
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `listing-${appId}-${source}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    },
+    onError: (error) => {
+      notifications.show({
+        title: "Export failed",
+        message: ascErrorMessage(error, "Could not export the listing."),
+        color: "red",
+      });
+    },
   });
 }
 

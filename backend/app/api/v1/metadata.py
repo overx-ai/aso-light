@@ -19,7 +19,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -48,6 +49,8 @@ from app.schemas.metadata import (
     TranslateOut,
     TranslateSuggestionItem,
 )
+from app.api.v1.listing import listing_service, run_listing
+from app.schemas.listing import ExportOut, ExportSource
 from app.services.asc.errors import ASCAPIError
 from app.services.keywords.cross_localization import CROSS_LOCALIZATION_DATA
 from app.services.metadata.bulk import (
@@ -768,6 +771,29 @@ async def keyword_coverage(
         by_locale,
     )
     return KeywordCoverageOut(items=items)
+
+
+# ------------------------------------------------------------------
+# Listing export
+# ------------------------------------------------------------------
+
+
+@router.get("/{app_id}/metadata/export", response_model=ExportOut)
+async def export_metadata(
+    app_id: int,
+    source: ExportSource = Query(default="current"),
+    current_user: dict[str, Any] = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> JSONResponse:
+    """Per-locale listing fields as a JSON download; ``proposal`` overlays the last localized proposal."""
+    service = await listing_service(app_id, current_user, session)
+    exported = await run_listing(service.export(source))
+    return JSONResponse(
+        exported.model_dump(mode="json"),
+        headers={
+            "Content-Disposition": f'attachment; filename="listing-{app_id}-{source}.json"',
+        },
+    )
 
 
 # ------------------------------------------------------------------

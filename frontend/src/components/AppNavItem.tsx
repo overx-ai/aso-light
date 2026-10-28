@@ -16,6 +16,7 @@ import {
   IconTargetArrow,
   IconPhoto,
   IconFlask,
+  IconSparkles,
 } from "@tabler/icons-react";
 import type { App } from "@/types";
 
@@ -30,6 +31,7 @@ const SUB_ROUTES = [
   { path: "keywords", label: "Keywords", icon: IconKeyboard },
   { path: "availability", label: "Availability", icon: IconWorld },
   { path: "metadata", label: "Metadata", icon: IconFileDescription },
+  { path: "listing", label: "Listing Optimizer", icon: IconSparkles },
   { path: "aso-check", label: "ASO Check", icon: IconChecks },
   { path: "cross-localization", label: "Cross-Loc", icon: IconLanguage },
   { path: "reviews", label: "Reviews", icon: IconMessage },

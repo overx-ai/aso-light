@@ -8,7 +8,6 @@ chain through :func:`resolve_app`.
 
 from __future__ import annotations
 
-import logging
 
 from fastmcp.exceptions import ToolError
 from sqlalchemy import select
@@ -73,17 +72,7 @@ from app.services.keywords.itunes_search import (
 )
 from app.services.keywords.suggestions import ITunesSuggestionsService
 from app.services.keywords.tracker import KeywordRankingTracker
-from app.services.metadata.translate import (
-    VARIANTS_FIELD_KIND,
-    TranslationOverflowError,
-    TranslationQuotaExceededError,
-    TranslatorUnavailableError,
-    build_translator,
-    split_variants,
-    translate_with_cache,
-)
-
-logger = logging.getLogger(__name__)
+from app.services.metadata.translate import build_translator, keyword_variants
 
 
 # ---------------------------------------------------------------------------
@@ -482,24 +471,9 @@ async def pack_keyword_fields(
         translator = build_translator(settings)
 
         async def variants_for(term: str, locale: str) -> list[str]:
-            if translator is None:
-                return []
-            try:
-                text, _ = await translate_with_cache(
-                    translator, session, app_id, term, source_locale, locale,
-                    VARIANTS_FIELD_KIND,
-                )
-            except (
-                TranslationQuotaExceededError,
-                TranslatorUnavailableError,
-                TranslationOverflowError,
-            ) as exc:
-                logger.warning(
-                    "Keyword variants unavailable app=%s locale=%s term=%r: %s",
-                    app_id, locale, term, exc,
-                )
-                return []
-            return split_variants(text)
+            return await keyword_variants(
+                translator, session, app_id, term, source_locale, locale,
+            )
 
         return await FreeKeywordIntel().build_pack(
             terms=cleaned,

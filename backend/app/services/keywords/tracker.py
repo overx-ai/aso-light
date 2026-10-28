@@ -19,6 +19,7 @@ from app.services.keywords.itunes_search import ITunesSearchService
 logger = logging.getLogger(__name__)
 
 DEFAULT_TERRITORY_CODES = ["US"]
+MAX_TRACKED_TERRITORIES = 10
 
 # Hard cap on (keyword x territory) external calls per refresh, and the max
 # in-flight iTunes requests. Bounds the work done in-request while holding the
@@ -49,7 +50,8 @@ class KeywordRankingTracker:
         Returns:
             Number of rankings recorded.
         """
-        codes = territory_codes or DEFAULT_TERRITORY_CODES
+        codes = list(dict.fromkeys(territory_codes or DEFAULT_TERRITORY_CODES))
+        codes = codes[:MAX_TRACKED_TERRITORIES]
 
         # Load the app to get its ASC app ID
         app_result = await self.session.execute(

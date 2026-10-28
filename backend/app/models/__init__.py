@@ -18,6 +18,7 @@ from app.models.economic_index import EconomicIndex
 from app.models.iap import IAPPrice, InAppPurchase
 from app.models.keyword import Keyword, KeywordLocaleIndex, KeywordRanking, KeywordTracking
 from app.models.keyword_intel import KeywordIntelCache
+from app.models.listing_draft import ListingDraft
 from app.models.metadata import (
     AppMetadataLocalization,
     AppMetadataState,
@@ -77,6 +78,7 @@ __all__ = [
     "SubscriptionPrice",
     "Territory",
     "User",
+    "ListingDraft",
     "KeywordVisibilityResult",
     "KeywordVisibilitySnapshot",
     "KeywordVisibilityWatch",

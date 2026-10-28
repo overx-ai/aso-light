@@ -52,6 +52,7 @@ FieldKind = Literal[
     "promotional_text",
     "whats_new",
     "keyword_variants",
+    "listing_proposals",
 ]
 
 # Not an ASC field: one search term in, TRANSLATION_VARIANTS native candidates out,
@@ -60,6 +61,10 @@ FieldKind = Literal[
 VARIANTS_FIELD_KIND: Final = "keyword_variants"
 TRANSLATION_VARIANTS: Final[int] = 3
 VARIANT_SEPARATOR: Final[str] = "\n"
+# Not an ASC field either: scored candidates + the current listing in (JSON), a JSON
+# array of LISTING_PROPOSALS {name, subtitle, keywords} sets out. Same cache and cap.
+PROPOSALS_FIELD_KIND: Final = "listing_proposals"
+LISTING_PROPOSALS: Final[int] = 3
 _LIST_MARKER = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s*")
 
 # Applied to a field kind with no documented Apple limit (defensive; every
@@ -427,6 +432,23 @@ def _build_system_prompt(
     return "\n".join(lines)
 
 
+def _proposals_prompt(target_locale: str) -> str:
+    limits = FIELD_CHAR_LIMITS
+    return "\n".join([
+        f"You are an App Store Optimization expert writing the {target_locale} listing.",
+        "The input is JSON: the current name/subtitle/keywords and scored search-term "
+        "candidates (popularity and difficulty are 0-100; value favours high popularity, "
+        "low difficulty).",
+        f"Propose {LISTING_PROPOSALS} different sets that cover the most valuable candidates.",
+        f"Hard limits: name <= {limits['name']} chars, subtitle <= {limits['subtitle']} "
+        f"chars, keywords <= {limits['keywords']} chars as comma-separated single words "
+        "with no spaces.",
+        "Never repeat a word across name, subtitle and keywords. Keep the brand name.",
+        'Output ONLY a JSON array of objects {"name": ..., "subtitle": ..., "keywords": ...}, '
+        "no commentary.",
+    ])
+
+
 def _post_process(text: str, field_kind: str) -> str:
     """Field-kind normalization applied to every raw completion."""
     if field_kind == "keywords":
@@ -550,6 +572,35 @@ async def translate_with_cache(
     # commit also releases the Postgres advisory lock acquired above.
     await session.commit()
     return translated, False
+
+
+async def keyword_variants(
+    translator: AbstractTranslator | None,
+    session: AsyncSession,
+    app_id: int,
+    term: str,
+    source_locale: str,
+    target_locale: str,
+) -> list[str]:
+    """Native variants for one search term; ``[]`` when no translation can be had."""
+    if translator is None:
+        return []
+    try:
+        text, _ = await translate_with_cache(
+            translator, session, app_id, term, source_locale, target_locale,
+            VARIANTS_FIELD_KIND,
+        )
+    except (
+        TranslationQuotaExceededError,
+        TranslatorUnavailableError,
+        TranslationOverflowError,
+    ) as exc:
+        logger.warning(
+            "Keyword variants unavailable app=%s locale=%s term=%r: %s",
+            app_id, target_locale, term, exc,
+        )
+        return []
+    return split_variants(text)
 
 
 async def _count_recent_translations(

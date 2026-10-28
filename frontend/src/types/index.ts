@@ -630,6 +630,94 @@ export interface KeywordCoverageItem {
   placement: KeywordPlacement;
 }
 
+// ---- Listing optimizer (spec 019) ----
+
+export interface BrainstormTerm {
+  term: string;
+  popularity: number;
+  difficulty: number;
+  value: number;
+  popularity_source: string | null;
+}
+
+export interface VariantPick {
+  source_term: string;
+  locale: string;
+  best: string;
+  score: number;
+  alternatives: string[];
+  not_searched_here: boolean;
+}
+
+export interface BrainstormOut {
+  storefront: string;
+  source_locale: string;
+  competitor_track_id: string | null;
+  using: BrainstormTerm[];
+  missing: BrainstormTerm[];
+  variants: VariantPick[];
+}
+
+export type GapPlacement = KeywordPlacement | "missing_localized";
+
+export interface GapCell {
+  keyword: string;
+  locale: string;
+  storefront: string;
+  rank: number | null;
+  variant: string | null;
+  placement: GapPlacement;
+}
+
+export interface GapsOut {
+  locales: string[];
+  keywords: string[];
+  cells: GapCell[];
+}
+
+export interface RankingsRefreshOut {
+  territories: string[];
+  recorded: number;
+}
+
+export interface ListingProposal {
+  name: string;
+  subtitle: string;
+  keywords: string;
+}
+
+export interface ScoredProposal extends ListingProposal {
+  covered_popularity: number;
+  delta_vs_current: number;
+}
+
+export interface ProposalsOut {
+  storefront: string;
+  source_locale: string;
+  current: ScoredProposal;
+  proposals: ScoredProposal[];
+}
+
+export interface ListingBulkPreview {
+  field: string;
+  value: string | null;
+  target_locales: string[];
+  values_by_locale: Record<string, string>;
+}
+
+export interface LocalizeOut {
+  storefront: string;
+  source_locale: string;
+  bulk_previews: ListingBulkPreview[];
+  locked_fields: string[];
+  localized_locales: string[];
+  remaining_locales: string[];
+  picks: VariantPick[];
+  warnings: string[];
+}
+
+export type ListingExportSource = "current" | "proposal";
+
 export interface KeywordCoverageOut {
   items: KeywordCoverageItem[];
 }

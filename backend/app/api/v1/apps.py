@@ -1,7 +1,7 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,6 +44,7 @@ async def list_apps(
 
 @router.post("/sync", response_model=AppSyncResponse)
 async def sync_apps(
+    background_tasks: BackgroundTasks,
     credential_id: int | None = Query(default=None),
     current_user: dict[str, Any] = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
@@ -68,6 +69,7 @@ async def sync_apps(
 
     from app.services.asc.apps import sync_apps_for_credentials
     from app.services.keywords.itunes_search import ITunesSearchService
+    from app.services.listing.background import brainstorm_new_apps
 
     if credential_id is not None:
         credentials = [credential]
@@ -84,6 +86,7 @@ async def sync_apps(
     if synced_apps:
         await ITunesSearchService().backfill_icons(synced_apps)
         await session.flush()
+        background_tasks.add_task(brainstorm_new_apps, [a.id for a in synced_apps])
 
     logger.info("Synced %d app(s) for user_id=%s", len(synced_apps), user_id)
     return AppSyncResponse(

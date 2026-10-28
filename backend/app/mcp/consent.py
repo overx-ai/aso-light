@@ -263,6 +263,8 @@ READ_ONLY: frozenset[str] = frozenset({
     "keyword_intel_list",
     # pack_fields is left unclassified like metadata_translate: it bills AI translations.
     "keyword_intel_score_free",
+    # --- listing optimizer: brainstorm/propose/localize write or bill AI and keep prompting ---
+    "listing_gaps",
     # --- keywords (search/suggestions proxy iTunes, but write nothing) ---
     "keywords_cross_localization",
     "keywords_get_rankings",
@@ -273,6 +275,7 @@ READ_ONLY: frozenset[str] = frozenset({
     "keywords_suggestions",
     # --- metadata (bulk_preview computes a diff; bulk_apply is the write) ---
     "metadata_bulk_preview",
+    "metadata_export",
     "metadata_get_locale",
     "metadata_get_snapshot",
     "metadata_keyword_coverage",

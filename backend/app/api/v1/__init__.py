@@ -17,6 +17,7 @@ from app.api.v1.growth import router as growth_router
 from app.api.v1.indices import router as indices_router
 from app.api.v1.keyword_intel import router as keyword_intel_router
 from app.api.v1.keywords import router as keywords_router
+from app.api.v1.listing import router as listing_router
 from app.api.v1.metadata import (
     keywords_extra_router as metadata_keywords_router,
     router as metadata_router,
@@ -50,6 +51,7 @@ router.include_router(visibility_router, prefix="/apps", tags=["visibility"])
 router.include_router(growth_router, prefix="/apps", tags=["growth"])
 router.include_router(keyword_intel_router, prefix="/apps", tags=["keyword-intel"])
 router.include_router(aso_check_router, prefix="/apps", tags=["aso-check"])
+router.include_router(listing_router, prefix="/apps", tags=["listing"])
 router.include_router(clash_router, prefix="/apps", tags=["clash"])
 router.include_router(screenshots_router, prefix="/apps", tags=["screenshots"])
 router.include_router(cpp_router, prefix="/apps", tags=["cpp"])

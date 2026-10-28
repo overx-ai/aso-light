@@ -41,6 +41,7 @@ from app.mcp.tools import (  # noqa: E402, F401
     growth,
     indices,
     keywords,
+    listing,
     metadata,
     pricing,
     presets,

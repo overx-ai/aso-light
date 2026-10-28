@@ -6,7 +6,10 @@ from typing import Literal
 
 from app.schemas.metadata import KeywordCoverageItem
 
-KeywordPlacement = Literal["title", "subtitle", "keywords", "none"]
+KeywordPlacement = Literal["title", "subtitle", "keywords", "none", "missing_localized"]
+
+# Beyond this rank (or unranked) a source term is not carrying the market on its own.
+POOR_RANK_THRESHOLD = 50
 
 
 def classify_keyword(
@@ -14,6 +17,9 @@ def classify_keyword(
     name: str | None,
     subtitle: str | None,
     keywords_field: str | None,
+    *,
+    variant: str | None = None,
+    source_rank: int | None = None,
 ) -> KeywordPlacement:
     """Determine where (if anywhere) `keyword` appears in the metadata.
 
@@ -26,7 +32,28 @@ def classify_keyword(
     are matched by substring against the full title/subtitle but as
     exact comma-tokens within the keywords field (since users typically
     enter single words there per Apple guidance).
+
+    With ``variant`` (the locale's chosen native term) the variant is matched
+    too; ``missing_localized`` means neither is present while the source term
+    ranks poorly there (``source_rank`` None = unranked).
     """
+    placement = _placement(keyword, name, subtitle, keywords_field)
+    if placement != "none" or not variant:
+        return placement
+    placement = _placement(variant, name, subtitle, keywords_field)
+    if placement != "none":
+        return placement
+    if source_rank is None or source_rank > POOR_RANK_THRESHOLD:
+        return "missing_localized"
+    return "none"
+
+
+def _placement(
+    keyword: str | None,
+    name: str | None,
+    subtitle: str | None,
+    keywords_field: str | None,
+) -> KeywordPlacement:
     if keyword is None:
         return "none"
 

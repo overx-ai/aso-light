@@ -390,7 +390,12 @@ async def asa_popularity_by_term(session: AsyncSession, app_id: int, storefront:
 
 
 async def listing_terms_from_lookup(
-    track_id: str, storefront: str, *, stopwords: frozenset[str], brand: str | None,
+    track_id: str,
+    storefront: str,
+    *,
+    stopwords: frozenset[str],
+    brand: str | None,
+    include_description: bool = True,
 ) -> set[str]:
     """iTunes lookup carries no subtitle or keyword field: name + description only."""
     found = await ITunesSearchService().lookup_apps([track_id], storefront.lower())
@@ -398,11 +403,14 @@ async def listing_terms_from_lookup(
         return set()
     return extract_listing_terms(
         name=found[0].get("trackName"), subtitle=None, keywords=None,
-        description=found[0].get("description"), stopwords=stopwords, brand=brand,
+        description=found[0].get("description") if include_description else None,
+        stopwords=stopwords, brand=brand,
     )
 
 
-async def own_listing_terms(session: AsyncSession, app: App, locale: str) -> set[str]:
+async def own_listing_terms(
+    session: AsyncSession, app: App, locale: str, *, include_description: bool = True,
+) -> set[str]:
     """The ``using`` set: the app's own listing as n-grams, from the ASC snapshot when synced."""
     stopwords = stopwords_for_locales([locale])
     brand = brand_token(app.name)
@@ -416,13 +424,14 @@ async def own_listing_terms(session: AsyncSession, app: App, locale: str) -> set
     if not by_kind:
         return await listing_terms_from_lookup(
             app.asc_app_id, storefront_for_locale(locale), stopwords=stopwords, brand=brand,
+            include_description=include_description,
         )
     info, version = by_kind.get("app_info"), by_kind.get("version")
     return extract_listing_terms(
         name=info.name if info else None,
         subtitle=info.subtitle if info else None,
         keywords=version.keywords if version else None,
-        description=version.description if version else None,
+        description=version.description if version and include_description else None,
         stopwords=stopwords,
         brand=brand,
     )

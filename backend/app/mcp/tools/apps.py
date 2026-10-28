@@ -18,6 +18,7 @@ from app.models.credential import ASCCredential
 from app.schemas.app import AppResponse, AppSyncResponse
 from app.services.asc.apps import sync_apps_for_credentials
 from app.services.keywords.itunes_search import ITunesSearchService
+from app.services.listing.background import schedule_brainstorm
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,10 @@ async def sync_apps_tool(credential_id: int | None = None) -> AppSyncResponse:
             await ITunesSearchService().backfill_icons(synced_apps)
             await session.flush()
 
-        return AppSyncResponse(
+        response = AppSyncResponse(
             synced=len(synced_apps),
             apps=[AppResponse.model_validate(a) for a in synced_apps],
         )
+    # After the scope commits, so the background session sees the new apps.
+    schedule_brainstorm(a.id for a in response.apps)
+    return response
