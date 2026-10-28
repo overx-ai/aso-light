@@ -1,10 +1,10 @@
 ---
 id: 019
 title: "Listing optimizer: brainstorm on add, market gap board, AI listing proposals, one-click localize, JSON export"
-status: draft
+status: approved
 priority: p1
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-10-28
 repo: aso-light
 release:
 story:

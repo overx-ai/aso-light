@@ -1,10 +1,10 @@
 ---
 id: 014
 title: "Free keyword intel: popularity proxy, organic difficulty, competitor title mining, native-term validation, field packer"
-status: draft
+status: approved
 priority: p1
 created: 2026-09-25
-updated: 2026-10-26
+updated: 2026-10-28
 tasks: []
 ---
 
