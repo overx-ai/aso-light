@@ -156,6 +156,14 @@ def test_openrouter_translate_parses_choice_and_sends_expected_request() -> None
     roles = [m["role"] for m in call["json"]["messages"]]
     assert roles == ["system", "user"]
     assert "Source (en-US):" in call["json"]["messages"][1]["content"]
+    assert call["json"]["reasoning"] == {"enabled": False}
+
+
+def test_openrouter_empty_completion_raises_instead_of_returning_blank() -> None:
+    client = _FakeClient(_FakeResponse(_openrouter_payload("")))
+    translator = OpenRouterTranslator(api_key="sk-or-x", model="x/y", http_client=client)
+    with pytest.raises(TranslatorUnavailableError):
+        run_async(translator.translate("Breathing", "en-US", "de-DE", "subtitle"))
 
 
 def test_openrouter_translate_post_processes_keywords() -> None:

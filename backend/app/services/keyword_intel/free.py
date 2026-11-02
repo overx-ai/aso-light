@@ -72,6 +72,8 @@ LISTING_MAX_NGRAM = 3
 MAX_MINED_CANDIDATES = 30
 SEED_EXPANSION_TOP = 3
 MAX_EXPANSION_TERMS = 10
+# Hints also list app titles ("wim hof method: breathwork"); a search term has no colon.
+APP_TITLE_MARK = ":"
 
 RATING_COUNT_CEILING = 1_000_000
 RATING_WEIGHT = 0.6
@@ -305,7 +307,10 @@ class FreeKeywordIntel:
             seed_score = await self.popularity(prefix, storefront)
             for position, hint in enumerate(hints):
                 term = hint.casefold().strip()
-                if term == prefix or not term.startswith(prefix) or term in exclude or term in found:
+                if (
+                    term == prefix or not term.startswith(prefix) or APP_TITLE_MARK in term
+                    or term in exclude or term in found
+                ):
                     continue
                 rank_fraction = 1 - position / len(hints)
                 found[term] = max(1, round(seed_score * rank_fraction))

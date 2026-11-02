@@ -278,3 +278,16 @@ def test_competitor_keywords_alias_is_gone_and_free_tools_registered():
     registered = run_async(names())
     assert "keywords_add_competitor_keywords" not in registered
     assert {"keyword_intel_score_free", "keyword_intel_pack_fields"} <= registered
+
+
+def test_split_variants_drops_explanations():
+    from app.services.metadata.translate import split_variants
+
+    text = "coherencia cardiaca\nthe source term is french for heart coherence, so use this\n- respiración"
+    assert split_variants(text) == ["coherencia cardiaca", "respiración"]
+
+
+def test_seed_expansion_skips_app_titles():
+    hints = _FakeHints({"w": ["wim hof"], "wim hof": ["wim hof method: breathwork", "wim hof breathing"]})
+    intel = FreeKeywordIntel(suggestions=hints, search=None)
+    assert list(run_async(intel.seed_expansion(["wim hof"], "US", exclude=set()))) == ["wim hof breathing"]

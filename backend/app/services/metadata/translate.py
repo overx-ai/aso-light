@@ -60,6 +60,8 @@ FieldKind = Literal[
 # cache and monthly cap cover it unchanged.
 VARIANTS_FIELD_KIND: Final = "keyword_variants"
 TRANSLATION_VARIANTS: Final[int] = 3
+# Longer lines are the model explaining itself, not a search term.
+MAX_VARIANT_WORDS: Final[int] = 5
 VARIANT_SEPARATOR: Final[str] = "\n"
 # Not an ASC field either: scored candidates + the current listing in (JSON), a JSON
 # array of LISTING_PROPOSALS {name, subtitle, keywords} sets out. Same cache and cap.
@@ -262,6 +264,8 @@ class OpenRouterTranslator(_PromptedTranslator):
         payload = {
             "model": self._model,
             "max_tokens": 1024,
+            # Reasoning models otherwise spend the whole budget thinking and return "".
+            "reasoning": {"enabled": False},
             "messages": [
                 {"role": "system", "content": system},
                 {
@@ -287,9 +291,11 @@ class OpenRouterTranslator(_PromptedTranslator):
         response.raise_for_status()
         data = response.json()
         choices = data.get("choices") or []
-        if not choices:
-            return ""
-        return (choices[0].get("message", {}).get("content") or "").strip()
+        content = (choices[0].get("message", {}).get("content") or "").strip() if choices else ""
+        if not content:
+            # An empty answer would be cached as the translation; fail over instead.
+            raise TranslatorUnavailableError(f"{self.model_name} returned an empty completion")
+        return content
 
 
 class FallbackTranslator(AbstractTranslator):
@@ -462,7 +468,8 @@ def _post_process(text: str, field_kind: str) -> str:
 
 def split_variants(text: str) -> list[str]:
     cleaned = (_LIST_MARKER.sub("", line).strip().lower() for line in text.splitlines())
-    return list(dict.fromkeys(v for v in cleaned if v))[:TRANSLATION_VARIANTS]
+    terms = (v for v in cleaned if v and len(v.split()) <= MAX_VARIANT_WORDS)
+    return list(dict.fromkeys(terms))[:TRANSLATION_VARIANTS]
 
 
 def _post_process_keywords(text: str) -> str:
