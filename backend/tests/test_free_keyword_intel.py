@@ -86,6 +86,18 @@ def test_popularity_counts_a_hint_that_extends_the_whole_term():
     assert run_async(intel.popularity("breath", "US")) == 0
 
 
+def test_seed_expansion_keeps_completions_scored_below_their_seed():
+    hints = _FakeHints({
+        "s": ["sleep"],
+        "sleep": ["sleep", "sleep sounds", "slip", "sleep timer for babies with white noise"],
+    })
+    intel = FreeKeywordIntel(suggestions=hints, search=None)
+    seed_score = run_async(intel.popularity("sleep", "US"))
+    found = run_async(intel.seed_expansion(["sleep"], "US", exclude=set()))
+    assert list(found) == ["sleep sounds", "sleep timer for babies with white noise"]
+    assert seed_score > found["sleep sounds"] > found["sleep timer for babies with white noise"]
+
+
 def test_popularity_does_not_cache_a_walk_that_saw_no_hints():
     hints = _FakeHints({})
     intel = FreeKeywordIntel(suggestions=hints, search=None)

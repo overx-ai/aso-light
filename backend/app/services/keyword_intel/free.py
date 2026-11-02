@@ -295,19 +295,20 @@ class FreeKeywordIntel:
     async def seed_expansion(
         self, seeds: Sequence[str], storefront: str, *, exclude: set[str],
     ) -> dict[str, int]:
-        """Hints for each whole validated term (a short prefix returns the store's generic
-        top searches); one hint call per seed, popularity from the hint's list position."""
+        """Completions of each whole validated term (a short prefix returns the store's
+        generic top searches). A completion is searched no more than its seed, so it scores
+        the seed's (cached) popularity scaled by its rank in the seed's hint list."""
         found: dict[str, int] = {}
         for seed in seeds:
             prefix = seed.casefold().strip()
             hints = await self._suggestions.get_suggestions(prefix, storefront.lower())
+            seed_score = await self.popularity(prefix, storefront)
             for position, hint in enumerate(hints):
                 term = hint.casefold().strip()
-                if len(term) < len(prefix) or term in exclude or term in found:
+                if term == prefix or not term.startswith(prefix) or term in exclude or term in found:
                     continue
-                found[term] = prefix_depth_score(
-                    len(prefix), len(term), position=position, list_size=len(hints),
-                )
+                rank_fraction = 1 - position / len(hints)
+                found[term] = max(1, round(seed_score * rank_fraction))
                 if len(found) >= MAX_EXPANSION_TERMS:
                     return found
         return found
