@@ -71,7 +71,6 @@ MINING_MAX_NGRAM = 2
 LISTING_MAX_NGRAM = 3
 MAX_MINED_CANDIDATES = 30
 SEED_EXPANSION_TOP = 3
-SEED_PREFIX_LEN = 2
 MAX_EXPANSION_TERMS = 10
 
 RATING_COUNT_CEILING = 1_000_000
@@ -218,10 +217,15 @@ class FreeKeywordIntel:
                 )
             ]
             saw_hints = saw_hints or bool(hints)
-            if normalized in hints:
+            # Apple lists "breathing app" rather than the bare head term "breathing",
+            # so a hint that starts with the whole term counts as the term itself.
+            position = next(
+                (i for i, h in enumerate(hints) if h == normalized or h.startswith(normalized + " ")),
+                None,
+            )
+            if position is not None:
                 score = prefix_depth_score(
-                    prefix_len, len(normalized),
-                    position=hints.index(normalized), list_size=len(hints),
+                    prefix_len, len(normalized), position=position, list_size=len(hints),
                 )
                 break
 
@@ -291,11 +295,11 @@ class FreeKeywordIntel:
     async def seed_expansion(
         self, seeds: Sequence[str], storefront: str, *, exclude: set[str],
     ) -> dict[str, int]:
-        """Hints for short prefixes of validated terms; each hint's popularity comes from
-        its own position in that list, so expansion costs one hint call per seed."""
+        """Hints for each whole validated term (a short prefix returns the store's generic
+        top searches); one hint call per seed, popularity from the hint's list position."""
         found: dict[str, int] = {}
         for seed in seeds:
-            prefix = seed.casefold()[:SEED_PREFIX_LEN]
+            prefix = seed.casefold().strip()
             hints = await self._suggestions.get_suggestions(prefix, storefront.lower())
             for position, hint in enumerate(hints):
                 term = hint.casefold().strip()
@@ -318,8 +322,10 @@ class FreeKeywordIntel:
         variants_for: VariantSource,
         names_by_locale: dict[str, str | None],
         subtitles_by_locale: dict[str, str | None],
+        spent_texts: Sequence[str | None] = (),
     ) -> PackFieldsOut:
         picks_out: list[VariantPickOut] = []
+        warnings: list[str] = []
         expansion_out: dict[str, list[str]] = {}
         candidates_by_locale: dict[str, list[PackCandidate]] = {}
 
@@ -327,9 +333,15 @@ class FreeKeywordIntel:
             same_language = language_of(locale) == language_of(source_locale)
             # Sequential: variants_for may share the caller's DB session (translation cache).
             variants = [
-                [term] if same_language else (await variants_for(term, locale) or [term])
+                [term] if same_language else await variants_for(term, locale)
                 for term in terms
             ]
+            untranslated = [term for term, found in zip(terms, variants) if not found]
+            if untranslated:
+                warnings.append(
+                    f"{locale}: no translation for {', '.join(untranslated)}; packed as-is"
+                )
+            variants = [found or [term] for term, found in zip(terms, variants)]
 
             async def pick(term_variants: list[str], locale: str = locale) -> VariantPick:
                 return await self.pick_best_variant(term_variants, locale, storefront)
@@ -368,6 +380,7 @@ class FreeKeywordIntel:
             candidates_by_locale,
             names_by_locale=names_by_locale,
             subtitles_by_locale=subtitles_by_locale,
+            spent_texts=spent_texts,
         )
         return PackFieldsOut(
             storefront=storefront,
@@ -375,6 +388,7 @@ class FreeKeywordIntel:
             expansion=expansion_out,
             values_by_locale=fields,
             bulk_preview=bulk_preview_payload(fields),
+            warnings=warnings,
         )
 
 

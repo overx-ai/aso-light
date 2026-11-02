@@ -2322,10 +2322,24 @@ export function useLocalizeListing(appId: number) {
 export function useExportListing(appId: number) {
   return useMutation({
     mutationFn: async (source: ListingExportSource): Promise<void> => {
-      const response = await api.get(`/apps/${appId}/metadata/export`, {
-        params: { source },
-        responseType: "blob",
-      });
+      const response = await api
+        .get(`/apps/${appId}/metadata/export`, {
+          params: { source },
+          responseType: "blob",
+        })
+        .catch(async (error) => {
+          // A blob request delivers the JSON error body as a Blob too; parse it so
+          // the API's detail ("localize first") reaches the notification.
+          const data = error?.response?.data;
+          if (data instanceof Blob) {
+            try {
+              error.response.data = JSON.parse(await data.text());
+            } catch {
+              // not JSON: keep the generic message
+            }
+          }
+          throw error;
+        });
       downloadBlob(new Blob([response.data]), `listing-${appId}-${source}.json`);
     },
     onError: (error) => {

@@ -55,12 +55,13 @@ def pack_storefront(
     *,
     names_by_locale: Mapping[str, str | None],
     subtitles_by_locale: Mapping[str, str | None],
+    spent_texts: Iterable[str | None] = (),
     limit: int = FIELD_CHAR_LIMITS[KEYWORDS_FIELD],
 ) -> dict[str, str]:
     """Locales in order; every locale indexed in one storefront shares one word budget,
-    so a word in any name/subtitle or an earlier locale's field is never repeated."""
+    so a word in any name/subtitle, ``spent_texts`` or an earlier locale's field is never repeated."""
     used: set[str] = set()
-    for text in (*names_by_locale.values(), *subtitles_by_locale.values()):
+    for text in (*names_by_locale.values(), *subtitles_by_locale.values(), *spent_texts):
         used.update(words(text))
 
     fields: dict[str, str] = {}

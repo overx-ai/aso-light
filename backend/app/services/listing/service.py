@@ -613,14 +613,14 @@ class ListingOptimizerService:
         for storefront, group in groups.items():
             names: dict[str, str | None] = {}
             subtitles: dict[str, str | None] = {}
+            spent: list[str | None] = []
             for locale in get_indexed_locales_for_territory(storefront) or group:
                 names[locale] = values.get("name", {}).get(locale) or await self._field(locale, "name")
                 subtitles[locale] = (
                     values.get("subtitle", {}).get(locale) or await self._field(locale, "subtitle")
                 )
                 if locale not in group:
-                    # Words already in another indexed locale's keyword field are spent.
-                    names[f"{locale}#{KEYWORDS_FIELD}"] = (
+                    spent.append(
                         values[KEYWORDS_FIELD].get(locale) or await self._field(locale, KEYWORDS_FIELD)
                     )
             pack = await self.intel.build_pack(
@@ -631,8 +631,10 @@ class ListingOptimizerService:
                 variants_for=variants_for,
                 names_by_locale=names,
                 subtitles_by_locale=subtitles,
+                spent_texts=spent,
             )
             out.picks.extend(pack.picks)
+            out.warnings.extend(pack.warnings)
             values[KEYWORDS_FIELD].update(pack.values_by_locale)
 
     async def _save_draft(

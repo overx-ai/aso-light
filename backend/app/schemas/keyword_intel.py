@@ -65,3 +65,4 @@ class PackFieldsOut(BaseModel):
     expansion: dict[str, list[str]] = Field(default_factory=dict)
     values_by_locale: dict[str, str]
     bulk_preview: dict[str, Any]
+    warnings: list[str] = Field(default_factory=list)

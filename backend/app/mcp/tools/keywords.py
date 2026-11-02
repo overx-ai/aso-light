@@ -427,12 +427,13 @@ async def pack_keyword_fields(
     For each target locale (default: up to 4 of the storefront's indexed locales the
     app has metadata for, else the first one) every term is translated into up to 3 native
     variants, each scored by search hints; the best wins, a term whose variants all
-    miss is ``not_searched_here``. Hints for 2-letter prefixes of the top validated
-    terms add ``expansion`` candidates. Fields are packed greedily by
+    miss is ``not_searched_here``. Hints for the top validated terms add
+    ``expansion`` candidates. Fields are packed greedily by
     popularity x (1 - difficulty/100) per char into <=100 chars, skipping words in
     any name/subtitle and never repeating a word across the storefront's locales.
     ``name``/``subtitle`` add a planned name/subtitle to that exclusion. Pass
-    ``bulk_preview`` to ``metadata_bulk_preview`` to review the diff.
+    ``bulk_preview`` to ``metadata_bulk_preview`` to review the diff. ``warnings`` names
+    terms packed untranslated because no translation could be had.
     """
     cleaned = _clean_terms(terms, MAX_PACK_TERMS)
     storefront = _clean_storefront(storefront)
@@ -463,9 +464,20 @@ async def pack_keyword_fields(
             with_metadata = [loc for loc in indexed if loc in info_by_locale]
             chosen = (with_metadata or indexed[:1])[:MAX_PACK_LOCALES]
 
+        has_source = await session.scalar(
+            select(AppMetadataLocalization.id).where(
+                AppMetadataLocalization.app_id == app_id,
+                AppMetadataLocalization.locale == source_locale,
+            ).limit(1)
+        )
+        if has_source is None:
+            raise ToolError(
+                f"source_locale {source_locale} has no synced metadata for this app; "
+                "pass one of its locales or run metadata_sync first"
+            )
+
         names: dict[str, str | None] = {loc: r.name for loc, r in info_by_locale.items()}
         subtitles: dict[str, str | None] = {loc: r.subtitle for loc, r in info_by_locale.items()}
-        names["planned"], subtitles["planned"] = name, subtitle
 
         translator = build_translator(settings)
 
@@ -482,6 +494,7 @@ async def pack_keyword_fields(
             variants_for=variants_for,
             names_by_locale=names,
             subtitles_by_locale=subtitles,
+            spent_texts=[name, subtitle],
         )
 
 

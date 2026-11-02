@@ -79,6 +79,13 @@ def test_popularity_stops_on_first_hit_and_misses_score_zero():
     assert miss == 0
 
 
+def test_popularity_counts_a_hint_that_extends_the_whole_term():
+    hints = _FakeHints({"br": ["breathwork", "breathing app"]})
+    intel = FreeKeywordIntel(suggestions=hints, search=None)
+    assert run_async(intel.popularity("breathing", "US")) > 0
+    assert run_async(intel.popularity("breath", "US")) == 0
+
+
 def test_popularity_does_not_cache_a_walk_that_saw_no_hints():
     hints = _FakeHints({})
     intel = FreeKeywordIntel(suggestions=hints, search=None)
@@ -93,7 +100,9 @@ class _LowCompetitionSearch:
 
 
 def test_build_pack_validates_variants_and_packs_each_locale():
-    hints = _FakeHints({"sl": ["sleep timer", "sleep"], "te": ["temporizador"]})
+    hints = _FakeHints({
+        "sl": ["sleep timer"], "sleep timer": ["sleep timer", "sleep timer app"], "te": ["temporizador"],
+    })
     intel = FreeKeywordIntel(suggestions=hints, search=_LowCompetitionSearch())
 
     async def variants_for(term: str, locale: str) -> list[str]:
@@ -112,9 +121,10 @@ def test_build_pack_validates_variants_and_packs_each_locale():
     assert picks[("es-MX", "sleep timer")].best == "temporizador"
     assert picks[("es-MX", "sleep timer")].alternatives == ["zzqx"]
     assert picks[("en-US", "qqqq")].not_searched_here is True
-    assert out.expansion["en-US"] == ["sleep"]
-    assert out.values_by_locale == {"en-US": "sleep,timer", "es-MX": "temporizador"}
+    assert out.expansion["en-US"] == ["sleep timer app"]
+    assert out.values_by_locale == {"en-US": "sleep,timer,app", "es-MX": "temporizador"}
     assert out.bulk_preview["field"] == "keywords"
+    assert out.warnings == ["es-MX: no translation for qqqq; packed as-is"]
 
 
 def test_difficulty_rises_with_rating_counts_and_title_matches():
@@ -139,6 +149,7 @@ def test_packer_respects_limit_name_words_and_cross_locale_repeats():
         candidates,
         names_by_locale={locales[0]: "Sleep Timer"},
         subtitles_by_locale={locales[0]: "Word00 relax"},
+        spent_texts=["word01,word02"],
     )
     seen: list[str] = []
     for loc in locales:
@@ -146,7 +157,7 @@ def test_packer_respects_limit_name_words_and_cross_locale_repeats():
         assert len(value) <= FIELD_CHAR_LIMITS["keywords"]
         assert " " not in value
         terms = value.split(",") if value else []
-        assert not {"sleep", "timer", "word00"} & set(terms)
+        assert not {"sleep", "timer", "word00", "word01", "word02"} & set(terms)
         seen.extend(terms)
     assert len(seen) == len(set(seen))
     assert seen

@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # OpenRouter (openrouter.ai) is OpenAI-compatible; we call it via httpx.
     OPENROUTER_API_KEY: str | None = None
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-    OPENROUTER_TRANSLATION_MODEL: str = "anthropic/claude-3.5-haiku"
+    OPENROUTER_TRANSLATION_MODEL: str = "anthropic/claude-haiku-5.5"
     # Ordered, comma-separated provider chain tried by build_translator().
     # Providers without a configured API key are skipped; the rest run as an
     # automatic fallback chain (failover on any provider error).
