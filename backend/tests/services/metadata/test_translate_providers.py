@@ -159,11 +159,20 @@ def test_openrouter_translate_parses_choice_and_sends_expected_request() -> None
     assert call["json"]["reasoning"] == {"enabled": False}
 
 
-def test_openrouter_empty_completion_raises_instead_of_returning_blank() -> None:
-    client = _FakeClient(_FakeResponse(_openrouter_payload("")))
+@pytest.mark.parametrize(
+    ("content", "field_kind"),
+    [
+        ("", "subtitle"),
+        ("the source term is french for heart coherence, so use this", "keyword_variants"),
+    ],
+)
+def test_empty_or_emptied_completion_raises_instead_of_returning_blank(
+    content: str, field_kind: str,
+) -> None:
+    client = _FakeClient(_FakeResponse(_openrouter_payload(content)))
     translator = OpenRouterTranslator(api_key="sk-or-x", model="x/y", http_client=client)
     with pytest.raises(TranslatorUnavailableError):
-        run_async(translator.translate("Breathing", "en-US", "de-DE", "subtitle"))
+        run_async(translator.translate("Breathing", "en-US", "de-DE", field_kind))
 
 
 def test_openrouter_translate_post_processes_keywords() -> None:

@@ -218,15 +218,16 @@ providers so it can read their fresh rows.
 
 | Signal | How |
 |---|---|
-| Popularity | Shortest search-hint prefix that returns the term (≤`MAX_PREFIX_PROBES` probes), position in the list → 0–100. Also written to the shared `Keyword.popularity` (public data, app-independent) |
+| Popularity | Shortest search-hint prefix that returns the term, or a hint that extends it by whole words (Apple lists "breathing app", never bare "breathing"), ≤`MAX_PREFIX_PROBES` probes; position in the list → 0–100. Also written to the shared `Keyword.popularity` (public data, app-independent) |
 | Blend | ASA popularity above its floor (5) wins, else hints; per-app row carries `popularity_source` = `asa` \| `hints` |
 | Difficulty | iTunes top-10: median rating count (log) + share of titles containing the term |
-| Native terms | Translator returns `TRANSLATION_VARIANTS` (3) options; best hints score wins, all-miss → `not_searched_here` |
+| Native terms | Translator returns `TRANSLATION_VARIANTS` (3) options (lines over 5 words dropped as commentary); best hints score wins, all-miss → `not_searched_here`. No translation → term packed as-is and named in `warnings` |
+| Expansion | Hints for each whole validated term (a 2-letter prefix returns store-wide top searches); only true completions, no app titles (`:`), scored ≤ the seed |
 | Packer | `packer.py`, pure: value = popularity × (1 − difficulty/100), greedy by value/len, no name/subtitle words, no repeats across a storefront's indexed locales |
 
 A walk that saw no hints at all (Apple outage) is not cached, so an outage never
 marks terms as unsearched for the hint-cache TTL. Not search volume: a relative
-ranking. Live correlation against ASA has not been measured yet.
+ranking. Live correlation against ASA has not been measured yet (no ASA credential linked; T-028).
 
 ---
 

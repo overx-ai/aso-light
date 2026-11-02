@@ -49,15 +49,14 @@ updated: 2026-10-28
 | T-010 | Alembic migrations (replace create_all in dev) | Backend | 2026-05-09 | Startup now upgrades via Alembic before seeding territories |
 | T-025 | Bulk locale creation + keyword-research fixes (spec 012) | Backend | 2026-08-24 | R1 `create_missing` on bulk metadata (unblocks 31-locale fan-outs); R2 `X-Apple-Store-Front` header — `keywords_suggestions` had silently returned `[]` since day one; R3 real `keyword_intel_*` MCP tools, 2 mislabeled aliases deleted; R5 single `FIELD_CHAR_LIMITS` + retry-then-raise instead of mid-word truncation; R6 search-term report app-scoped. 331 → 347 tests |
 | T-026 | Main product-page screenshots over MCP (spec 010) | Backend | 2026-08-24 | `screenshots_list` / `_upload` / `_delete`; `delete_screenshot` / `delete_screenshot_set` are the first deletes in the screenshot service layer. `screenshots_list` is the resume/repair primitive for an interrupted bulk run |
+| T-027 | Keyword follow-ups after 014/019 live check | keyword_intel | 2026-11-02 | Bugs 015-018 (retired OpenRouter model, head terms scored 0, generic brainstorm expansion, empty reasoning completion cached); `pack_storefront(spent_texts=)`; pack/localize `warnings`; `source_locale` check; export Blob error parsing |
 | B-004 | App preview videos (`appPreviewSets`) | Backend | 2026-10-17 | Spec 017: `previews_sync` / `cpp_previews_sync` / `experiment_previews_sync`, ffprobe-checked before any upload; the screenshot sync engine became `services/asc/asset_sync.py`, shared by both kinds |
 
 ## Backlog
 
 | # | Task | Area | Priority | Notes |
 |---|------|------|----------|-------|
-| T-027 | `packer.pack_storefront`: explicit `spent_texts` param instead of `{locale}#keywords` keys in `names_by_locale` | keyword_intel | low | spec 019 review |
-| T-028 | Live check of free hints vs ASA popularity (Spearman, share of floor-5 terms rescued) on one ASA app | keyword_intel | medium | spec 014 acceptance, not run |
-| T-029 | Export download: parse Blob error body so the 404 "localize first" detail shows | frontend | low | spec 019 review |
+| T-028 | Live check of free hints vs ASA popularity (Spearman, share of floor-5 terms rescued) on one ASA app | keyword_intel | medium | blocked: no ASA credential linked (2026-11-02). Free path live-checked on Refresher |
 | B-001 | Google Play price management | Backend | low | Double scope, not in MVP |
 | B-002 | DeepL / OpenAI / Gemini translation providers | Backend | low | Anthropic shipped in Phase 5; ABC ready — formalize `model_name` property when 2nd provider lands |
 | B-003 | In-App Events management | Backend | low | Phase 6+ |

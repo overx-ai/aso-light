@@ -81,7 +81,7 @@ class TranslationQuotaExceededError(Exception):
 
 
 class TranslatorUnavailableError(Exception):
-    """Raised when every configured translation provider fails."""
+    """Raised when a provider yields nothing usable, or every configured provider fails."""
 
 
 class TranslationOverflowError(Exception):
@@ -154,10 +154,17 @@ class _PromptedTranslator(AbstractTranslator):
                 allowlist,
                 overflow_by=overflow_by,
             )
-            return _post_process(
+            result = _post_process(
                 await self._complete(system, source_locale, text),
                 field_kind,
             )
+            if not result:
+                # Covers a blank completion and one post-processing emptied (every
+                # variant line an explanation): caching "" would serve it forever.
+                raise TranslatorUnavailableError(
+                    f"{self.model_name} returned no usable {field_kind} completion",
+                )
+            return result
 
         translated = await attempt()
         if len(translated) <= char_limit:
@@ -291,11 +298,9 @@ class OpenRouterTranslator(_PromptedTranslator):
         response.raise_for_status()
         data = response.json()
         choices = data.get("choices") or []
-        content = (choices[0].get("message", {}).get("content") or "").strip() if choices else ""
-        if not content:
-            # An empty answer would be cached as the translation; fail over instead.
-            raise TranslatorUnavailableError(f"{self.model_name} returned an empty completion")
-        return content
+        if not choices:
+            return ""
+        return (choices[0].get("message", {}).get("content") or "").strip()
 
 
 class FallbackTranslator(AbstractTranslator):

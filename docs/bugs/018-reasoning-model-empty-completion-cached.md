@@ -1,7 +1,7 @@
 ---
 id: 018
 title: "listing_propose returns no proposals: Haiku 5.5 reasoning eats max_tokens, empty completion is cached"
-status: open
+status: fixed
 priority: p1
 severity: high
 created: 2026-11-02
@@ -26,5 +26,7 @@ OpenRouter usage: `completion_tokens: 1024, reasoning_tokens: 1024`.
 `OpenRouterTranslator._complete` returns `""` on an empty message and sends no `reasoning` setting.
 
 ## Fix
+OpenRouter payload sends `reasoning: {enabled: false}`; an empty completion raises `TranslatorUnavailableError` (fails over, never cached). `split_variants` drops lines over 5 words (model explanations). Existing empty cache rows were deleted from the dev DB.
 
 ## Regression test
+`test_openrouter_empty_completion_raises_instead_of_returning_blank`, reasoning flag asserted in the request test, `test_split_variants_drops_explanations`. Live: `listing_propose` returns 2 valid sets.

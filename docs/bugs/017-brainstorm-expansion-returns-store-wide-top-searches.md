@@ -1,7 +1,7 @@
 ---
 id: 017
 title: "listing_brainstorm \"missing\" is filled with unrelated store-wide searches (costco, coinbase)"
-status: open
+status: fixed
 priority: p1
 severity: high
 created: 2026-11-02
@@ -24,5 +24,7 @@ files: backend/app/services/keyword_intel/free.py
 `seed_expansion` used `SEED_PREFIX_LEN = 2`.
 
 ## Fix
+`seed_expansion` probes the whole seed, keeps only true completions (no app titles with `:`), and scores each from the seed's own popularity scaled by hint rank.
 
 ## Regression test
+`test_seed_expansion_keeps_completions_scored_below_their_seed`, `test_seed_expansion_skips_app_titles`. Live: `missing` now led by coherence/wim hof/anxiety relief/breathing exercises.
