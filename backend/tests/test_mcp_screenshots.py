@@ -2834,3 +2834,10 @@ def test_sync_skips_its_own_upload_while_apple_withholds_the_checksum(
     fr = _row(_sync(monkeypatch, client, out), "fr-FR")
 
     assert (fr.action, fr.uploads, fr.processing) == ("skip", 0, 2)
+
+
+def test_the_iphone_duo_family_is_a_known_display_type():
+    from app.services.asc.asset_sync import DISPLAY_TYPE_BY_SIZE
+
+    assert is_valid_display_type("APP_IPHONE_DUO")
+    assert DISPLAY_TYPE_BY_SIZE[(2007, 2853)] == "APP_IPHONE_DUO"
