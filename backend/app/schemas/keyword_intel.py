@@ -4,7 +4,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.data.storefronts import STOREFRONT_ALIASES, STOREFRONTS
 
 
 class KeywordIntelOut(BaseModel):
@@ -48,6 +50,49 @@ class FreeScoreOut(BaseModel):
     storefront: str
     scores: list[FreeTermScore]
     candidates: list[MinedCandidate] = Field(default_factory=list)
+
+
+class NicheOut(BaseModel):
+    term: str
+    popularity: int
+    difficulty: int
+    real_apps: int
+    weak_apps: int
+    median_ratings: int
+    opportunity: int
+    top_titles: list[str] = Field(default_factory=list)
+
+
+class NicheScanOut(BaseModel):
+    storefront: str
+    seeds: list[str]
+    scanned: int
+    niches: list[NicheOut]
+
+
+MAX_NICHE_SEEDS = 3
+
+
+class NicheScanIn(BaseModel):
+    seeds: list[str] = Field(min_length=1, max_length=MAX_NICHE_SEEDS)
+    storefront: str = "US"
+
+    @field_validator("seeds")
+    @classmethod
+    def _seeds(cls, v: list[str]) -> list[str]:
+        cleaned = list(dict.fromkeys(s.strip() for s in v if s.strip()))
+        if not cleaned:
+            raise ValueError("seeds must hold at least one non-empty term")
+        return cleaned
+
+    @field_validator("storefront")
+    @classmethod
+    def _storefront(cls, v: str) -> str:
+        code = v.strip().lower()
+        code = STOREFRONT_ALIASES.get(code, code)
+        if code not in STOREFRONTS:
+            raise ValueError("expected an alpha-2 storefront code like US")
+        return code.upper()
 
 
 class VariantPickOut(BaseModel):

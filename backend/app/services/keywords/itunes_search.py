@@ -218,6 +218,8 @@ class ITunesSearchService:
                 "bundle_id": result.get("bundleId", ""),
                 "icon_url": result.get("artworkUrl60", ""),
                 "rating_count": result.get("userRatingCount") or 0,
+                "avg_rating": result.get("averageUserRating"),
+                "updated_at": result.get("currentVersionReleaseDate"),
             })
         return results
 

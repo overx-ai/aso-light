@@ -26,7 +26,10 @@ from app.db.session import get_session
 from app.schemas.keyword_intel import (
     KeywordIntelOut,
     KeywordIntelRefreshOut,
+    NicheScanIn,
+    NicheScanOut,
 )
+from app.services.keyword_intel.niche import NicheFinder
 from app.services.keyword_intel.service import (
     DEFAULT_DAYS,
     DEFAULT_LIMIT,
@@ -38,6 +41,7 @@ from app.services.keyword_intel.service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+niche_router = APIRouter()
 
 
 @router.post(
@@ -84,3 +88,11 @@ async def list_keyword_intel(
         source=source,
         limit=limit,
     )
+
+
+@niche_router.post("/niches", response_model=NicheScanOut)
+async def scan_niches(
+    body: NicheScanIn,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> NicheScanOut:
+    return await NicheFinder().scan(body.seeds, body.storefront)

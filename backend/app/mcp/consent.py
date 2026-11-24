@@ -261,6 +261,7 @@ READ_ONLY: frozenset[str] = frozenset({
     "indices_list_gdp",
     "indices_status",
     "keyword_intel_list",
+    "keyword_intel_niche_scan",
     # pack_fields is left unclassified like metadata_translate: it bills AI translations.
     "keyword_intel_score_free",
     # --- listing optimizer: brainstorm/propose/localize write or bill AI and keep prompting ---

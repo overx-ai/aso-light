@@ -41,7 +41,9 @@ from app.schemas.keyword import (
 from app.schemas.keyword_intel import (
     FreeScoreOut,
     KeywordIntelOut,
+    MAX_NICHE_SEEDS,
     KeywordIntelRefreshOut,
+    NicheScanOut,
     PackFieldsOut,
 )
 from app.services.keyword_intel.free import (
@@ -53,6 +55,7 @@ from app.services.keyword_intel.free import (
     asa_popularity_by_term,
     brand_token,
 )
+from app.services.keyword_intel.niche import NicheFinder
 from app.services.keyword_intel.service import (
     DEFAULT_DAYS,
     DEFAULT_LIMIT,
@@ -410,6 +413,22 @@ async def score_free_keyword_intel(
         cleaned, storefront,
         asa_popularity=asa, brand=brand, extra_titles=competitor_titles,
     )
+
+
+@mcp.tool(name="keyword_intel_niche_scan")
+async def niche_scan(seeds: list[str], storefront: str = DEFAULT_STOREFRONT) -> NicheScanOut:
+    """Find searched terms the store serves badly — app ideas, not tied to any app.
+
+    Expands each seed into hint completions and its long tail ("seed a".."seed z"),
+    keeps terms with hints popularity of at least 20, and checks the iTunes top 10:
+    ``real_apps`` are on-title results with 1000+ ratings updated in the last 18 months,
+    ``weak_apps`` are on-title results failing either bar. ``opportunity`` is popularity
+    discounted by organic difficulty, and 0 when more than 2 real apps exist. Read-only;
+    a scan of 3 seeds can take a few minutes because hint calls are throttled.
+    """
+    get_user_id()
+    cleaned = _clean_terms(seeds, MAX_NICHE_SEEDS)
+    return await NicheFinder().scan(cleaned, _clean_storefront(storefront))
 
 
 @mcp.tool(name="keyword_intel_pack_fields")
