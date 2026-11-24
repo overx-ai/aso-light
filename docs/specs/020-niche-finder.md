@@ -1,7 +1,7 @@
 ---
 id: 020
 title: "Niche finder: searched terms the store serves badly"
-status: approved
+status: done
 priority: p1
 created: 2026-11-24
 updated: 2026-11-24
@@ -14,10 +14,10 @@ conflicts_with: []
 
 # 020 - Niche Finder
 
-> **TL;DR** — A standalone scan (no app needed) that expands up to 3 seed terms into their long tail,
+> **TL;DR** — Shipped a standalone scan (no app needed) that expands up to 3 seed terms into their long tail,
 > scores demand from Apple search hints and supply from the iTunes top 10, and ranks terms people search
 > where no "real app" (on-title, 1000+ ratings, updated in 18 months) owns the results. MCP
-> `keyword_intel_niche_scan` + `POST /keyword-intel/niches`; read-only, no web page yet.
+> `keyword_intel_niche_scan` + `POST /keyword-intel/niches` (2 scans/min); read-only, no web page yet.
 
 **Prerequisites**: [014 - Free keyword intel](014-free-keyword-intel.md), [010 - Keyword intelligence](../010-keyword-intelligence.md)
 
@@ -52,9 +52,9 @@ New module `services/keyword_intel/niche.py`, reusing `FreeKeywordIntel` from 01
 ## Tasks
 | ID | Description | Agent | Depends On | Status | Files |
 |----|-------------|-------|------------|--------|-------|
-| T1 | `NicheFinder` + `classify_supply`, iTunes fields | dev | — | pending | backend/app/services/keyword_intel/niche.py, backend/app/services/keywords/itunes_search.py, backend/app/schemas/keyword_intel.py |
-| T2 | MCP tool, consent, REST route | dev | T1 | pending | backend/app/mcp/tools/keywords.py, backend/app/mcp/consent.py, backend/app/api/v1/keyword_intel.py, backend/app/api/v1/__init__.py |
-| T3 | Tests | test-writer | T1 | pending | backend/tests/test_niche_finder.py |
+| T1 | `NicheFinder` + `classify_supply`, iTunes fields | dev | — | done | backend/app/services/keyword_intel/niche.py, backend/app/services/keywords/itunes_search.py, backend/app/schemas/keyword_intel.py |
+| T2 | MCP tool, consent, REST route | dev | T1 | done | backend/app/mcp/tools/keywords.py, backend/app/mcp/consent.py, backend/app/api/v1/keyword_intel.py, backend/app/api/v1/__init__.py |
+| T3 | Tests | test-writer | T1 | done | backend/tests/test_niche_finder.py |
 
 ## Acceptance
 

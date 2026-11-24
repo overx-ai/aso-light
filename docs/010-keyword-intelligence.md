@@ -1,7 +1,7 @@
 ---
 status: current
 created: 2026-06-01
-updated: 2026-10-28
+updated: 2026-11-24
 ---
 
 # 010 — Keyword Intelligence
@@ -195,6 +195,7 @@ the rest still run.
 | `keyword_intel_refresh_providers(app_id, provider?, days=30)` | `POST .../keyword-intel/refresh` | `provider` narrows the run to one source; an unknown name is a `ToolError` |
 | `keyword_intel_score_free(app_id, terms, storefront)` | — | Hints-prefix popularity, organic difficulty, competitor title mining; ≤25 terms; read-only |
 | `keyword_intel_pack_fields(app_id, terms, storefront, source_locale, locales?)` | — | Variant-picks native terms, packs ≤100-char keyword fields per indexed locale, returns a `metadata_bulk_preview` payload; ≤10 terms, ≤4 locales. **Unclassified (prompts)** — it bills AI translations |
+| `keyword_intel_niche_scan(seeds, storefront)` | `POST /keyword-intel/niches` | Niche finder (spec 020), no app needed: ≤3 seeds expanded via hint completions + `"{seed} a..z"` long tail (≤30 terms), hints popularity ≥20, iTunes top-10 supply. `real_apps` = on-title, ≥1000 ratings, updated ≤540 days; `opportunity` = popularity × (100 − difficulty)/100, 0 above 2 real apps. Read-only; REST is rate-limited to 2 scans/min |
 
 Both run the same `resolve_app` ownership chain as every other app-scoped tool
 and share their bodies with the REST routes via
@@ -297,7 +298,7 @@ Ballpark pricing per vendor (2026):
 | Schema | `backend/app/schemas/keyword_intel.py` |
 | Shared read/refresh | `backend/app/services/keyword_intel/service.py` (`PROVIDER_FACTORIES`, `run_providers`, `list_intel`) |
 | REST route | `backend/app/api/v1/keyword_intel.py` |
-| MCP tools | `backend/app/mcp/tools/keywords.py` (`keyword_intel_list`, `keyword_intel_refresh_providers`, `keyword_intel_score_free`, `keyword_intel_pack_fields`) |
+| MCP tools | `backend/app/mcp/tools/keywords.py` (`keyword_intel_list`, `keyword_intel_refresh_providers`, `keyword_intel_score_free`, `keyword_intel_pack_fields`, `keyword_intel_niche_scan`); niche finder in `backend/app/services/keyword_intel/niche.py` |
 | Migration | `backend/alembic/versions/03e831a0b230_add_keyword_intel_cache.py` |
 | Frontend hook + types | `frontend/src/lib/hooks.ts` (`useKeywordIntel`, `useRefreshKeywordIntel`, `bestIntelByKeyword`) |
 | Frontend consumer | `frontend/src/components/metadata/MetadataGrid.tsx` |

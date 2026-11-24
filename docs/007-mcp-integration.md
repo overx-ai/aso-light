@@ -1,7 +1,7 @@
 ---
 status: current
 created: 2026-05-09
-updated: 2026-10-28
+updated: 2026-11-24
 ---
 
 # 007 — MCP Integration
@@ -134,7 +134,7 @@ Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 | `growth`      | 1     | Ranked growth recommendations (pricing gaps, ASO gaps)           |
 | `indices`     | 3     | GDP / PPP / BigMac / Spotify / Netflix index status & refresh    |
 | `keywords`    | 13    | iTunes search/suggestions, keyword tracking, rankings, competitors |
-| `keyword_intel`| 4    | Cached keyword volume/difficulty: read the cache, refresh the providers; free hints scoring (`keyword_intel_score_free`) and keyword-field packing (`keyword_intel_pack_fields`, prompts) |
+| `keyword_intel`| 5    | Cached keyword volume/difficulty: read the cache, refresh the providers; free hints scoring (`keyword_intel_score_free`), keyword-field packing (`keyword_intel_pack_fields`, prompts) and the app-less niche finder (`keyword_intel_niche_scan`) |
 | `listing`     | 5     | Listing optimizer (spec 019): `listing_brainstorm` (using vs missing keywords), `listing_gaps` (keyword × market, `missing_localized`), `listing_propose` (3 name/subtitle/keywords sets), `listing_localize` (batched → bulk-preview payload), `metadata_export` (JSON). Only gaps + export are read-only; the LLM-billing ones prompt |
 | `metadata`    | 10    | App-info / version metadata, locale CRUD, bulk apply, AI translate |
 | `presets`     | 5     | Pricing-formula preset CRUD                                      |
