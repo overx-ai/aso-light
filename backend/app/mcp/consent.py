@@ -258,6 +258,7 @@ READ_ONLY: frozenset[str] = frozenset({
     "experiment_list_treatment_screenshots",
     "experiment_list_treatments",
     "growth_recommendations",
+    "idea_digest_list",
     "indices_list_gdp",
     "indices_status",
     "keyword_intel_list",

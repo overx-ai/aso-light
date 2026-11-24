@@ -69,6 +69,7 @@ class NicheScanOut(BaseModel):
     storefront: str
     seeds: list[str]
     scanned: int
+    skipped: int = 0
     niches: list[NicheOut]
 
 

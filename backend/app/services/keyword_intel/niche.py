@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
+import re
 import statistics
 import string
 from collections.abc import Sequence
@@ -11,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 
 from app.schemas.keyword_intel import NicheOut, NicheScanOut
 from app.services.keyword_intel.free import (
-    APP_TITLE_MARK,
     FreeKeywordIntel,
     _default_services,
     _Search,
@@ -30,6 +31,14 @@ REAL_APP_MIN_RATINGS = 1000
 STALE_DAYS = 540
 LONG_TAIL_LETTERS = string.ascii_lowercase
 TOP_TITLES_SHOWN = 5
+# Narrower than tokenize's segment break: people do search "bed & breakfast" and "24/7 gym".
+_TITLE_PUNCTUATION = re.compile(r"[:|,·•–—]|\s-\s")
+# "sleep sounds by ambient" is an app attributed to its maker; "color by number" is a search.
+ATTRIBUTION_WORD = "by"
+BY_PHRASE_ENDINGS = frozenset({
+    "age", "date", "day", "hour", "letter", "letters", "location", "me", "name", "number", "numbers",
+    "photo", "picture", "side", "step", "voice", "week", "year", "zip",
+})
 # Hints list developer names too ("breathing app, llc").
 COMPANY_SUFFIXES = frozenset({"llc", "inc", "ltd", "limited", "gmbh", "corp"})
 
@@ -79,6 +88,23 @@ def classify_supply(results: Sequence[dict], term: str, now: datetime) -> Supply
     return Supply(real, weak, round(statistics.median(counts)) if counts else 0)
 
 
+def is_attributed(tokens: Sequence[str]) -> bool:
+    return any(
+        word == ATTRIBUTION_WORD and following not in BY_PHRASE_ENDINGS
+        for word, following in itertools.pairwise(tokens)
+    )
+
+
+def is_title_like(hint: str) -> bool:
+    """App and developer names among hints; a typed search has no title punctuation."""
+    tokens = words(hint)
+    return (
+        bool(_TITLE_PUNCTUATION.search(hint))
+        or is_attributed(tokens)
+        or not COMPANY_SUFFIXES.isdisjoint(tokens[-1:])
+    )
+
+
 def opportunity(popularity: int, difficulty: int, real_apps: int) -> int:
     if real_apps > NICHE_MAX_REAL_APPS:
         return 0
@@ -112,12 +138,12 @@ class NicheFinder:
 
     async def _long_tail(self, probe: str, country: str) -> list[str]:
         hints = (h.casefold().strip() for h in await self._suggestions.get_suggestions(probe, country))
-        return [t for t in hints if t.startswith(probe) and APP_TITLE_MARK not in t]
+        return [t for t in hints if t.startswith(probe) and not is_title_like(t)]
 
     async def candidates(self, seeds: Sequence[str], storefront: str) -> list[str]:
         normalized = _normalize(seeds)
         expansion = await self._intel.seed_expansion(normalized, storefront, exclude=set(normalized))
-        terms = dict.fromkeys([*normalized, *expansion])
+        terms = dict.fromkeys([*normalized, *(t for t in expansion if not is_title_like(t))])
         # Letter-major across seeds so every seed gets a long tail, and probing stops at
         # the cap instead of spending 26 hint calls per seed on terms that get cut.
         probes = (f"{seed} {letter}" for letter in LONG_TAIL_LETTERS for seed in normalized)
@@ -131,11 +157,10 @@ class NicheFinder:
         terms = await self.candidates(seeds, storefront)
         asked = set(_normalize(seeds))
         now = datetime.now(timezone.utc)
+        skipped = 0
 
         async def one(term: str) -> NicheOut | None:
-            is_hint = term not in asked
-            if is_hint and not COMPANY_SUFFIXES.isdisjoint(words(term)[-1:]):
-                return None
+            nonlocal skipped
             popularity = await self._intel.popularity(term, storefront)
             if popularity < NICHE_MIN_POPULARITY:
                 return None
@@ -143,9 +168,10 @@ class NicheFinder:
             # search_apps swallows HTTP errors as []; a searched term never has zero results,
             # so scoring one would rank an outage as a wide-open niche.
             if not results:
+                skipped += 1
                 return None
             difficulty, titles = results_difficulty(results, term)
-            if is_hint and is_app_name(term, titles):
+            if term not in asked and is_app_name(term, titles):
                 return None
             supply = classify_supply(results, term, now)
             return NicheOut(
@@ -161,4 +187,6 @@ class NicheFinder:
 
         scored = [n for n in await gather_bounded(terms, one, concurrency=REFRESH_CONCURRENCY) if n]
         scored.sort(key=lambda n: (-n.opportunity, -n.popularity))
-        return NicheScanOut(storefront=storefront, seeds=list(seeds), scanned=len(terms), niches=scored)
+        return NicheScanOut(
+            storefront=storefront, seeds=list(seeds), scanned=len(terms), skipped=skipped, niches=scored,
+        )

@@ -32,3 +32,7 @@ backend/.cache/
 .playwright-mcp/
 frontend/.claude/
 .worktrees/
+
+# App idea cards and Studio decisions (local to the owner)
+/ideas/
+/studio/

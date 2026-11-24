@@ -1,0 +1,4 @@
+{"name": "aso-light", "collections": [
+  {"id": "app-ideas", "group": "Decide", "title": "App ideas", "kind": "doc", "glob": "ideas/*.md",
+   "statuses": {"pending": ["new"], "approved": ["approved"], "rejected": ["rejected"]}}
+]}

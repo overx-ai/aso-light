@@ -167,3 +167,23 @@ def test_app_name_matches_first_title_only():
 
 def test_descriptive_title_shared_by_competitors_is_not_an_app_name():
     assert not is_app_name("sleep sounds free", ["Sleep Sounds", "Rain Rain Sleep Sounds"])
+
+
+def test_title_like_hints_are_not_searches():
+    assert all(niche.is_title_like(h) for h in ["cash advance, money borrowing", "job search by globalworkai"])
+    searches = ["meal planner for weight loss", "step by step", "color by number", "bed & breakfast", "near by"]
+    assert not any(niche.is_title_like(h) for h in searches)
+
+
+def test_title_like_expansion_takes_no_slot(monkeypatch):
+    monkeypatch.setattr(niche, "MAX_NICHE_TERMS", 2)
+    hints = _FakeHints({"yoga": ["yoga", "yoga by studio", "yoga timer"]})
+    finder = NicheFinder(suggestions=hints, search=_FakeSearch({}))
+    assert run_async(finder.candidates(["yoga"], "US")) == ["yoga", "yoga timer"]
+
+
+def test_failed_lookups_are_counted():
+    out = run_async(NicheFinder(
+        suggestions=_FakeHints({"b": ["breathing"]}), search=_FakeSearch({}),
+    ).scan(["breathing"], "US"))
+    assert (out.skipped, out.niches) == (1, [])

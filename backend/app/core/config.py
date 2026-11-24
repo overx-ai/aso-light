@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     SCREENSHOT_SYNC_ROOTS: list[str] = [str(Path.home() / "JACK")]
     # ffprobe probes each app preview before previews_sync plans it.
     FFPROBE_BIN: str = "ffprobe"
+    # Idea cards are files so Studio can list and decide them (studio.json).
+    IDEA_DIGEST_DIR: str = str(Path(__file__).resolve().parents[3] / "ideas")
+    IDEA_DIGEST_NOTIFY_URL: str = ""
 
     model_config = {
         "env_file": ".env",

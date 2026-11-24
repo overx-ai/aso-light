@@ -39,6 +39,7 @@ from app.mcp.tools import (  # noqa: E402, F401
     cpp,
     experiment,
     growth,
+    ideas,
     indices,
     keywords,
     listing,

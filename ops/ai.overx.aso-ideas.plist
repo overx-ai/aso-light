@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.overx.aso-ideas</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string><string>-c</string><string>export PATH=/Users/user/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH; cd /Users/user/JACK/aso-light/backend &amp;&amp; uv run --quiet python -m scripts.idea_digest</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>8</integer>
+        <key>Minute</key><integer>20</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/Users/user/Library/Logs/aso-ideas.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/user/Library/Logs/aso-ideas.log</string>
+</dict>
+</plist>

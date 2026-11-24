@@ -6,13 +6,13 @@ updated: 2026-11-24
 
 # 007 — MCP Integration
 
-> **TL;DR** — The MCP server at `/mcp` exposing the full REST surface as 200 annotated
+> **TL;DR** — The MCP server at `/mcp` exposing the full REST surface as 208 annotated
 > tools, authenticated with Personal Access Tokens. Read-only tools skip the approval
 > prompt; destructive ones go through a per-operation consent gate. Includes client
 > config and the high-leverage workflows.
 
 ASO-Light ships a Model Context Protocol (MCP) server mounted on the FastAPI
-backend at `/mcp`. It exposes the project's full REST surface (200 tools
+backend at `/mcp`. It exposes the project's full REST surface (208 tools
 across apps, pricing, metadata, keywords, reviews, visibility, RevenueCat,
 ASO audit, swap, etc.) so an LLM client (Claude Desktop, OpenAI MCP client,
 custom agents) can drive the product programmatically.
@@ -117,7 +117,7 @@ Tool names are `<module>_<action>` — **underscores, never dots**. The
 Anthropic tool-name regex is `^[a-zA-Z0-9_-]{1,64}$`, so a dotted name breaks
 Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 
-200 tools across 24 modules:
+208 tools across 25 modules:
 
 | Module        | Tools | Domain                                                           |
 | ------------- | ----- | ---------------------------------------------------------------- |
@@ -135,6 +135,7 @@ Claude Desktop outright; `backend/tests/test_mcp_tool_names.py` enforces this.
 | `indices`     | 3     | GDP / PPP / BigMac / Spotify / Netflix index status & refresh    |
 | `keywords`    | 13    | iTunes search/suggestions, keyword tracking, rankings, competitors |
 | `keyword_intel`| 5    | Cached keyword volume/difficulty: read the cache, refresh the providers; free hints scoring (`keyword_intel_score_free`), keyword-field packing (`keyword_intel_pack_fields`, prompts) and the app-less niche finder (`keyword_intel_niche_scan`) |
+| `idea_digest`  | 1    | `idea_digest_list`: app ideas from the daily digest and their Studio decision (spec 021); read-only, host-wide rather than per user |
 | `listing`     | 5     | Listing optimizer (spec 019): `listing_brainstorm` (using vs missing keywords), `listing_gaps` (keyword × market, `missing_localized`), `listing_propose` (3 name/subtitle/keywords sets), `listing_localize` (batched → bulk-preview payload), `metadata_export` (JSON). Only gaps + export are read-only; the LLM-billing ones prompt |
 | `metadata`    | 10    | App-info / version metadata, locale CRUD, bulk apply, AI translate |
 | `presets`     | 5     | Pricing-formula preset CRUD                                      |
