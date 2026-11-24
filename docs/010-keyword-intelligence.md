@@ -195,7 +195,7 @@ the rest still run.
 | `keyword_intel_refresh_providers(app_id, provider?, days=30)` | `POST .../keyword-intel/refresh` | `provider` narrows the run to one source; an unknown name is a `ToolError` |
 | `keyword_intel_score_free(app_id, terms, storefront)` | — | Hints-prefix popularity, organic difficulty, competitor title mining; ≤25 terms; read-only |
 | `keyword_intel_pack_fields(app_id, terms, storefront, source_locale, locales?)` | — | Variant-picks native terms, packs ≤100-char keyword fields per indexed locale, returns a `metadata_bulk_preview` payload; ≤10 terms, ≤4 locales. **Unclassified (prompts)** — it bills AI translations |
-| `keyword_intel_niche_scan(seeds, storefront)` | `POST /keyword-intel/niches` | Niche finder (spec 020), no app needed: ≤3 seeds expanded via hint completions + `"{seed} a..z"` long tail (≤30 terms), hints popularity ≥20, iTunes top-10 supply. `real_apps` = on-title, ≥1000 ratings, updated ≤540 days; `opportunity` = popularity × (100 − difficulty)/100, 0 above 2 real apps. On-title ignores English modifier words (free, app, best…); hinted app/developer names and terms with no search results are skipped. English-oriented: ja/zh supply is unreliable. Read-only; REST is rate-limited to 2 scans/min |
+| `keyword_intel_niche_scan(seeds, storefront)` | `POST /keyword-intel/niches` | Niche finder (spec 020), no app needed: ≤3 seeds expanded via hint completions + `"{seed} a..z"` long tail (≤60 terms), hints popularity ≥20, iTunes top-10 supply. `real_apps` = on-title, ≥1000 ratings, updated ≤540 days; `opportunity` = popularity × (100 − difficulty)/100, 0 above 2 real apps. On-title ignores English modifier words (free, app, best…); hinted app/developer names and terms with no search results are skipped. English-oriented: ja/zh supply is unreliable. Read-only; REST is rate-limited to 2 scans/min |
 
 Both run the same `resolve_app` ownership chain as every other app-scoped tool
 and share their bodies with the REST routes via
@@ -221,7 +221,7 @@ providers so it can read their fresh rows.
 |---|---|
 | Popularity | Shortest search-hint prefix that returns the term, or a hint that extends it by whole words (Apple lists "breathing app", never bare "breathing"), ≤`MAX_PREFIX_PROBES` probes; position in the list → 0–100. Also written to the shared `Keyword.popularity` (public data, app-independent) |
 | Blend | ASA popularity above its floor (5) wins, else hints; per-app row carries `popularity_source` = `asa` \| `hints` |
-| Difficulty | iTunes top-10: median rating count (log) + share of titles containing the term |
+| Difficulty | iTunes top-10: median rating count (log) + share of titles carrying all of the term's words, English modifiers (free, app, best…) ignored |
 | Native terms | Translator returns `TRANSLATION_VARIANTS` (3) options (lines over 5 words dropped as commentary); best hints score wins, all-miss → `not_searched_here`. No translation → term packed as-is and named in `warnings` |
 | Expansion | Hints for each whole validated term (a 2-letter prefix returns store-wide top searches); only true completions, no app titles (`:`), scored ≤ the seed |
 | Packer | `packer.py`, pure: value = popularity × (1 − difficulty/100), greedy by value/len, no name/subtitle words, no repeats across a storefront's indexed locales |

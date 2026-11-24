@@ -40,7 +40,7 @@ from app.services.keyword_intel.packer import (
     bulk_preview_payload,
     pack_storefront,
 )
-from app.services.keyword_intel.tokenize import contains_phrase, ngrams, words
+from app.services.keyword_intel.tokenize import core_words, covers_core, ngrams, words
 from app.services.keywords.concurrency import gather_bounded
 from app.services.keywords.cross_localization import (
     get_indexed_locales_for_territory,
@@ -115,8 +115,9 @@ def prefix_depth_score(prefix_len: int, term_len: int, *, position: int, list_si
 def organic_difficulty(rating_counts: Sequence[int], titles: Sequence[str], term: str) -> int:
     median = statistics.median(rating_counts) if rating_counts else 0
     rating_part = min(1.0, math.log10(1 + median) / math.log10(1 + RATING_COUNT_CEILING))
+    core = core_words(term)
     title_share = (
-        sum(contains_phrase(title, term) for title in titles) / len(titles) if titles else 0.0
+        sum(covers_core(title, core) for title in titles) / len(titles) if titles else 0.0
     )
     return round(100 * (RATING_WEIGHT * rating_part + (1 - RATING_WEIGHT) * title_share))
 

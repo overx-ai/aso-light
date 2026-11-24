@@ -291,3 +291,16 @@ def test_seed_expansion_skips_app_titles():
     hints = _FakeHints({"w": ["wim hof"], "wim hof": ["wim hof method: breathwork", "wim hof breathing"]})
     intel = FreeKeywordIntel(suggestions=hints, search=None)
     assert list(run_async(intel.seed_expansion(["wim hof"], "US", exclude=set()))) == ["wim hof breathing"]
+
+
+def test_difficulty_ignores_modifier_words():
+    titles = ["Rain Rain Sleep Sounds", "Sleep Sounds - Relax & Sleep"]
+    bare = organic_difficulty([5000, 5000], titles, "sleep sounds")
+    assert organic_difficulty([5000, 5000], titles, "sleep sounds free") == bare
+    assert organic_difficulty([5000, 5000], titles, "sleep sounds kids") < bare
+
+
+def test_difficulty_matches_words_in_any_order_but_not_word_parts():
+    none = organic_difficulty([5000], ["Calm"], "sleep timer")
+    assert organic_difficulty([5000], ["Timer: Calm & Sleep"], "sleep timer") > none
+    assert organic_difficulty([5000], ["Sleeping Timer"], "sleep timer") == none

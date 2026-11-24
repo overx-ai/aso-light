@@ -395,7 +395,7 @@ async def score_free_keyword_intel(
     Popularity comes from search-hint prefix depth (0-100, relative, not volume) and is
     replaced by ASA popularity only where ASA is above its floor of 5;
     ``popularity_source`` says which. Difficulty uses the iTunes top 10 (rating counts,
-    exact-term titles). ``candidates`` are 1-2-grams mined from those titles and the
+    titles carrying all the term's words; filler like free/app/best is ignored). ``candidates`` are 1-2-grams mined from those titles and the
     app's registered competitors, minus stopwords and the brand token (default: first
     word of the app name). Nothing is tracked or written. Terms are capped per call.
     """

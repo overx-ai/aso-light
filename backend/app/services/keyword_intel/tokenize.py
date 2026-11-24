@@ -8,6 +8,9 @@ from collections.abc import Collection
 # N-grams never span these: "Calm: Sleep & Meditation" must not yield "calm sleep".
 _SEGMENT_BREAK = re.compile(r"[:|,&.()/+!?;·•–—]+|\s-\s")
 _WORD = re.compile(r"\w+")
+# Words a searcher adds that a competing title rarely carries: "sleep sounds free" is
+# served by "Sleep Sounds" apps. English only.
+SEARCH_MODIFIERS = frozenset({"free", "app", "apps", "best", "top", "the", "a", "an", "for", "with", "and", "by", "of"})
 
 
 def words(text: str | None) -> list[str]:
@@ -39,13 +42,10 @@ def ngrams(
     return out
 
 
-def contains_phrase(text: str | None, phrase: str) -> bool:
-    needle = words(phrase)
-    if not needle:
-        return False
-    n = len(needle)
-    return any(
-        tokens[i:i + n] == needle
-        for tokens in segments(text)
-        for i in range(len(tokens) - n + 1)
-    )
+def core_words(text: str | None) -> list[str]:
+    tokens = words(text)
+    return [w for w in tokens if w not in SEARCH_MODIFIERS] or tokens
+
+
+def covers_core(title: str | None, core: Collection[str]) -> bool:
+    return bool(core) and set(core) <= set(words(title))

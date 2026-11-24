@@ -19,20 +19,17 @@ from app.services.keyword_intel.free import (
     rating_count,
     results_difficulty,
 )
-from app.services.keyword_intel.tokenize import segments, words
+from app.services.keyword_intel.tokenize import core_words, covers_core, segments, words
 from app.services.keywords.concurrency import gather_bounded
 from app.services.keywords.tracker import REFRESH_CONCURRENCY
 
-MAX_NICHE_TERMS = 30
+MAX_NICHE_TERMS = 60
 NICHE_MIN_POPULARITY = 20
 NICHE_MAX_REAL_APPS = 2
 REAL_APP_MIN_RATINGS = 1000
 STALE_DAYS = 540
 LONG_TAIL_LETTERS = string.ascii_lowercase
 TOP_TITLES_SHOWN = 5
-# Words a searcher adds that a competing title rarely carries: "sleep sounds free" is
-# served by "Sleep Sounds" apps. English only.
-NICHE_MODIFIERS = frozenset({"free", "app", "apps", "best", "top", "the", "a", "an", "for", "with", "and", "by", "of"})
 # Hints list developer names too ("breathing app, llc").
 COMPANY_SUFFIXES = frozenset({"llc", "inc", "ltd", "limited", "gmbh", "corp"})
 
@@ -54,32 +51,24 @@ def _updated(value: str | None) -> datetime | None:
     return parsed
 
 
-def _core(tokens: Sequence[str]) -> list[str]:
-    return [w for w in tokens if w not in NICHE_MODIFIERS] or list(tokens)
-
-
-def _on_title(title: str | None, core: Sequence[str]) -> bool:
-    return bool(core) and set(core) <= set(words(title))
-
-
 def is_app_name(term: str, titles: Sequence[str]) -> bool:
     """Hints complete to app names too ("breathing zone" for "Breathing Zone: Breathwork"),
     and Apple ranks the named app first. Other titles carrying the same words mean the first
     one is merely descriptive ("Sleep Sounds") and the search is a real one."""
-    core = _core(words(term))
+    core = core_words(term)
     if not core or not titles:
         return False
     first, *others = titles
-    named = any(_core(tokens) == core for tokens in (words(first), *segments(first)[:1]))
-    return named and not any(_on_title(title, core) for title in others)
+    named = any(core_words(" ".join(tokens)) == core for tokens in (words(first), *segments(first)[:1]))
+    return named and not any(covers_core(title, core) for title in others)
 
 
 def classify_supply(results: Sequence[dict], term: str, now: datetime) -> Supply:
     cutoff = now - timedelta(days=STALE_DAYS)
-    core = _core(words(term))
+    core = core_words(term)
     real = weak = 0
     for r in results:
-        if not _on_title(r.get("name"), core):
+        if not covers_core(r.get("name"), core):
             continue
         updated = _updated(r.get("updated_at"))
         if rating_count(r) >= REAL_APP_MIN_RATINGS and updated and updated >= cutoff:
