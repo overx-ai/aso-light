@@ -265,6 +265,13 @@ def normalize_country(value: str | None) -> str:
     return code or DEFAULT_COUNTRY
 
 
+def known_storefront(value: str) -> str | None:
+    """Upper-case alpha-2 storefront for ``value`` (aliases resolved), or None if unknown."""
+    code = value.strip().lower()
+    code = STOREFRONT_ALIASES.get(code, code)
+    return code.upper() if code in STOREFRONTS else None
+
+
 def resolve_storefront(country: str | None) -> tuple[int, str]:
     """Return ``(storefront_id, resolved_country)`` for ``country``.
 

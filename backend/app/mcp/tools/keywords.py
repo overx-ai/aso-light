@@ -18,7 +18,7 @@ from app.api.v1.keywords import (
     _compute_competitor_keyword_matrix,
 )
 from app.core.config import settings
-from app.data.storefronts import STOREFRONT_ALIASES, STOREFRONTS
+from app.data.storefronts import known_storefront
 from app.mcp.context import get_user_id, resolve_app, session_scope
 from app.mcp.server import mcp
 from app.models.competitor import CompetitorApp
@@ -39,9 +39,9 @@ from app.schemas.keyword import (
     SearchResult,
 )
 from app.schemas.keyword_intel import (
+    MAX_NICHE_SEEDS,
     FreeScoreOut,
     KeywordIntelOut,
-    MAX_NICHE_SEEDS,
     KeywordIntelRefreshOut,
     NicheScanOut,
     PackFieldsOut,
@@ -377,11 +377,10 @@ def _clean_terms(terms: list[str], cap: int) -> list[str]:
 def _clean_storefront(storefront: str) -> str:
     # get_suggestions silently falls back to US for an unknown storefront, which
     # would label US hints with the requested code.
-    code = storefront.strip().lower()
-    code = STOREFRONT_ALIASES.get(code, code)
-    if code not in STOREFRONTS:
+    code = known_storefront(storefront)
+    if code is None:
         raise ToolError(f"Unknown storefront {storefront!r}; expected an alpha-2 code like US")
-    return code.upper()
+    return code
 
 
 @mcp.tool(name="keyword_intel_score_free")

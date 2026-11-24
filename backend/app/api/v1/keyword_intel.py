@@ -1,6 +1,6 @@
 """REST endpoints for the keyword-intelligence subsystem.
 
-Two routes today:
+App-scoped routes:
 
 * ``POST /apps/{app_id}/keyword-intel/refresh`` — runs the configured providers
   (currently ``asa_search_terms`` + ``asa_recommendations``) and writes results
@@ -10,6 +10,9 @@ Two routes today:
 
 Both bodies live in ``app.services.keyword_intel.service`` so the MCP mirror
 (``keyword_intel_list`` / ``keyword_intel_refresh_providers``) shares them.
+
+``POST /keyword-intel/niches`` (spec 020) is not app-scoped: it scans seed terms for
+under-served niches via ``NicheFinder``, mirrored by MCP ``keyword_intel_niche_scan``.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1._deps import _get_verified_app
+from app.core.ratelimit import rate_limit
 from app.core.security import get_current_user
 from app.db.session import get_session
 from app.schemas.keyword_intel import (
@@ -42,6 +46,9 @@ from app.services.keyword_intel.service import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 niche_router = APIRouter()
+
+# A scan makes hundreds of throttled Apple calls from the shared backend IP.
+NICHE_SCANS_PER_MIN = 2
 
 
 @router.post(
@@ -93,6 +100,8 @@ async def list_keyword_intel(
 @niche_router.post("/niches", response_model=NicheScanOut)
 async def scan_niches(
     body: NicheScanIn,
-    current_user: dict[str, Any] = Depends(get_current_user),
+    _current_user: dict[str, Any] = Depends(
+        rate_limit("keyword_intel.niches", per_min=NICHE_SCANS_PER_MIN),
+    ),
 ) -> NicheScanOut:
     return await NicheFinder().scan(body.seeds, body.storefront)

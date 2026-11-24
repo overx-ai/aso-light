@@ -121,6 +121,15 @@ def organic_difficulty(rating_counts: Sequence[int], titles: Sequence[str], term
     return round(100 * (RATING_WEIGHT * rating_part + (1 - RATING_WEIGHT) * title_share))
 
 
+def rating_count(result: dict) -> int:
+    return int(result.get("rating_count") or 0)
+
+
+def results_difficulty(results: Sequence[dict], term: str) -> tuple[int, list[str]]:
+    titles = [r.get("name") or "" for r in results]
+    return organic_difficulty([rating_count(r) for r in results], titles, term), titles
+
+
 def blend_popularity(*, asa: int | None, hints: int) -> tuple[int, str]:
     if asa is not None and asa > ASA_POPULARITY_FLOOR:
         return asa, POPULARITY_SOURCE_ASA
@@ -240,13 +249,13 @@ class FreeKeywordIntel:
             _hint_cache[key] = (time.monotonic(), score)
         return score
 
-    async def difficulty(self, term: str, storefront: str) -> tuple[int, list[str]]:
-        results = (await self._search.search_apps(
+    async def top_results(self, term: str, storefront: str) -> list[dict]:
+        return (await self._search.search_apps(
             term, storefront.lower(), limit=DIFFICULTY_TOP_N,
         ))[:DIFFICULTY_TOP_N]
-        titles = [r.get("name") or "" for r in results]
-        counts = [int(r.get("rating_count") or 0) for r in results]
-        return organic_difficulty(counts, titles, term), titles
+
+    async def difficulty(self, term: str, storefront: str) -> tuple[int, list[str]]:
+        return results_difficulty(await self.top_results(term, storefront), term)
 
     async def score_terms(
         self,

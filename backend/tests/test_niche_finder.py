@@ -28,8 +28,10 @@ def _app(name: str, ratings: int = REAL_APP_MIN_RATINGS * 5, updated: str | None
 class _FakeHints:
     def __init__(self, by_prefix: dict[str, list[str]]) -> None:
         self.by_prefix = by_prefix
+        self.calls: list[str] = []
 
     async def get_suggestions(self, term: str, country: str = "us") -> list[str]:
+        self.calls.append(term)
         return self.by_prefix.get(term, [])
 
 
@@ -66,9 +68,10 @@ def test_stale_or_underrated_on_title_apps_are_weak():
         _app("Box Breathing Old", updated=STALE),
         _app("Box Breathing Tiny", ratings=REAL_APP_MIN_RATINGS - 1),
         _app("Box Breathing Undated", updated=None),
+        _app("Box Breathing Naive", updated=(NOW - timedelta(days=30)).replace(tzinfo=None).isoformat()),
     ]
     supply = classify_supply(results, "box breathing", NOW)
-    assert (supply.real_apps, supply.weak_apps) == (0, 3)
+    assert (supply.real_apps, supply.weak_apps) == (1, 3)
 
 
 def test_scan_expands_dedupes_caps_and_drops_unsearched(monkeypatch):
@@ -92,6 +95,23 @@ def test_scan_expands_dedupes_caps_and_drops_unsearched(monkeypatch):
     assert by_term["breathing"].opportunity == 0
     assert by_term["breathing app"].real_apps == 0
     assert [n.opportunity for n in out.niches] == sorted((n.opportunity for n in out.niches), reverse=True)
+
+
+def test_long_tail_covers_every_seed_stops_at_cap_and_asks_each_prefix_once(monkeypatch):
+    monkeypatch.setattr(niche, "MAX_NICHE_TERMS", 5)
+    hints = _FakeHints({
+        "yoga": ["yoga"],
+        "yoga a": ["yoga app", "yoga apnea", "yoga a: studio"],
+        "tea a": ["tea app"],
+        "yoga b": ["yoga ball"],
+    })
+    finder = NicheFinder(suggestions=hints, search=_FakeSearch({}))
+
+    terms = run_async(finder.candidates(["yoga", "tea"], "US"))
+
+    assert terms == ["yoga", "tea", "yoga app", "yoga apnea", "tea app"]
+    assert "yoga b" not in hints.calls
+    assert hints.calls.count("yoga") == 1
 
 
 def test_tool_registered():

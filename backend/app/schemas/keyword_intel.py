@@ -6,7 +6,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.data.storefronts import STOREFRONT_ALIASES, STOREFRONTS
+from app.data.storefronts import known_storefront
+
+MAX_NICHE_SEEDS = 3
 
 
 class KeywordIntelOut(BaseModel):
@@ -70,9 +72,6 @@ class NicheScanOut(BaseModel):
     niches: list[NicheOut]
 
 
-MAX_NICHE_SEEDS = 3
-
-
 class NicheScanIn(BaseModel):
     seeds: list[str] = Field(min_length=1, max_length=MAX_NICHE_SEEDS)
     storefront: str = "US"
@@ -88,11 +87,10 @@ class NicheScanIn(BaseModel):
     @field_validator("storefront")
     @classmethod
     def _storefront(cls, v: str) -> str:
-        code = v.strip().lower()
-        code = STOREFRONT_ALIASES.get(code, code)
-        if code not in STOREFRONTS:
+        code = known_storefront(v)
+        if code is None:
             raise ValueError("expected an alpha-2 storefront code like US")
-        return code.upper()
+        return code
 
 
 class VariantPickOut(BaseModel):
