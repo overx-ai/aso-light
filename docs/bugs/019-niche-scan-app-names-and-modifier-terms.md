@@ -1,7 +1,7 @@
 ---
 id: 019
 title: "Niche scan ranks app names as niches and misses real apps behind modifier words"
-status: open
+status: fixed
 priority: p1
 created: 2026-11-24
 updated: 2026-11-24
@@ -10,9 +10,9 @@ files: backend/app/services/keyword_intel/niche.py, backend/tests/test_niche_fin
 
 # BUG 019 - Niche scan: app names and modifier words
 
-> **TL;DR** — Live scan of `breathing`, `sleep sounds` (US) ranked existing app names ("breathing coach - nostril",
-> "sleep sounds by sleep pillow") as top niches, and scored "sleep sounds free" at 0 real apps while 90k-rating
-> "Sleep Sounds" apps own it. Cause: hints include navigational app titles, and on-title matching needs the exact phrase.
+> **TL;DR** — Niche scans ranked app names and developer names as niches and missed competitors behind words
+> like "free". Fixed in `niche.py` with name filters and modifier-free title matching; empty search results no longer
+> look like open niches. Non-segmented scripts (ja/zh) remain unreliable.
 
 ## Symptom
 
@@ -28,4 +28,16 @@ files: backend/app/services/keyword_intel/niche.py, backend/tests/test_niche_fin
 
 ## Fix
 
+- On-title matching compares the term's words minus `NICHE_MODIFIERS` with the title's word set.
+- Hint-derived terms (never the user's seeds) are dropped when they are the #1 result's name and no other
+  top-10 title carries the same words, or when they end in a company suffix.
+- A term with an empty iTunes result is skipped: `search_apps` returns `[]` on HTTP errors, which scored as
+  the best possible niche.
+
+Known limits: an app name shared by a sibling title is kept ("breathing zone"); a lone generic on-title app at #1
+drops its term; modifiers are English only; ja/zh titles rarely match, so crowded terms look open; `difficulty`
+still uses the exact phrase, so modifier terms score easier than they are.
+
 ## Regression test
+
+`backend/tests/test_niche_finder.py`: modifier words, app names, developer names, empty results.

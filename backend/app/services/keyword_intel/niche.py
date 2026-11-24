@@ -19,7 +19,7 @@ from app.services.keyword_intel.free import (
     rating_count,
     results_difficulty,
 )
-from app.services.keyword_intel.tokenize import contains_phrase
+from app.services.keyword_intel.tokenize import segments, words
 from app.services.keywords.concurrency import gather_bounded
 from app.services.keywords.tracker import REFRESH_CONCURRENCY
 
@@ -30,6 +30,11 @@ REAL_APP_MIN_RATINGS = 1000
 STALE_DAYS = 540
 LONG_TAIL_LETTERS = string.ascii_lowercase
 TOP_TITLES_SHOWN = 5
+# Words a searcher adds that a competing title rarely carries: "sleep sounds free" is
+# served by "Sleep Sounds" apps. English only.
+NICHE_MODIFIERS = frozenset({"free", "app", "apps", "best", "top", "the", "a", "an", "for", "with", "and", "by", "of"})
+# Hints list developer names too ("breathing app, llc").
+COMPANY_SUFFIXES = frozenset({"llc", "inc", "ltd", "limited", "gmbh", "corp"})
 
 
 @dataclass(slots=True)
@@ -49,11 +54,32 @@ def _updated(value: str | None) -> datetime | None:
     return parsed
 
 
+def _core(tokens: Sequence[str]) -> list[str]:
+    return [w for w in tokens if w not in NICHE_MODIFIERS] or list(tokens)
+
+
+def _on_title(title: str | None, core: Sequence[str]) -> bool:
+    return bool(core) and set(core) <= set(words(title))
+
+
+def is_app_name(term: str, titles: Sequence[str]) -> bool:
+    """Hints complete to app names too ("breathing zone" for "Breathing Zone: Breathwork"),
+    and Apple ranks the named app first. Other titles carrying the same words mean the first
+    one is merely descriptive ("Sleep Sounds") and the search is a real one."""
+    core = _core(words(term))
+    if not core or not titles:
+        return False
+    first, *others = titles
+    named = any(_core(tokens) == core for tokens in (words(first), *segments(first)[:1]))
+    return named and not any(_on_title(title, core) for title in others)
+
+
 def classify_supply(results: Sequence[dict], term: str, now: datetime) -> Supply:
     cutoff = now - timedelta(days=STALE_DAYS)
+    core = _core(words(term))
     real = weak = 0
     for r in results:
-        if not contains_phrase(r.get("name"), term):
+        if not _on_title(r.get("name"), core):
             continue
         updated = _updated(r.get("updated_at"))
         if rating_count(r) >= REAL_APP_MIN_RATINGS and updated and updated >= cutoff:
@@ -85,6 +111,10 @@ class _MemoSuggestions:
         return await self._seen[key]
 
 
+def _normalize(seeds: Sequence[str]) -> list[str]:
+    return list(dict.fromkeys(s.casefold().strip() for s in seeds))
+
+
 class NicheFinder:
     def __init__(self, suggestions: _Suggestions | None = None, search: _Search | None = None) -> None:
         default_suggestions, default_search = _default_services()
@@ -96,7 +126,7 @@ class NicheFinder:
         return [t for t in hints if t.startswith(probe) and APP_TITLE_MARK not in t]
 
     async def candidates(self, seeds: Sequence[str], storefront: str) -> list[str]:
-        normalized = list(dict.fromkeys(s.casefold().strip() for s in seeds))
+        normalized = _normalize(seeds)
         expansion = await self._intel.seed_expansion(normalized, storefront, exclude=set(normalized))
         terms = dict.fromkeys([*normalized, *expansion])
         # Letter-major across seeds so every seed gets a long tail, and probing stops at
@@ -110,14 +140,24 @@ class NicheFinder:
 
     async def scan(self, seeds: Sequence[str], storefront: str) -> NicheScanOut:
         terms = await self.candidates(seeds, storefront)
+        asked = set(_normalize(seeds))
         now = datetime.now(timezone.utc)
 
         async def one(term: str) -> NicheOut | None:
+            is_hint = term not in asked
+            if is_hint and not COMPANY_SUFFIXES.isdisjoint(words(term)[-1:]):
+                return None
             popularity = await self._intel.popularity(term, storefront)
             if popularity < NICHE_MIN_POPULARITY:
                 return None
             results = await self._intel.top_results(term, storefront)
+            # search_apps swallows HTTP errors as []; a searched term never has zero results,
+            # so scoring one would rank an outage as a wide-open niche.
+            if not results:
+                return None
             difficulty, titles = results_difficulty(results, term)
+            if is_hint and is_app_name(term, titles):
+                return None
             supply = classify_supply(results, term, now)
             return NicheOut(
                 term=term,

@@ -12,6 +12,7 @@ from app.services.keyword_intel.niche import (
     STALE_DAYS,
     NicheFinder,
     classify_supply,
+    is_app_name,
     opportunity,
 )
 from tests._async_harness import run_async
@@ -82,7 +83,11 @@ def test_scan_expands_dedupes_caps_and_drops_unsearched(monkeypatch):
         "breathing a": ["breathing app", "breathing apnea"],
         "breathing t": ["breathing timer", "breathing tracker"],
     })
-    search = _FakeSearch({"breathing": [_app("Breathing Pro")] * 3})
+    search = _FakeSearch({
+        "breathing": [_app("Breathing Pro")] * 3,
+        "breathing app": [_app("Calm")],
+        "breathing timer": [_app("Calm")],
+    })
     finder = NicheFinder(suggestions=hints, search=search)
 
     terms = run_async(finder.candidates(["Breathing"], "US"))
@@ -117,3 +122,48 @@ def test_long_tail_covers_every_seed_stops_at_cap_and_asks_each_prefix_once(monk
 def test_tool_registered():
     registered = {t.name for t in run_async(mcp.list_tools())}
     assert "keyword_intel_niche_scan" in registered
+
+
+def test_modifier_words_do_not_hide_real_apps():
+    results = [_app("Rain Rain Sleep Sounds"), _app("Sleep Sounds - Relax & Sleep"), _app("Sleep Sounds Pro")]
+    assert classify_supply(results, "sleep sounds free", NOW).real_apps == 3
+    assert classify_supply(results, "sleep sounds for kids", NOW).real_apps == 0
+
+
+def test_modifier_only_term_still_matches_titles():
+    assert classify_supply([_app("Best App Ever")], "best app", NOW).real_apps == 1
+
+
+def _scanned_terms(seed: str, hint: str, results: dict[str, list[dict]]) -> list[str]:
+    hints = _FakeHints({seed[0]: [seed, hint], seed: [seed, hint]})
+    out = run_async(NicheFinder(suggestions=hints, search=_FakeSearch(results)).scan([seed], "US"))
+    return [n.term for n in out.niches]
+
+
+def test_app_name_hint_is_dropped_but_a_seed_is_kept():
+    hint = "breathing coach - nostril"
+    results = {"breathing": [_app("Breathing")], hint: [_app("Breathing Coach - Nostril", ratings=10)]}
+    assert _scanned_terms("breathing", hint, results) == ["breathing"]
+    assert _scanned_terms(hint, hint, results) == [hint]
+
+
+def test_developer_name_hint_is_not_a_niche():
+    hint = "breathing app, llc"
+    results = {"breathing": [_app("Calm")], hint: [_app("Calm")]}
+    assert _scanned_terms("breathing", hint, results) == ["breathing"]
+
+
+def test_empty_search_is_an_outage_not_a_niche():
+    assert _scanned_terms("breathing", "breathing timer", {"breathing": [_app("Calm")]}) == ["breathing"]
+
+
+def test_app_name_matches_first_title_only():
+    assert is_app_name("breathing zone", ["Breathing Zone: Breathwork", "Calm"])
+    assert is_app_name("sleep sounds relax and sleep", ["Sleep Sounds - Relax & Sleep"])
+    assert not is_app_name("breathing app for kids", ["Breathing Zone: Breathwork"])
+    assert not is_app_name("breathing timer", ["iBreathe", "Breathing Timer: BreathBox"])
+    assert not is_app_name("-", ["-"])
+
+
+def test_descriptive_title_shared_by_competitors_is_not_an_app_name():
+    assert not is_app_name("sleep sounds free", ["Sleep Sounds", "Rain Rain Sleep Sounds"])
