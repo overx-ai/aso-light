@@ -60,6 +60,7 @@ class NicheOut(BaseModel):
     difficulty: int
     real_apps: int
     weak_apps: int
+    giants: int = 0
     median_ratings: int
     opportunity: int
     top_titles: list[str] = Field(default_factory=list)

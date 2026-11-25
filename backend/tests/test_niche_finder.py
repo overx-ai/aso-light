@@ -7,6 +7,7 @@ import pytest
 from app.mcp.server import mcp
 from app.services.keyword_intel import free, niche
 from app.services.keyword_intel.niche import (
+    GIANT_MIN_RATINGS,
     NICHE_MAX_REAL_APPS,
     REAL_APP_MIN_RATINGS,
     STALE_DAYS,
@@ -187,3 +188,25 @@ def test_failed_lookups_are_counted():
         suggestions=_FakeHints({"b": ["breathing"]}), search=_FakeSearch({}),
     ).scan(["breathing"], "US"))
     assert (out.skipped, out.niches) == (1, [])
+
+
+def test_maker_and_generator_are_the_same_product():
+    results = [_app(f"AI Music Video Generator: {n}") for n in ("Yuna", "Shoom", "Enkio")]
+    assert classify_supply(results, "ai music video maker", NOW).real_apps == 3
+
+
+def test_app_name_with_an_identical_twin_is_still_an_app_name():
+    twins = ["Book Tracker Reading Log TBR", "Bookmory - reading tracker", "Book Tracker: Reading Log TBR"]
+    assert is_app_name("book tracker reading log tbr", twins)
+    assert not is_app_name("sleep sounds", ["Sleep Sounds", "Sleep Sounds", "Rain Rain Sleep Sounds"])
+
+
+def test_giant_must_share_the_topic():
+    def giants(term: str, title: str, ratings: int = GIANT_MIN_RATINGS) -> int:
+        return classify_supply([_app(title, ratings)], term, NOW).giants
+
+    assert giants("live sports streaming free", "DAZN: Stream Live Sports") == 1
+    assert giants("ai music video maker", "Suno - AI Songs, Music, Lyrics") == 1
+    assert giants("breathing app for kids", "Calm") == 0
+    assert giants("ai translate", "AI Avatar Generator") == 0
+    assert giants("ai translate video", "AI Video Translate", GIANT_MIN_RATINGS - 1) == 0

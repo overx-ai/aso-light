@@ -22,8 +22,8 @@ import httpx
 from app.schemas.idea_digest import DigestState, IdeaOut
 from app.schemas.keyword_intel import NicheOut, NicheScanOut
 from app.services.keyword_intel.free import DEFAULT_STOREFRONT, _Search, storefront_stopwords
-from app.services.keyword_intel.niche import NICHE_MAX_REAL_APPS
-from app.services.keyword_intel.tokenize import core_words, ngrams
+from app.services.keyword_intel.niche import NICHE_MAX_REAL_APPS, product_words
+from app.services.keyword_intel.tokenize import ngrams, words
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,20 @@ IDEAS_PER_DAY = 5
 IDEAS_PER_TOPIC = 2
 # Above this the top 10 is giants serving the term under generic titles.
 IDEA_MAX_MEDIAN_RATINGS = 5000
+IDEA_MAX_GIANTS = 0
+# Content that needs a licence, paired with the words that mean delivering it. English only.
+RIGHTS_BOUND: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
+    (
+        frozenset({
+            "sport", "sports", "football", "soccer", "basketball", "baseball", "hockey", "cricket", "boxing",
+            "nba", "nfl", "nhl", "mlb", "ufc", "tv", "movie", "movies", "film", "films", "anime", "shows",
+        }),
+        frozenset({"live", "stream", "streams", "streaming", "watch", "download", "downloader", "iptv"}),
+    ),
+    (frozenset({"music", "song", "songs", "mp3"}), frozenset({"download", "downloader"})),
+)
+# Facts about the content are free to show.
+RIGHTS_FREE_WORDS = frozenset({"score", "scores", "schedule", "guide", "tracker"})
 # Apple answers bursts of /search with an IP-wide 403 that outlasts the burst and also
 # hits rank tracking, so the digest goes slowly and stops once refused.
 SEARCH_INTERVAL_SECONDS = 6.0
@@ -135,7 +149,7 @@ class HttpNotifier:
 
 
 def idea_key(term: str) -> str:
-    return " ".join(sorted(set(core_words(term))))
+    return " ".join(sorted(product_words(term)))
 
 
 def printable(text: str) -> str:
@@ -143,12 +157,19 @@ def printable(text: str) -> str:
     return " ".join("".join(c if c.isprintable() else " " for c in text).split())
 
 
+def is_rights_bound(term: str) -> bool:
+    tokens = set(words(term))
+    if not tokens.isdisjoint(RIGHTS_FREE_WORDS):
+        return False
+    return any(tokens & content and tokens & delivery for content, delivery in RIGHTS_BOUND)
+
+
 def chart_topics(apps: Iterable[tuple[str, str]], storefront: str) -> list[str]:
     stopwords = storefront_stopwords(storefront)
     developers: dict[str, set[str]] = defaultdict(set)
     for title, developer in apps:
         for gram in ngrams(title, TOPIC_MAX_WORDS, stopwords):
-            if " " in gram:
+            if " " in gram and not is_rights_bound(gram):
                 developers[gram].add(developer)
     shared = {g: devs for g, devs in developers.items() if len(devs) >= TOPIC_MIN_DEVELOPERS}
     # "minded dating" only ever occurs inside "open minded dating": keep the whole phrase.
@@ -369,6 +390,8 @@ class IdeaDigest:
                 key in shown
                 or niche.opportunity < IDEA_MIN_OPPORTUNITY
                 or niche.real_apps > NICHE_MAX_REAL_APPS
+                or niche.giants > IDEA_MAX_GIANTS
+                or is_rights_bound(niche.term)
                 or niche.median_ratings > IDEA_MAX_MEDIAN_RATINGS
                 or per_topic[topic] >= IDEAS_PER_TOPIC
             ):

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import math
 import re
 import statistics
 import string
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -29,6 +30,11 @@ NICHE_MIN_POPULARITY = 20
 NICHE_MAX_REAL_APPS = 2
 REAL_APP_MIN_RATINGS = 1000
 STALE_DAYS = 540
+GIANT_MIN_RATINGS = 50_000
+# One generic shared word ("ai") does not make an app a rival.
+GIANT_MIN_SHARED_WORDS = 2
+# One product to a searcher. Difficulty still compares the exact words, as Apple ranks them.
+PRODUCT_SYNONYMS = dict.fromkeys(("maker", "makers", "generator", "generators", "creator", "creators"), "maker")
 LONG_TAIL_LETTERS = string.ascii_lowercase
 TOP_TITLES_SHOWN = 5
 # Narrower than tokenize's segment break: people do search "bed & breakfast" and "24/7 gym".
@@ -47,6 +53,7 @@ COMPANY_SUFFIXES = frozenset({"llc", "inc", "ltd", "limited", "gmbh", "corp"})
 class Supply:
     real_apps: int
     weak_apps: int
+    giants: int
     median_ratings: int
 
 
@@ -60,24 +67,41 @@ def _updated(value: str | None) -> datetime | None:
     return parsed
 
 
+def canonical(tokens: Iterable[str]) -> set[str]:
+    return {PRODUCT_SYNONYMS.get(w, w) for w in tokens}
+
+
+def product_words(text: str | None) -> set[str]:
+    return canonical(core_words(text))
+
+
+def is_giant(result: dict, core: set[str]) -> bool:
+    shared = len(core & product_words(result.get("name")))
+    needed = max(min(GIANT_MIN_SHARED_WORDS, len(core)), math.ceil(len(core) / 2))
+    return rating_count(result) >= GIANT_MIN_RATINGS and shared >= needed
+
+
 def is_app_name(term: str, titles: Sequence[str]) -> bool:
     """Hints complete to app names too ("breathing zone" for "Breathing Zone: Breathwork"),
-    and Apple ranks the named app first. Other titles carrying the same words mean the first
-    one is merely descriptive ("Sleep Sounds") and the search is a real one."""
+    and Apple ranks the named app first. Other titles carrying the same words among more mean the
+    first one is merely descriptive ("Sleep Sounds") and the search is a real one; a title of
+    exactly these words is only a twin."""
     core = core_words(term)
     if not core or not titles:
         return False
     first, *others = titles
     named = any(core_words(" ".join(tokens)) == core for tokens in (words(first), *segments(first)[:1]))
-    return named and not any(covers_core(title, core) for title in others)
+    return named and not any(covers_core(title, core) and core_words(title) != core for title in others)
 
 
 def classify_supply(results: Sequence[dict], term: str, now: datetime) -> Supply:
     cutoff = now - timedelta(days=STALE_DAYS)
-    core = core_words(term)
+    core = product_words(term)
     real = weak = 0
     for r in results:
-        if not covers_core(r.get("name"), core):
+        # Modifiers stay in: "best app" is made of nothing else.
+        title = canonical(words(r.get("name")))
+        if not core or not core <= title:
             continue
         updated = _updated(r.get("updated_at"))
         if rating_count(r) >= REAL_APP_MIN_RATINGS and updated and updated >= cutoff:
@@ -85,7 +109,8 @@ def classify_supply(results: Sequence[dict], term: str, now: datetime) -> Supply
         else:
             weak += 1
     counts = [rating_count(r) for r in results]
-    return Supply(real, weak, round(statistics.median(counts)) if counts else 0)
+    giants = sum(is_giant(r, core) for r in results)
+    return Supply(real, weak, giants, round(statistics.median(counts)) if counts else 0)
 
 
 def is_attributed(tokens: Sequence[str]) -> bool:
@@ -180,6 +205,7 @@ class NicheFinder:
                 difficulty=difficulty,
                 real_apps=supply.real_apps,
                 weak_apps=supply.weak_apps,
+                giants=supply.giants,
                 median_ratings=supply.median_ratings,
                 opportunity=opportunity(popularity, difficulty, supply.real_apps),
                 top_titles=titles[:TOP_TITLES_SHOWN],

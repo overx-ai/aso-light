@@ -22,6 +22,7 @@ from app.services.idea_digest import (
     IdeaStore,
     PacedSearch,
     chart_topics,
+    is_rights_bound,
 )
 from tests._async_harness import run_async
 
@@ -90,6 +91,30 @@ def test_topics_need_two_developers():
 def test_topic_is_the_whole_shared_phrase():
     apps = [("Open Minded Dating", "A"), ("Zed: Open Minded Dating", "B")]
     assert chart_topics(apps, "US") == ["open minded dating"]
+
+
+def test_rights_bound_searches():
+    assert all(is_rights_bound(t) for t in [
+        "live sports", "live sports streaming free", "live football tv", "watch movies offline", "music download",
+    ])
+    assert not any(is_rights_bound(t) for t in [
+        "live football scores", "movie maker", "tv remote", "music video", "anime drawing", "live weather",
+    ])
+
+
+def test_rights_bound_topics_are_not_scanned():
+    apps = [("Live Sports", "A"), ("Live Sports Pro", "B"), ("Meal Planner", "A"), ("Meal Planner Pro", "B")]
+    assert chart_topics(apps, "US") == ["meal planner"]
+
+
+def test_giants_rights_bound_terms_and_synonyms_are_not_ideas(store):
+    owned = _niche("owned", 95)
+    owned.giants = 1
+    digest, _, notifier = _digest(store, [
+        owned, _niche("live sports streaming", 94), _niche("logo maker", 60), _niche("logo generator", 59),
+    ])
+    run_async(digest.run(TUESDAY))
+    assert [i.term for i in store.ideas()] == ["logo maker"]
 
 
 def test_refused_lookups_are_reported(store):
