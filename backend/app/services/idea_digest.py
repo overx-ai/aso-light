@@ -33,6 +33,7 @@ IDEAS_PER_TOPIC = 2
 # Above this the top 10 is giants serving the term under generic titles.
 IDEA_MAX_MEDIAN_RATINGS = 5000
 IDEA_MAX_GIANTS = 0
+DOWNLOAD_WORDS = frozenset({"download", "downloads", "downloader", "downloaders"})
 # Content that needs a licence, paired with the words that mean delivering it. English only.
 RIGHTS_BOUND: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
     (
@@ -40,12 +41,15 @@ RIGHTS_BOUND: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
             "sport", "sports", "football", "soccer", "basketball", "baseball", "hockey", "cricket", "boxing",
             "nba", "nfl", "nhl", "mlb", "ufc", "tv", "movie", "movies", "film", "films", "anime", "shows",
         }),
-        frozenset({"live", "stream", "streams", "streaming", "watch", "download", "downloader", "iptv"}),
+        frozenset({"live", "stream", "streams", "streaming", "watch", "iptv"} | DOWNLOAD_WORDS),
     ),
-    (frozenset({"music", "song", "songs", "mp3"}), frozenset({"download", "downloader"})),
+    (frozenset({"music", "song", "songs", "mp3"}), DOWNLOAD_WORDS),
 )
-# Facts about the content are free to show.
-RIGHTS_FREE_WORDS = frozenset({"score", "scores", "schedule", "guide", "tracker"})
+# Facts about the content need no licence; wallpapers and watch faces only share its words.
+RIGHTS_FREE_WORDS = frozenset({
+    "score", "scores", "schedule", "schedules", "guide", "guides", "tracker", "trackers", "news", "stats",
+    "wallpaper", "wallpapers", "face", "faces",
+})
 # Apple answers bursts of /search with an IP-wide 403 that outlasts the burst and also
 # hits rank tracking, so the digest goes slowly and stops once refused.
 SEARCH_INTERVAL_SECONDS = 6.0
@@ -169,7 +173,7 @@ def chart_topics(apps: Iterable[tuple[str, str]], storefront: str) -> list[str]:
     developers: dict[str, set[str]] = defaultdict(set)
     for title, developer in apps:
         for gram in ngrams(title, TOPIC_MAX_WORDS, stopwords):
-            if " " in gram and not is_rights_bound(gram):
+            if " " in gram:
                 developers[gram].add(developer)
     shared = {g: devs for g, devs in developers.items() if len(devs) >= TOPIC_MIN_DEVELOPERS}
     # "minded dating" only ever occurs inside "open minded dating": keep the whole phrase.
@@ -177,7 +181,8 @@ def chart_topics(apps: Iterable[tuple[str, str]], storefront: str) -> list[str]:
         gram: devs for gram, devs in shared.items()
         if not any(f" {gram} " in f" {other} " and other != gram and devs == shared[other] for other in shared)
     }
-    return sorted(whole, key=lambda g: (-len(whole[g]), g))
+    # Filtered last, or dropping "watch movies offline" would expose "movies offline".
+    return sorted((g for g in whole if not is_rights_bound(g)), key=lambda g: (-len(whole[g]), g))
 
 
 class IdeaStore:

@@ -95,15 +95,20 @@ def test_topic_is_the_whole_shared_phrase():
 
 def test_rights_bound_searches():
     assert all(is_rights_bound(t) for t in [
-        "live sports", "live sports streaming free", "live football tv", "watch movies offline", "music download",
+        "live sports", "live sports streaming free", "live football tv", "watch movies offline",
+        "music downloads",
     ])
     assert not any(is_rights_bound(t) for t in [
-        "live football scores", "movie maker", "tv remote", "music video", "anime drawing", "live weather",
+        "live football scores", "live sports schedules", "movie maker", "tv remote", "music video", "anime drawing",
+        "live weather",
     ])
 
 
 def test_rights_bound_topics_are_not_scanned():
-    apps = [("Live Sports", "A"), ("Live Sports Pro", "B"), ("Meal Planner", "A"), ("Meal Planner Pro", "B")]
+    apps = [
+        ("Watch Movies Offline", "A"), ("Watch Movies Offline Pro", "B"),
+        ("Meal Planner", "A"), ("Meal Planner Pro", "B"),
+    ]
     assert chart_topics(apps, "US") == ["meal planner"]
 
 

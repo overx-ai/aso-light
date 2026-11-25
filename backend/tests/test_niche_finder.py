@@ -209,4 +209,6 @@ def test_giant_must_share_the_topic():
     assert giants("ai music video maker", "Suno - AI Songs, Music, Lyrics") == 1
     assert giants("breathing app for kids", "Calm") == 0
     assert giants("ai translate", "AI Avatar Generator") == 0
+    assert giants("best app", "Best App Ever") == 1
+    assert giants("-", "Calm") == 0
     assert giants("ai translate video", "AI Video Translate", GIANT_MIN_RATINGS - 1) == 0

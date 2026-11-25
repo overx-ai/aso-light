@@ -11,7 +11,7 @@ files: backend/app/services/keyword_intel/niche.py, backend/app/services/idea_di
 # BUG 020 - Idea digest: misleading ideas
 
 > **TL;DR** — 5 of the first 6 digest cards were not real openings: synonyms, twin app names, dominant apps and
-> broadcast rights were not filtered. All four are now; nothing to do.
+> broadcast rights were not filtered. All four are now, for new finds only: reject the five old cards in Studio.
 
 ## Symptom
 
@@ -34,9 +34,10 @@ Cards of 2026-11-24/25, checked against the live US top 10:
 - `giants`: top-10 apps with 50k+ ratings sharing at least half of the term's core words (minimum two). The digest
   rejects any; the on-demand scan only reports the count.
 - `is_rights_bound`: sports/TV/film content with a delivery word, and music downloads, are neither topics nor ideas.
-  Scores, schedules, guides and trackers stay.
+  Scores, schedules, guides, trackers, news, stats, wallpapers and watch faces stay.
 
-Replay of the 2026-11-25 lookups: 5 of 6 cards dropped, `ai translate video` kept. Limits: English word lists; a
+Replay of the 2026-11-25 lookups: 5 of 6 cards dropped, `ai translate video` kept. Limits: English word lists; `is_app_name` ignores
+  synonyms and word order, and several generic titles of exactly the term drop it; a
 giant with an off-topic title is missed (Finch on `habit tracker game`); AR drawing terms are dropped too (98k leader).
 
 ## Regression test

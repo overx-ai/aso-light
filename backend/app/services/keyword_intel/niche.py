@@ -75,10 +75,9 @@ def product_words(text: str | None) -> set[str]:
     return canonical(core_words(text))
 
 
-def is_giant(result: dict, core: set[str]) -> bool:
-    shared = len(core & product_words(result.get("name")))
+def is_giant(ratings: int, title: set[str], core: set[str]) -> bool:
     needed = max(min(GIANT_MIN_SHARED_WORDS, len(core)), math.ceil(len(core) / 2))
-    return rating_count(result) >= GIANT_MIN_RATINGS and shared >= needed
+    return bool(core) and ratings >= GIANT_MIN_RATINGS and len(core & title) >= needed
 
 
 def is_app_name(term: str, titles: Sequence[str]) -> bool:
@@ -97,10 +96,11 @@ def is_app_name(term: str, titles: Sequence[str]) -> bool:
 def classify_supply(results: Sequence[dict], term: str, now: datetime) -> Supply:
     cutoff = now - timedelta(days=STALE_DAYS)
     core = product_words(term)
-    real = weak = 0
+    real = weak = giants = 0
     for r in results:
         # Modifiers stay in: "best app" is made of nothing else.
         title = canonical(words(r.get("name")))
+        giants += is_giant(rating_count(r), title, core)
         if not core or not core <= title:
             continue
         updated = _updated(r.get("updated_at"))
@@ -109,7 +109,6 @@ def classify_supply(results: Sequence[dict], term: str, now: datetime) -> Supply
         else:
             weak += 1
     counts = [rating_count(r) for r in results]
-    giants = sum(is_giant(r, core) for r in results)
     return Supply(real, weak, giants, round(statistics.median(counts)) if counts else 0)
 
 

@@ -421,7 +421,8 @@ async def niche_scan(seeds: list[str], storefront: str = DEFAULT_STOREFRONT) -> 
     Expands each seed into hint completions and its long tail ("seed a".."seed z"),
     keeps terms with hints popularity of at least 20, and checks the iTunes top 10:
     ``real_apps`` are on-title results with 1000+ ratings updated in the last 18 months,
-    ``weak_apps`` are on-title results failing either bar. ``opportunity`` is popularity
+    ``weak_apps`` are on-title results failing either bar, ``giants`` are 50k+ rating apps
+    sharing the topic words. ``opportunity`` is popularity
     discounted by organic difficulty, and 0 when more than 2 real apps exist. Read-only;
     a scan of 3 seeds can take a few minutes because hint calls are throttled.
     """
