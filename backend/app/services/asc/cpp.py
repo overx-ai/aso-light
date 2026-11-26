@@ -497,7 +497,7 @@ class ASCCustomProductPageService:
         """
         keywords = await self.client._get_all_pages(
             f"/apps/{asc_app_id}/{_SEARCH_KEYWORDS}",
-            params={"filter[locale]": locale, "limit": 200},
+            params={"filter[locale]": locale, "filter[platform]": "IOS", "limit": 200},
         )
         return [keyword["id"] for keyword in keywords]
 

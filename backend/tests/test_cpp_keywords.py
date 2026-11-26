@@ -27,11 +27,15 @@ class _KeywordASC(FakeASCClient):
     async def _delete(self, path: str, json: dict | None = None) -> None:
         self.calls.append(("DELETE", path, json))
 
+    async def _get_all_pages(self, path: str, params: dict | None = None) -> list[dict]:
+        self.params[path] = params
+        return await super()._get_all_pages(path, params)
+
 
 def _client(
     current: list[str], offered: list[str], state: str = "PREPARE_FOR_SUBMISSION"
 ) -> _KeywordASC:
-    return _KeywordASC({
+    client = _KeywordASC({
         ("GET", f"/appCustomProductPages/{CPP_ID}/appCustomProductPageVersions"): {
             "data": [{"id": "cver-1", "attributes": {"state": state}}],
         },
@@ -46,6 +50,8 @@ def _client(
             "data": {"id": LOCALIZATION, "attributes": {"promotionalText": "Breathe in."}},
         },
     })
+    client.params = {}
+    return client
 
 
 def _call(monkeypatch, client: FakeASCClient, name: str, **kwargs):
@@ -119,6 +125,14 @@ def test_keywords_get_lists_the_assigned_and_the_offered_ids(monkeypatch):
     result = _call(monkeypatch, client, "cpp_keywords_get")
 
     assert (result.keywords, result.available) == (["breathing"], ["breathing", "hrv"])
+
+
+def test_offered_keywords_are_asked_for_the_ios_platform(monkeypatch):
+    client = _client([], ["hrv"])
+
+    _call(monkeypatch, client, "cpp_keywords_get")
+
+    assert client.params["/apps/asc-777/searchKeywords"]["filter[platform]"] == "IOS"
 
 
 def test_keywords_get_reads_a_live_page_that_has_no_editable_version(monkeypatch):
