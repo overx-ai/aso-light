@@ -1,7 +1,7 @@
 ---
 id: 021
 title: "cpp_keywords_get / cpp_keywords_set fail: ASC now requires filter[platform] on searchKeywords"
-status: open
+status: fixed
 priority: p1
 created: 2026-11-26
 updated: 2026-11-26
